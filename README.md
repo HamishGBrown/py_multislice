@@ -1,9 +1,22 @@
 # py_multislice
 
+![](cbed.png)
+
 Python multislice slice code
 
-GPU accelerated using (pytorch)[https://pytorch.org/] 
+GPU accelerated using 
+[pytorch](https://pytorch.org/)
 
-Ionization based off (Flexible Atomic Code (FAC))[https://github.com/flexible-atomic-code/fac], ionization potentials now working though correct units are still forthcoming!
+Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-atomic-code/fac), ionization potentials now working though correct units are still forthcoming!
 
-![](cbed.png)
+# To do list:
+
+- [x] Get multislice working
+- [x] CBED
+- [ ] Conventional STEM (HAADF, ABF, BF and 4D-STEM)
+- [ ] STEM EELS
+- [ ] PRISM
+- [ ] STEM EDX
+
+
+
