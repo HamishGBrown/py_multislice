@@ -13,6 +13,7 @@ from .utils.torch_utils import (
     complex_mul,
     torch_c_exp,
     fourier_shift_array,
+    amplitude
 )
 
 
@@ -193,13 +194,20 @@ class crystal:
         device=None,
     ):
         """Make the transmission functions for this crystal, which are the
-           """
+           exponential of the specimen potential scaled by the interaction
+           constant for electrons, sigma."""
 
+        # Make the specimen electrostatic potential
         T = self.make_potential(
             pixels, subslices, tiling, fe=fe, displacements=displacements, device=device
         )
+
+        # Now take the complex exponential of the electrostatic potential
+        # scaled by the electron interaction constant
         T = torch.fft(torch_c_exp(interaction_constant(eV) * T), signal_ndim=2)
 
+        # Band-width limit the transmission function, see Earl Kirkland's book 
+        # for an discussion of why this is necessary
         for i in range(T.shape[0]):
             T[i, ...] = bandwidth_limit_array(T[i, ...])
 
@@ -683,6 +691,104 @@ def multislice(
 
     return cx_to_numpy(psi)
 
+def STEM(rsize,probe,
+    propagators,
+    transmission_functions,
+    nslices,eV,alpha,batch_size = 1,detectors = None,FourD_STEM=False,
+    scan_posn=None,device = torch.device('cpu')
+    tiling = [1,1],
+    device_type=None,
+    seed=None):
+
+    from .Probe import nyquist_sampling
+
+    gridshape = propagators.shape[-2:]
+
+    # Generate scan positions if not supplied
+    if scan_posn is None:
+
+        # Calculate field of view of scan
+        FOV = np.asarray(rsize)/np.asarray(tiling)
+
+        # Calculate number of scan positions in STEM scan
+        nscan = nyquist_sampling(FOV, eV=eV, alpha=alpha)
+
+        #Get scan position in pixel coordinates
+        scan_posn = []
+        # Y scan coordinates
+        scan_posn.append(np.arange(0,gridshape[0],step = gridshape[0]/nscan[0]))
+        # X scan coordinates
+        scan_posn.append(np.arange(0,gridshape[1],step = gridshape[1]/nscan[1]))
+
+    # Total number of scan positions
+    nscantot = scan_posn[0].shape[0]*scan_posn[1].shape[1]
+
+    # Assume real space probe is passed in so perform Fourier transform in
+    # anticipation of application of Fourier shift theorem
+    probe_ = torch.fft(cx_from_numpy(probe,device=device),signal_ndim=2)
+
+    # Work out whether to perform conventional STEM or not
+    conventional_STEM = not detectors is None
+
+    if conventional_STEM : 
+        # Initialize array in which to store resulting STEM images
+        STEM_image = np.zeros((detectors.shape[0],nscantot))
+        
+        # Also move detectors to pytorch if necessary
+        if not isinstance(detectors, torch.Tensor):
+            D = torch.from_numpy(detectors, device=device)
+        else:
+            D = detectors
+
+    # Initialize array in which to store resulting 4D-STEM datacube
+    if FourD_STEM : datacube = np.zeros((nscantot,*gridshape))
+    
+
+    # This algorithm allows for "batches" of probe to be sent through the 
+    # multislice algorithm to achieve some speed up at the cost of storing more
+    # probes in memory
+    
+    if (seed is None and batch_size>1) :
+        # If no seed passed to random number generator then make one to pass to
+        # the multislice algorithm. This ensure that each probe sees the same
+        # frozen phonon configuration if we are doing batched multislice 
+        # calculations
+        seed = np.randint(0,2**32-1)
+
+    for i in tqdm(range(int(np.ceil(nscantot/batch_size)))):
+
+        # Make shifted probes
+        scan_index = np.arange(i*batch_size,(i+1)*batch_size,dtype=np.int)
+        # y scan is fast(est changing) scan direction
+        yscan = scan_posn[0][scan_index%nscan[0]]
+        # x scan is slow(est changing) scan direction
+        xscan = scan_posn[1][scan_index//nscan[0]]
+
+        # Shift probes using Fourier shift theorem, prepare shift operators
+        # and store them in the array that the probes will eventually inhabit
+        posn = torch.cat([torch.from_numpy(x).to(device) for x in [yscan,xscan]]
+                         dim = 1)
+        probes = fourier_shift_array(gridshape, posn, device=device)
+
+        # Apply shift to original probe
+        probes = torch.ifft(complex_mul(probe_.view(1,*probe_.size()),probes))
+
+        #Perform multislice
+        probes = amplitude(multislice(probes,propagators,transmission_functions,
+                            nslices,tiling,device,seed))
+        
+        #Calculate STEM images 
+        if conventional_STEM: 
+            STEM_images[...,scan_index] = torch.sum(D.view(1,*D.size())*
+                                            probes.view(batch_size,1,*gridshape),
+                                            (-2,-1))
+        #Store datacube
+        if FourD_STEM : datacube[scan_index,...] = probes.cpu().numpy()
+
+    if conventional_STEM and FourD_STEM: 
+        return STEM_images.reshape(ndet,*nscan),Four_D_STEM.reshape(*nscan,)
+    if FourD_STEM: return Four_D_STEM.reshape(*nscan,)
+    if conventional_STEM: return STEM_images.reshape(ndet,*nscan)
 
 def unit_cell_shift(array, axis, shift, tiles):
     """For an array consisting of a number of repeat units given by tiles
