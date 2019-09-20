@@ -695,7 +695,7 @@ def STEM(rsize,probe,
     propagators,
     transmission_functions,
     nslices,eV,alpha,batch_size = 1,detectors = None,FourD_STEM=False,
-    scan_posn=None,device = torch.device('cpu')
+    scan_posn=None,device = torch.device('cpu'),
     tiling = [1,1],
     device_type=None,
     seed=None):
@@ -766,7 +766,7 @@ def STEM(rsize,probe,
 
         # Shift probes using Fourier shift theorem, prepare shift operators
         # and store them in the array that the probes will eventually inhabit
-        posn = torch.cat([torch.from_numpy(x).to(device) for x in [yscan,xscan]]
+        posn = torch.cat([torch.from_numpy(x).to(device) for x in [yscan,xscan]],
                          dim = 1)
         probes = fourier_shift_array(gridshape, posn, device=device)
 
