@@ -758,7 +758,7 @@ def STEM(
 
         # Calculate number of scan positions in STEM scan
         nscan = nyquist_sampling(FOV, eV=eV, alpha=alpha)
-
+        print(nscan)
         # Get scan position in pixel coordinates
         scan_posn = []
         # Y scan coordinates
@@ -822,10 +822,10 @@ def STEM(
         )
 
         K = scan_index.shape[0]
-        # y scan is fast(est changing) scan direction
-        yscan = scan_posn[0][scan_index % nscan[0]]
-        # x scan is slow(est changing) scan direction
-        xscan = scan_posn[1][scan_index // nscan[0]]
+        # x scan is fast(est changing) scan direction
+        xscan = scan_posn[1][scan_index % nscan[1]]
+        # y scan is slow(est changing) scan direction
+        yscan = scan_posn[0][scan_index // nscan[1]]
 
         # Shift probes using Fourier shift theorem, prepare shift operators
         # and store them in the array that the probes will eventually inhabit.
@@ -871,7 +871,7 @@ def STEM(
                 # broadcast detector and probe arrays to
                 # ndet x batch_size x Y x X and reduce final two dimensions
 
-                STEM_image[..., it, scan_index] = (
+                STEM_image[:ndet, it, scan_index] = (
                     torch.sum(
                         D.view(ndet, 1, *gridshape) * amp.view(1, K, *gridshape),
                         (-2, -1),
@@ -888,7 +888,7 @@ def STEM(
                 probes = torch.ifft(probes, signal_ndim=2, normalized=True)
 
     if conventional_STEM and FourD_STEM:
-        return STEM_image.reshape(ndet, *nscan), Four_D_STEM.reshape(*nscan)
+        return STEM_image.reshape(ndet, nthick, *nscan), Four_D_STEM.reshape(*nscan)
     if FourD_STEM:
         return datacube.reshape(nthick, *nscan, *gridshape)
     if conventional_STEM:
