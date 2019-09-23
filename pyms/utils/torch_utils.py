@@ -163,7 +163,7 @@ def roll_n(X, axis, n):
     return torch.cat([back, front], axis)
 
 
-def cx_from_numpy(x: np.array, device=None) -> torch.Tensor:
+def cx_from_numpy(x: np.array, dtype = torch.float, device=None) -> torch.Tensor:
     if "complex" in str(x.dtype):
         out = torch.zeros(x.shape + (2,), device=device)
         out[re] = torch.from_numpy(x.real)
@@ -176,7 +176,7 @@ def cx_from_numpy(x: np.array, device=None) -> torch.Tensor:
             out = torch.zeros(x.shape + (2,))
             out[re] = torch.from_numpy(x[re])
             out[re] = torch.from_numpy(x[im])
-    return out
+    return out.type(dtype)
 
 
 def cx_to_numpy(x: torch.Tensor) -> np.ndarray:
@@ -484,9 +484,9 @@ def correlate(arr1, arr2):
         return torch.ifft(result, 2)[..., 0]
 
 
-def fftfreq(n, dtype=torch.float):
+def fftfreq(n, dtype=torch.float, device=torch.device("cpu")):
     """Same as numpy.fft.fftfreq(n)*n """
-    return (torch.arange(n, dtype=dtype) + n // 2) % n - n // 2
+    return (torch.arange(n, dtype=dtype,device = device) + n // 2) % n - n // 2
 
 
 def fourier_shift_array_1d(y, posn, dtype=torch.float, device=torch.device("cpu")):
@@ -523,13 +523,13 @@ def fourier_shift_array(size, posn, dtype=torch.float, device=torch.device("cpu"
         K = posn.size(0)
         # Make y ramp exp(-2pi i ky y)
         yramp = torch.empty(K, y, 2, dtype=dtype, device=device)
-        ky = 2 * np.pi * fftfreq(y).view(1, y) * posn[:, 0].view(K, 1) / y
+        ky = 2 * np.pi * fftfreq(y, dtype=dtype, device=device).view(1, y) * posn[:, 0].view(K, 1) / y
         yramp[..., 0] = torch.cos(ky)
         yramp[..., 1] = -torch.sin(ky)
 
         # Make y ramp exp(-2pi i kx x)
         xramp = torch.empty(K, x, 2, dtype=dtype, device=device)
-        kx = 2 * np.pi * fftfreq(x).view(1, x) * posn[:, 1].view(K, 1) / x
+        kx = 2 * np.pi * fftfreq(x, dtype=dtype, device=device).view(1, x) * posn[:, 1].view(K, 1) / x
         xramp[..., 0] = torch.cos(kx)
         xramp[..., 1] = -torch.sin(kx)
 

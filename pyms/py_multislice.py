@@ -13,7 +13,7 @@ from .utils.torch_utils import (
     complex_mul,
     torch_c_exp,
     fourier_shift_array,
-    amplitude
+    amplitude,
 )
 
 
@@ -206,7 +206,7 @@ class crystal:
         # scaled by the electron interaction constant
         T = torch.fft(torch_c_exp(interaction_constant(eV) * T), signal_ndim=2)
 
-        # Band-width limit the transmission function, see Earl Kirkland's book 
+        # Band-width limit the transmission function, see Earl Kirkland's book
         # for an discussion of why this is necessary
         for i in range(T.shape[0]):
             T[i, ...] = bandwidth_limit_array(T[i, ...])
@@ -248,6 +248,7 @@ class crystal:
         displacements=True,
         fe=None,
         device=None,
+        dtype=torch.float,
     ):
         """"Calculates the projected electrostatic potential for a 
             crystal on a pixel grid with dimensions specified by array 
@@ -283,9 +284,7 @@ class crystal:
         # FDES method
         # Intialize potential array
         P = torch.zeros(
-            np.prod([nelements, nsubslices, *pixels, 2]),
-            device=device,
-            dtype=torch.float,
+            np.prod([nelements, nsubslices, *pixels, 2]), device=device, dtype=dtype
         )
 
         # Construct a map of which atom corresponds to which slice
@@ -606,6 +605,7 @@ def multislice(
     tiling=None,
     device_type=None,
     seed=None,
+    return_numpy=True,
 ):
     """For a given probe or set of probes, propagators, and transmission 
         functions perform the multislice algorithm for nslices iterations."""
@@ -630,11 +630,11 @@ def multislice(
     else:
         T = transmission_functions
     if not isinstance(propagators, torch.Tensor):
-        P = cx_from_numpy(propagators, device=device)
+        P = cx_from_numpy(propagators, dtype=T.dtype, device=device)
     else:
         P = propagators
     if not isinstance(probes, torch.Tensor):
-        psi = cx_from_numpy(probes, device=device)
+        psi = cx_from_numpy(probes, dtype=T.dtype, device=device)
     else:
         psi = probes
 
@@ -689,135 +689,211 @@ def multislice(
             # Propagate and inverse Fourier transform
             psi = torch.ifft(complex_mul(psi, P[subslice, ...]), signal_ndim=2)
 
-    return cx_to_numpy(psi)
+    if return_numpy:
+        return cx_to_numpy(psi)
+    return psi
 
-def make_detector(gridshape,rsize,eV,betamax,betamin=0,units='mrad'):
+
+def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     """Make a STEM detector with acceptance angle between betamin and betamax"""
 
     from .Probe import wavev
+
     # Get reciprocal space array
-    q = q_space_array(gridshape,rsize)
+    q = q_space_array(gridshape, rsize)
 
     # If units are mrad convert qspace array from inverse Angstrom to mrad
-    if units=='mrad' : q /= wavev(eV)/1000
-    
+    if units == "mrad":
+        q /= wavev(eV) / 1000
+
     # Calculate modulus square of reciprocal space array
     qsq = np.square(q[0]) + np.square(q[1])
-    
+
     # Make detector
-    detector = np.logical_and(qsq<betamax**2,qsq>=betamin**2)
+    detector = np.logical_and(qsq < betamax ** 2, qsq >= betamin ** 2)
 
     # Convert logical to integer
-    return np.where(detector,1,0)
+    return np.where(detector, 1, 0)
 
 
-def STEM(rsize,probe,
+def STEM(
+    rsize,
+    probe,
     propagators,
     transmission_functions,
-    nslices,eV,alpha,batch_size = 1,detectors = None,FourD_STEM=False,
-    scan_posn=None,device = torch.device('cpu'),
-    tiling = [1,1],
+    nslices,
+    eV,
+    alpha,
+    batch_size=1,
+    detectors=None,
+    FourD_STEM=False,
+    scan_posn=None,
+    device=None,
+    tiling=[1, 1],
     device_type=None,
-    seed=None):
+    seed=None,
+    showProgress=True,
+):
     """Perform a STEM image simulation."""
     from .Probe import nyquist_sampling
-    
-    #Get number of thicknesses in the series
+
+    # Get number of thicknesses in the series
     nthick = len(nslices)
-    
-    #Get shape of grid
+
+    # Get shape of grid
     gridshape = propagators.shape[-2:]
+
+    # Datatype (precision) is inferred from transmission functions
+    dtype = transmission_functions.dtype
+
+    # Device (CPU or GPU) is also inferred from transmission functions
+    if device is None:
+        device = transmission_functions.device
 
     # Generate scan positions if not supplied
     if scan_posn is None:
 
         # Calculate field of view of scan
-        FOV = np.asarray(rsize)/np.asarray(tiling)
+        FOV = np.asarray(rsize) / np.asarray(tiling)
 
         # Calculate number of scan positions in STEM scan
         nscan = nyquist_sampling(FOV, eV=eV, alpha=alpha)
 
-        #Get scan position in pixel coordinates
+        # Get scan position in pixel coordinates
         scan_posn = []
         # Y scan coordinates
-        scan_posn.append(np.arange(0,gridshape[0],step = gridshape[0]/nscan[0]))
+        scan_posn.append(
+            np.arange(
+                0, gridshape[0] / tiling[0], step=gridshape[0] / nscan[0] / tiling[0]
+            )
+        )
         # X scan coordinates
-        scan_posn.append(np.arange(0,gridshape[1],step = gridshape[1]/nscan[1]))
+        scan_posn.append(
+            np.arange(
+                0, gridshape[1] / tiling[1], step=gridshape[1] / nscan[1] / tiling[1]
+            )
+        )
 
     # Total number of scan positions
-    nscantot = scan_posn[0].shape[0]*scan_posn[1].shape[1]
+    nscantot = scan_posn[0].shape[0] * scan_posn[1].shape[0]
 
     # Assume real space probe is passed in so perform Fourier transform in
     # anticipation of application of Fourier shift theorem
-    probe_ = torch.fft(cx_from_numpy(probe,device=device),signal_ndim=2)
+    probe_ = torch.fft(cx_from_numpy(probe, device=device), signal_ndim=2)
 
     # Work out whether to perform conventional STEM or not
     conventional_STEM = not detectors is None
 
-    if conventional_STEM : 
+    if conventional_STEM:
+        # Get number of detectors
+        ndet = detectors.shape[0]
+
         # Initialize array in which to store resulting STEM images
-        STEM_image = np.zeros((detectors.shape[0],nthick,nscantot))
-        
+        STEM_image = np.zeros((ndet, nthick, nscantot))
+
         # Also move detectors to pytorch if necessary
         if not isinstance(detectors, torch.Tensor):
-            D = torch.from_numpy(detectors, device=device)
+            D = torch.from_numpy(detectors).type(dtype).to(device)
         else:
             D = detectors
 
     # Initialize array in which to store resulting 4D-STEM datacube
-    if FourD_STEM : datacube = np.zeros((nthick,nscantot,*gridshape))
-    
+    if FourD_STEM:
+        datacube = np.zeros((nthick, nscantot, *gridshape))
 
-    # This algorithm allows for "batches" of probe to be sent through the 
+    # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
     # probes in memory
-    
-    if (seed is None and batch_size>1) :
+
+    if seed is None and batch_size > 1:
         # If no seed passed to random number generator then make one to pass to
         # the multislice algorithm. This ensure that each probe sees the same
-        # frozen phonon configuration if we are doing batched multislice 
+        # frozen phonon configuration if we are doing batched multislice
         # calculations
-        seed = np.randint(0,2**32-1)
+        seed = np.random.randint(0, 2 ** 32 - 1)
 
-    for i in tqdm(range(int(np.ceil(nscantot/batch_size)))):
+    from tqdm import tqdm
+
+    for i in tqdm(range(int(np.ceil(nscantot / batch_size))), disable=not showProgress):
 
         # Make shifted probes
-        scan_index = np.arange(i*batch_size,(i+1)*batch_size,dtype=np.int)
+        scan_index = np.arange(
+            i * batch_size, min((i + 1) * batch_size, nscantot), dtype=np.int
+        )
+
+        K = scan_index.shape[0]
         # y scan is fast(est changing) scan direction
-        yscan = scan_posn[0][scan_index%nscan[0]]
+        yscan = scan_posn[0][scan_index % nscan[0]]
         # x scan is slow(est changing) scan direction
-        xscan = scan_posn[1][scan_index//nscan[0]]
+        xscan = scan_posn[1][scan_index // nscan[0]]
 
         # Shift probes using Fourier shift theorem, prepare shift operators
-        # and store them in the array that the probes will eventually inhabit
-        posn = torch.cat([torch.from_numpy(x).to(device) for x in [yscan,xscan]],
-                         dim = 1)
-        probes = fourier_shift_array(gridshape, posn, device=device)
+        # and store them in the array that the probes will eventually inhabit.
+
+        # Array of scan positions must be of size batch_size x 2
+        posn = torch.cat(
+            [
+                torch.from_numpy(x).type(dtype).to(device).view(K, 1)
+                for x in [yscan, xscan]
+            ],
+            dim=1,
+        )
+
+        # The shift operator array array will be of size batch_size x Y x X
+        probes = fourier_shift_array(gridshape, posn, dtype=dtype, device=device)
 
         # Apply shift to original probe
-        probes = torch.ifft(complex_mul(probe_.view(1,*probe_.size()),probes))
-        
-        #Thickness series
-        for it,t in enumerate(nslices):
-            #Perform multislice
-            probes = multislice(probes,propagators,transmission_functions,
-                                t,tiling,device,seed)
-            
-            #Calculate amplitude of probes
-            amp = amplitude(probes)
-            
-            #Calculate STEM images 
-            if conventional_STEM: 
-                STEM_images[...,it,scan_index] = torch.sum(D.view(1,*D.size())*
-                                                amp.view(batch_size,1,*gridshape),
-                                                (-2,-1))
-            #Store datacube
-            if FourD_STEM : datacube[it,scan_index,...] = amp.cpu().numpy()
+        probes = torch.ifft(
+            complex_mul(probe_.view(1, *probe_.size()), probes), signal_ndim=2
+        )
 
-    if conventional_STEM and FourD_STEM: 
-        return STEM_images.reshape(ndet,*nscan),Four_D_STEM.reshape(*nscan,)
-    if FourD_STEM: return Four_D_STEM.reshape(*nscan,)
-    if conventional_STEM: return STEM_images.reshape(ndet,*nscan)
+        # Thickness series
+        for it, t in enumerate(nslices):
+            # Perform multislice
+            probes = multislice(
+                probes,
+                propagators,
+                transmission_functions,
+                t,
+                tiling,
+                device,
+                seed,
+                return_numpy=False,
+            )
+            # Fourier transform probes to diffraction plane
+            probes = torch.fft(probes, signal_ndim=2, normalized=True)
+
+            # Calculate amplitude of probes
+            amp = amplitude(probes)
+
+            # Calculate STEM images
+            if conventional_STEM:
+                # broadcast detector and probe arrays to
+                # ndet x batch_size x Y x X and reduce final two dimensions
+
+                STEM_image[..., it, scan_index] = (
+                    torch.sum(
+                        D.view(ndet, 1, *gridshape) * amp.view(1, K, *gridshape),
+                        (-2, -1),
+                    )
+                    .cpu()
+                    .numpy()
+                )
+            # Store datacube
+            if FourD_STEM:
+                datacube[it, scan_index, ...] = amp.cpu().numpy()
+
+            # Fourier transform probes back to real space
+            if it < len(nslices):
+                probes = torch.ifft(probes, signal_ndim=2, normalized=True)
+
+    if conventional_STEM and FourD_STEM:
+        return STEM_image.reshape(ndet, *nscan), Four_D_STEM.reshape(*nscan)
+    if FourD_STEM:
+        return datacube.reshape(nthick, *nscan, *gridshape)
+    if conventional_STEM:
+        return STEM_image.reshape(ndet, nthick, *nscan)
+
 
 def unit_cell_shift(array, axis, shift, tiles):
     """For an array consisting of a number of repeat units given by tiles
@@ -833,14 +909,14 @@ def unit_cell_shift(array, axis, shift, tiles):
         return array[:, indices, :]
 
 
-
-def max_grid_resolution(gridshape,rsize,bandwidthlimit=2/3,eV=None):
+def max_grid_resolution(gridshape, rsize, bandwidthlimit=2 / 3, eV=None):
     """For a given grid pixel size and real space size return maximum resolution permitted
        by the multislice grid. If the probe accelerating voltage is passed in as eV 
        resolution will be given in units of mrad, otherwise resolution will be given in units
        of inverse Angstrom."""
-    max_res = min([gridshape[x]/rsize[x]/2*bandwidthlimit for x in range(2)])
-    if(eV is None): return max_res
+    max_res = min([gridshape[x] / rsize[x] / 2 * bandwidthlimit for x in range(2)])
+    if eV is None:
+        return max_res
     from .Probe import wavev
-    return max_res/wavev(eV)*1e3
 
+    return max_res / wavev(eV) * 1e3

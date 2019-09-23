@@ -24,7 +24,7 @@ def nyquist_sampling(size, resolution_limit=None, eV=None, alpha=None):
     if eV is None and alpha is None:
         return np.ceil(4 * np.asarray(size) * resolution_limit).astype(np.int)
     elif resolution_limit is None:
-        return np.ceil(4 * np.asarray(size) * wavev(eV) * alpha).astype(np.int)
+        return np.ceil(4 * np.asarray(size) * wavev(eV) * alpha * 1e-3).astype(np.int)
     else:
         return None
 
