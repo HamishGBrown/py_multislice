@@ -691,17 +691,41 @@ def multislice(
 
     return cx_to_numpy(psi)
 
+def make_detector(gridshape,rsize,eV,betamax,betamin=0,units='mrad'):
+    """Make a STEM detector with acceptance angle between betamin and betamax"""
+
+    from .Probe import wavev
+    # Get reciprocal space array
+    q = q_space_array(gridshape,rsize)
+
+    # If units are mrad convert qspace array from inverse Angstrom to mrad
+    if units=='mrad' : q /= wavev(eV)/1000
+    
+    # Calculate modulus square of reciprocal space array
+    qsq = np.square(q[0]) + np.square(q[1])
+    
+    # Make detector
+    detector = np.logical_and(qsq<betamax**2,qsq>=betamin**2)
+
+    # Convert logical to integer
+    return np.where(detector,1,0)
+
+
 def STEM(rsize,probe,
     propagators,
     transmission_functions,
     nslices,eV,alpha,batch_size = 1,detectors = None,FourD_STEM=False,
-    scan_posn=None,device = torch.device('cpu')
+    scan_posn=None,device = torch.device('cpu'),
     tiling = [1,1],
     device_type=None,
     seed=None):
-
+    """Perform a STEM image simulation."""
     from .Probe import nyquist_sampling
-
+    
+    #Get number of thicknesses in the series
+    nthick = len(nslices)
+    
+    #Get shape of grid
     gridshape = propagators.shape[-2:]
 
     # Generate scan positions if not supplied
@@ -732,7 +756,7 @@ def STEM(rsize,probe,
 
     if conventional_STEM : 
         # Initialize array in which to store resulting STEM images
-        STEM_image = np.zeros((detectors.shape[0],nscantot))
+        STEM_image = np.zeros((detectors.shape[0],nthick,nscantot))
         
         # Also move detectors to pytorch if necessary
         if not isinstance(detectors, torch.Tensor):
@@ -741,7 +765,7 @@ def STEM(rsize,probe,
             D = detectors
 
     # Initialize array in which to store resulting 4D-STEM datacube
-    if FourD_STEM : datacube = np.zeros((nscantot,*gridshape))
+    if FourD_STEM : datacube = np.zeros((nthick,nscantot,*gridshape))
     
 
     # This algorithm allows for "batches" of probe to be sent through the 
@@ -766,24 +790,29 @@ def STEM(rsize,probe,
 
         # Shift probes using Fourier shift theorem, prepare shift operators
         # and store them in the array that the probes will eventually inhabit
-        posn = torch.cat([torch.from_numpy(x).to(device) for x in [yscan,xscan]]
+        posn = torch.cat([torch.from_numpy(x).to(device) for x in [yscan,xscan]],
                          dim = 1)
         probes = fourier_shift_array(gridshape, posn, device=device)
 
         # Apply shift to original probe
         probes = torch.ifft(complex_mul(probe_.view(1,*probe_.size()),probes))
-
-        #Perform multislice
-        probes = amplitude(multislice(probes,propagators,transmission_functions,
-                            nslices,tiling,device,seed))
         
-        #Calculate STEM images 
-        if conventional_STEM: 
-            STEM_images[...,scan_index] = torch.sum(D.view(1,*D.size())*
-                                            probes.view(batch_size,1,*gridshape),
-                                            (-2,-1))
-        #Store datacube
-        if FourD_STEM : datacube[scan_index,...] = probes.cpu().numpy()
+        #Thickness series
+        for it,t in enumerate(nslices):
+            #Perform multislice
+            probes = multislice(probes,propagators,transmission_functions,
+                                t,tiling,device,seed)
+            
+            #Calculate amplitude of probes
+            amp = amplitude(probes)
+            
+            #Calculate STEM images 
+            if conventional_STEM: 
+                STEM_images[...,it,scan_index] = torch.sum(D.view(1,*D.size())*
+                                                amp.view(batch_size,1,*gridshape),
+                                                (-2,-1))
+            #Store datacube
+            if FourD_STEM : datacube[it,scan_index,...] = amp.cpu().numpy()
 
     if conventional_STEM and FourD_STEM: 
         return STEM_images.reshape(ndet,*nscan),Four_D_STEM.reshape(*nscan,)
@@ -804,87 +833,14 @@ def unit_cell_shift(array, axis, shift, tiles):
         return array[:, indices, :]
 
 
-if __name__ == "__main__":
-    sample = crystal("1000048.p1")
-    sample.quickplot()
-    sys.exit()
-    from matplotlib import rc
 
-    rc("font", **{"family": "sans-serif", "sans-serif": ["Helvetica"]})
+def max_grid_resolution(gridshape,rsize,bandwidthlimit=2/3,eV=None):
+    """For a given grid pixel size and real space size return maximum resolution permitted
+       by the multislice grid. If the probe accelerating voltage is passed in as eV 
+       resolution will be given in units of mrad, otherwise resolution will be given in units
+       of inverse Angstrom."""
+    max_res = min([gridshape[x]/rsize[x]/2*bandwidthlimit for x in range(2)])
+    if(eV is None): return max_res
+    from .Probe import wavev
+    return max_res/wavev(eV)*1e3
 
-    # sample = crystal('1005012.p1')
-    sample = crystal("SrTiO3.p1")
-    # sample.atoms[:,5] = 0.05
-    # subslices  = [0.132,0.196,0.236,0.362,0.4999,0.6378,0.7233,0.8,0.867,1.0]
-    subslices = [1.0]
-    gridsize = np.zeros((3))
-    gridsize[:3] = sample.unitcell[:3]
-    nT = 4
-    tiling = [16, 16]
-    pixsize = [512, 512]
-    # pixsize = [128,128]
-    eV = 300e3
-    app = 24.0
-
-    print("Setting up calculation")
-    T = torch.zeros(nT, len(subslices), *pixsize, 2, dtype=torch.float)
-    fe = sample.calculate_scattering_factors(pixsize, tiling)
-    for i in range(nT):
-
-        T[i, :, :, :] = sample.make_transmission_functions(
-            pixsize, eV, subslices, tiling, fe=fe, displacements=True
-        )
-
-    fig = plt.figure(figsize=(2 * 4, 3 * 4))
-
-    ax = fig.add_subplot(321)
-    ax.imshow(np.angle(cx_to_numpy(T[1, 0, :, :])))
-    ax = fig.add_subplot(322)
-    ax.imshow(np.angle(cx_to_numpy(T[1, 0, :, :])))
-    # for i in range(1): Image.fromarray(np.abs(np.fft.fft2(cx_to_numpy(T[1,i,:,:])))).save('T_{0}.tif'.format(i))
-    # plt.show()
-    # sys.exit()
-    gridsize[:2] = gridsize[:2] * np.asarray(tiling)
-    P = make_propagators(pixsize, gridsize, eV, subslices)
-    ax = fig.add_subplot(323)
-    ax.imshow(np.fft.fftshift(np.imag(P[0, :, :])))
-    ax = fig.add_subplot(324)
-    ax.imshow(np.fft.fftshift(np.real(P[0, :, :])))
-    probe = construct_illum(pixsize, gridsize[:2], eV, app)
-    # probe =  np.ones(pixsize,dtype=np.complex)/np.sqrt(np.prod(pixsize))
-    # print(np.sum(np.square(np.abs(probe))))
-    ax = fig.add_subplot(325)
-    # ax.imshow(colorize(probe))
-    ax.imshow(np.square(np.abs(probe)))
-    # print(np.argmax(np.square(np.abs(probe))))
-    # sys.exit()
-    # print(np.sum(np.square(np.abs(probe))))
-    # plt.show()
-    # print('Performing multislice')
-    exit_wave = np.zeros(pixsize)
-    from tqdm import tqdm
-    from PIL import Image
-
-    nfph = 50
-    t = 100
-    # Image.fromarray(exit_wave).save('cbed.tiff')
-    for i in tqdm(range(nfph)):
-
-        exit_wave += (
-            np.abs(
-                np.fft.fft2(
-                    multislice(
-                        probe, P, T, gridsize, int(np.ceil(t / 3.905)), tiling=tiling
-                    )
-                )
-            )
-            ** 2
-            / nfph
-        )
-        # fig,ax = plt.subplots()
-        # ax.imshow(exit_wave)
-        # plt.show()
-    Image.fromarray(np.fft.fftshift(exit_wave) / np.prod(pixsize)).save("cbed.tiff")
-    ax = fig.add_subplot(326)
-    # ax.imshow(np.fft.fftshift(np.square(np.abs((np.fft.fft2(exit_wave,norm='ortho'))))))
-    plt.show()

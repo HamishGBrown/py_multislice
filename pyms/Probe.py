@@ -155,7 +155,7 @@ def make_contrast_transfer_function(
     return CTF
 
 
-def construct_STEM_probe(
+def focused_probe(
     pix_dim,
     real_dim,
     eV,
@@ -180,7 +180,7 @@ def construct_STEM_probe(
     c5 --- The 5rd order spherical aberration coefficient
     app_units --- The units of the aperture size (A^-1 or mrad)
     """
-    probe = make_ctf(
+    probe = make_contrast_transfer_function(
         pix_dim,
         real_dim,
         eV,
