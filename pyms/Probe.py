@@ -250,3 +250,11 @@ def wavev(E):
     # Electron rest mass in eV
     m0c2 = 5.109989461e5
     return np.sqrt(E * (E + 2 * m0c2)) / hc
+
+def relativistic_mass_correction(E):
+    """Gives the relativistic mass correction, m/m0 or gamma, for an electron
+    with kinetic energy given by E in eV. Eq. (2.2) in Kirkland's Advanced
+     Computing in electron microscopy"""
+    # Electron rest mass in eV
+    m0c2 = 5.109989461e5
+    return (m0c2 + E) / m0c2
