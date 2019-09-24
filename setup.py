@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="py_multislice",
+    name="pyms",
     version="0.1",
     description="An open-source Python multislice package",
     author="Hamish Brown",
