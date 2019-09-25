@@ -13,7 +13,7 @@ Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-at
 
 - [x] Get multislice working
 - [x] CBED
-- [ ] Conventional STEM (HAADF, ABF, BF and 4D-STEM)
+- [x] Conventional STEM (HAADF, ABF, BF and 4D-STEM)
 - [ ] STEM EELS
 - [ ] PRISM
 - [ ] STEM EDX
