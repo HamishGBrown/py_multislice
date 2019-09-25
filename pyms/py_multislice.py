@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import sys
+from tqdm import tqdm
 from re import split, match
 from os.path import splitext
 from .atomic_scattering_params import e_scattering_factors, atomic_symbol
@@ -25,7 +26,8 @@ def q_space_array(pixels, gridsize):
     return np.meshgrid(
         *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
     )
-    
+
+
 def bandwidth_limit_array(array, limit=2 / 3):
     """Band-width limit an array to fraction of its maximum given by limit"""
     if isinstance(array, np.ndarray):
@@ -58,6 +60,7 @@ def bandwidth_limit_array(array, limit=2 / 3):
 
 def make_propagators(pixelsize, gridsize, eV, subslices):
     from .Probe import make_contrast_transfer_function
+
     # We will use the make_contrast_transfer_function function to generate the propagator, the
     # aperture of this propagator will supply the bandwidth limit of our simulation
     # it must be 2/3rds of our pixel gridsize
@@ -74,16 +77,12 @@ def make_propagators(pixelsize, gridsize, eV, subslices):
         # Calculate propagator
         prop[islice, :, :] = bandwidth_limit_array(
             make_contrast_transfer_function(
-                pixelsize,
-                gridsize[:2],
-                eV,
-                app,
-                df=deltaz,
-                app_units="invA"
+                pixelsize, gridsize[:2], eV, app, df=deltaz, app_units="invA"
             )
         )
 
     return prop
+
 
 def multislice_cupy(
     probes,
@@ -91,7 +90,7 @@ def multislice_cupy(
     transmission_functions,
     nslices,
     tiling=None,
-    device_type='GPU',
+    device_type="GPU",
     seed=None,
     return_numpy=True,
 ):
@@ -105,10 +104,10 @@ def multislice_cupy(
     # If GPU calculations are requested then import the cupy library
     # otherwise import numpy (useful feature of numpy and cupy having very
     # the same function names)
-    if device_type=='GPU':
+    if device_type == "GPU":
         import cupy as cp
     else:
-        import numpy as cp 
+        import numpy as cp
 
     # Since pytorch doesn't have a complex data type we need to add an extra
     # dimension of size 2 to each tensor that will store real and imaginary
@@ -127,18 +126,23 @@ def multislice_cupy(
             # Transmit and forward Fourier transform
 
             if tiling is None or (tiling[0] == 1 & tiling[1] == 1):
-                psi = cp.fft.fft2(T[it, subslice, ...]*psi)
+                psi = cp.fft.fft2(T[it, subslice, ...] * psi)
                 # If the transmission function is from a tiled unit cell then
                 # there is the option of randomly shifting it around to
                 # generate "more" transmission functions
             elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
                 # Shift an integer number of pixels in y and x
-                T_ = cp.roll(T[it, subslice, ...],(
-                    r.randint(0, tiling[0]) * (nopiy // tiling[0]),
-                    r.randint(1, tiling[1]) * (nopix // tiling[1])),axis=(-2,-1))
+                T_ = cp.roll(
+                    T[it, subslice, ...],
+                    (
+                        r.randint(0, tiling[0]) * (nopiy // tiling[0]),
+                        r.randint(1, tiling[1]) * (nopix // tiling[1]),
+                    ),
+                    axis=(-2, -1),
+                )
 
                 # Perform transmission operation
-                psi = cp.fft.fft2(T_*psi)
+                psi = cp.fft.fft2(T_ * psi)
             else:
                 # Case of a non-integer shifting of the unit cell
                 yshift = r.randint(0, tiling[0]) * (nopiy / tiling[0])
@@ -165,7 +169,8 @@ def multislice_cupy(
 
     if return_numpy:
         return cx_to_numpy(psi)
-    return psi    
+    return psi
+
 
 def multislice(
     probes,
@@ -258,7 +263,7 @@ def multislice(
 
             # Propagate and inverse Fourier transform
             psi = torch.ifft(complex_mul(psi, P[subslice, ...]), signal_ndim=2)
-
+            # print(torch.sum(amplitude(psi)))
     if return_numpy:
         return cx_to_numpy(psi)
     return psi
@@ -324,7 +329,7 @@ def STEM(
     if scan_posn is None:
 
         # Calculate field of view of scan
-        FOV = np.asarray(rsize) / np.asarray(tiling)
+        FOV = np.asarray(rsize[:2]) / np.asarray(tiling)
 
         # Calculate number of scan positions in STEM scan
         nscan = nyquist_sampling(FOV, eV=eV, alpha=alpha)
@@ -470,7 +475,6 @@ def unit_cell_shift(array, axis, shift, tiles):
        shift than array an integer number of unit cells"""
 
     intshift = array.size(axis) // tiles
-    integer_divisible = intshift == 0
 
     indices = torch.remainder(torch.arange(array.shape[-3 + axis]) - shift)
     if axis == 0:
@@ -490,3 +494,100 @@ def max_grid_resolution(gridshape, rsize, bandwidthlimit=2 / 3, eV=None):
     from .Probe import wavev
 
     return max_res / wavev(eV) * 1e3
+
+
+def make_scattering_matrix(
+    rsize,
+    propagators,
+    transmission_functions,
+    nslices,
+    eV,
+    alpha,
+    batch_size=1,
+    device=None,
+    PRISM_factor=[1, 1],
+    tiling = [1,1],
+    device_type=None,
+    seed=None,
+    showProgress=True,
+    mode="stream",
+):
+    """Make a scattering matrix for the dynamical scattering calculations using 
+    the PRISM algorithm"""
+    
+    from .Probe import wavev, plane_wave_illumination
+
+    # Get size of grid
+    gridshape = np.shape(propagators)[1:3]
+
+    # Datatype (precision) is inferred from transmission functions
+    dtype = transmission_functions.dtype
+
+    # Device (CPU or GPU) is also inferred from transmission functions
+    if device is None:
+        device = transmission_functions.device
+
+    # Get alpha in units of inverse Angstrom
+    alpha_ = wavev(eV) * alpha * 1e-3
+
+    # Make a list of beams in the scattering matrix
+    q = q_space_array(gridshape, rsize)
+    beams = np.argwhere(np.logical_and(
+        np.logical_and(
+            np.less_equal(q[0] ** 2 + q[1] ** 2, alpha_),
+            (
+                np.mod(
+                    np.fft.fftfreq(gridshape[0], d=1 / gridshape[0]).astype(np.int),
+                    PRISM_factor[0],
+                )
+                == 0
+            )[:, np.newaxis],
+        ),
+        (
+            np.mod(
+                np.fft.fftfreq(gridshape[1], d=1 / gridshape[1]).astype(np.int),
+                PRISM_factor[1],
+            )
+            == 0
+        )[np.newaxis, :],
+    ))
+    nbeams = beams.shape[0]
+
+    # Initialize scattering matrix...
+    if mode == "stream":
+        # ... on CPU for streaming
+        S = torch.zeros(nbeams, *gridshape, 2, dtype=dtype, device="cpu")
+    else:
+        # ... on specified device otherwise
+        S = torch.zeros(nbeams, *gridshape, 2, dtype=dtype, device=device)
+
+    if seed is None:
+        # If no seed passed to random number generator then make one to pass to
+        # the multislice algorithm. This ensure that each column in the scattering
+        # matrix sees the same frozen phonon configuration
+        seed = np.random.randint(0, 2 ** 32 - 1)
+
+    # Initialize probe wave function array
+    psi = torch.zeros(batch_size, *gridshape, 2, dtype=dtype, device=device)
+    
+    for i in tqdm(range(int(np.ceil(nbeams / batch_size))), disable=not showProgress):
+        for j in range(batch_size):
+            jj = j + batch_size * i
+            psi[j, ...] = cx_from_numpy(plane_wave_illumination(
+                gridshape, rsize[:2], tilt=beams[jj, :], tilt_units="pixels"
+            ))
+        psi = multislice(
+            psi,
+            propagators,
+            transmission_functions,
+            nslices,
+            tiling,
+            device,
+            seed,
+            return_numpy=False,
+        )
+        if mode == 'stream': 
+            S[i * batch_size : (i + 1) * batch_size, ...] = psi.cpu()
+        else:
+            S[i * batch_size : (i + 1) * batch_size, ...] = psi
+    return S,beams

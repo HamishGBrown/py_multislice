@@ -8,4 +8,10 @@ setup(
     author_email="hamishgallowaybrown@gmail.com",
     url="https://github.com/HamishGBrown/py_multislice/",
     packages=find_packages(),
+     install_requires=[
+        'numpy >= 1.15, < 2.0',
+        'torch >= 1.2, < 2.0',
+        'tqdm >= 4.0'
+        ]
+
 )

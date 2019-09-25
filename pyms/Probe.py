@@ -58,8 +58,8 @@ def q_space_array(pixels, gridsize):
     given by pixels (#y pixels, #x pixels) and real space size given by gridsize
     (y size, x size)"""
     return np.meshgrid(
-        *[np.fft.fftfreq(pixels[i]) * pixels[i] / gridsize[i] for i in range(1, -1, -1)]
-    )[::-1]
+        *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
+    )
 
 
 def chi(q, qphi, lam, df=0.0, aberrations=[]):
@@ -74,7 +74,7 @@ def chi(q, qphi, lam, df=0.0, aberrations=[]):
         wavelength of electron (Inverse angstroms).
     aberrations : list
         A list object containing a set of the class aberration"""
-    chi_ = (q * lam) ** 2 / 2 * df / 2
+    chi_ = (q * lam) ** 2 / 2 * df
     for ab in aberrations:
         chi_ += (
             (q * lam) ** (ab.n + 1)
@@ -250,6 +250,7 @@ def wavev(E):
     # Electron rest mass in eV
     m0c2 = 5.109989461e5
     return np.sqrt(E * (E + 2 * m0c2)) / hc
+
 
 def relativistic_mass_correction(E):
     """Gives the relativistic mass correction, m/m0 or gamma, for an electron

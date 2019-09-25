@@ -6,7 +6,7 @@ import copy
 from re import split, match
 from os.path import splitext
 from .atomic_scattering_params import e_scattering_factors, atomic_symbol
-from .Probe import wavev,relativistic_mass_correction
+from .Probe import wavev, relativistic_mass_correction
 from .utils.torch_utils import (
     sinc,
     roll_n,
@@ -17,6 +17,7 @@ from .utils.torch_utils import (
     fourier_shift_array,
     amplitude,
 )
+
 
 def bandwidth_limit_array(array, limit=2 / 3):
     """Band-width limit an array to fraction of its maximum given by limit"""
@@ -47,6 +48,7 @@ def bandwidth_limit_array(array, limit=2 / 3):
 
     return array
 
+
 def Xray_scattering_factor(Z, gsq, units="A"):
     # Bohr radius in Angstrom
     a0 = 0.529177
@@ -54,6 +56,7 @@ def Xray_scattering_factor(Z, gsq, units="A"):
     return Z - 2 * np.pi ** 2 * a0 * gsq * electron_scattering_factor(
         Z, gsq, units=units
     )
+
 
 def electron_scattering_factor(Z, gsq, units="VA"):
     ai = e_scattering_factors[Z - 1, 0:10:2]
@@ -77,6 +80,7 @@ def electron_scattering_factor(Z, gsq, units="VA"):
     elif units == "A":
         return fe
 
+
 def interaction_constant(E, units="rad/VA"):
     """Calculates the interaction constant, sigma, to convert electrostatic
     potential (in V Angstrom) to radians. Units of this constant are rad/(V
@@ -96,7 +100,8 @@ def interaction_constant(E, units="rad/VA"):
         return 2 * np.pi * gamma * me * qe / k0 / h / h
     elif units == "rad/A":
         return gamma / k0
-        
+
+
 def q_space_array(pixels, gridsize):
     """Returns the appropriately scaled 2D reciprocal space array for pixel size
     given by pixels (#y pixels, #x pixels) and real space size given by gridsize
@@ -104,19 +109,34 @@ def q_space_array(pixels, gridsize):
     return np.meshgrid(
         *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
     )
-    
-def rot_matrix(theta, u = np.asarray([0,0,1],dtype=np.float)):
-    '''Generates the rotational matrix for a rotation of angle theta in radians
-    around vector u.'''
-    from numpy import sin, cos,pi
+
+
+def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
+    """Generates the rotational matrix for a rotation of angle theta in radians
+    around vector u."""
+    from numpy import sin, cos, pi
+
     c = cos(theta)
     s = sin(theta)
-    ux,uy,uz = u
-    R = np.zeros((3,3))
-    R[0,:] = [c+ux*ux*(1-c),ux*uy*(1-c)-uz*s,ux*uz*(1-c)+uy*s]
-    R[1,:] = [uy*uz*(1-c)+uz*s,c+uy*uy*(1-c),uy*uz*(1-c)-ux*s]
-    R[2,:] = [uz*ux*(1-c)-uy*s,uz*uy*(1-c)+ux*s,c+uz*uz*(1-c)]
+    ux, uy, uz = u
+    R = np.zeros((3, 3))
+    R[0, :] = [
+        c + ux * ux * (1 - c),
+        ux * uy * (1 - c) - uz * s,
+        ux * uz * (1 - c) + uy * s,
+    ]
+    R[1, :] = [
+        uy * uz * (1 - c) + uz * s,
+        c + uy * uy * (1 - c),
+        uy * uz * (1 - c) - ux * s,
+    ]
+    R[2, :] = [
+        uz * ux * (1 - c) - uy * s,
+        uz * uy * (1 - c) + ux * s,
+        c + uz * uz * (1 - c),
+    ]
     return R
+
 
 class crystal:
     # Elements in a crystal object:
@@ -217,7 +237,7 @@ class crystal:
             return None
         # If temperature factors are given as B then convert to urms
         if temperature_factor_units == "B":
-            self.atoms[:, 4:6] /= 8 * np.pi ** 2
+            self.atoms[:, 5] /= 8 * np.pi ** 2
 
     def quickplot(self, atomscale=0.01, cmap=plt.get_cmap("Dark2")):
         """Makes a quick 3D scatter plot of the crystal"""
@@ -229,28 +249,31 @@ class crystal:
         sizes = self.atoms[:, 3] ** (4) * atomscale
         ax.scatter(*[self.atoms[:, i] for i in range(3)], c=colors, s=sizes)
         plt.show(block=True)
-    
-    def output_vesta_xtl(self,fnam):
+
+    def output_vesta_xtl(self, fnam):
         """Outputs an .xtl file which is viewable by the vesta software:
 
         K. Momma and F. Izumi, "VESTA 3 for three-dimensional visualization of
         crystal, volumetric and morphology data," J. Appl. Crystallogr., 44,
         1272-1276 (2011).
         """
-        f = open(splitext(fnam)[0]+'.xtl', 'w')
-        f.write('TITLE ' + self.Title + '\n')
-        f.write('CELL ' + '\n')
-        f.write('  {0:.2f} {1:.2f} {2:.2f} 90 90 90\n'.format(*self.unitcell))
-        f.write('SYMMETRY NUMBER 1' + '\n')
-        f.write('SYMMETRY LABEL  P1' + '\n')
-        f.write('ATOMS ' + '\n')
-        f.write('NAME         X           Y           Z'+ '\n')
-        for  i in range(self.atoms.shape[0]):
-            f.write('{0} {1:.4f} {2:.4f} {3:.4f}\n'.format(
-            atomic_symbol[int(self.atoms[i,3])],*self.atoms[i,:3]))
-        f.write('EOF')
+        f = open(splitext(fnam)[0] + ".xtl", "w")
+        f.write("TITLE " + self.Title + "\n")
+        f.write("CELL " + "\n")
+        f.write("  {0:.2f} {1:.2f} {2:.2f} 90 90 90\n".format(*self.unitcell))
+        f.write("SYMMETRY NUMBER 1" + "\n")
+        f.write("SYMMETRY LABEL  P1" + "\n")
+        f.write("ATOMS " + "\n")
+        f.write("NAME         X           Y           Z" + "\n")
+        for i in range(self.atoms.shape[0]):
+            f.write(
+                "{0} {1:.4f} {2:.4f} {3:.4f}\n".format(
+                    atomic_symbol[int(self.atoms[i, 3])], *self.atoms[i, :3]
+                )
+            )
+        f.write("EOF")
         f.close()
-    
+
     def make_transmission_functions(
         self,
         pixels,
@@ -494,134 +517,152 @@ class crystal:
 
         # Only return real part
         return torch.ifft(P, signal_ndim=2)[..., 0]
-        
-    def rotate(self, theta,axis,origin = [0.5,0.5,0.5]):
+
+    def rotate(self, theta, axis, origin=[0.5, 0.5, 0.5]):
         """Returns a copy of the crystal rotated an angle theta in radians about an axis and
         """
         new = copy.deepcopy(self)
-        
-        #Make rotation matrix, R, and  the point about which we rotate, O
+
+        # Make rotation matrix, R, and  the point about which we rotate, O
         R = rot_matrix(theta, axis)
         O = np.asarray(origin)
-        
-        #Get atomic coordinates in cartesian (not fractional coordinates)
-        new.atoms[:,:3] = self.atoms[:,:3]*self.unitcell[np.newaxis,:]
-        
-        #Apply rotation matrix to each atom coordinate
-        new.atoms[:,:3] = (R@(new.atoms[:,:3].T - O[:,np.newaxis]) 
-                                                + O[:,np.newaxis]).T
-        
-        #Get new unit cell (assume vacuum padding)
-        origin = np.amin(new.atoms,axis=0)
-        new.unitcell = np.amax(new.atoms,axis=0)-origin
-        new.atoms[:,:3] =  (new.atoms[:,:3] - origin[np.newaxis,:3])/new.unitcell[np.newaxis,:3]
-        
-        #Return rotated crystal
+
+        # Get atomic coordinates in cartesian (not fractional coordinates)
+        new.atoms[:, :3] = self.atoms[:, :3] * self.unitcell[np.newaxis, :]
+
+        # Apply rotation matrix to each atom coordinate
+        new.atoms[:, :3] = (
+            R @ (new.atoms[:, :3].T - O[:, np.newaxis]) + O[:, np.newaxis]
+        ).T
+
+        # Get new unit cell (assume vacuum padding)
+        origin = np.amin(new.atoms, axis=0)
+        new.unitcell = np.amax(new.atoms, axis=0) - origin
+        new.atoms[:, :3] = (new.atoms[:, :3] - origin[np.newaxis, :3]) / new.unitcell[
+            np.newaxis, :3
+        ]
+
+        # Return rotated crystal
         return new
-        
-    def tile(self, x = 1, y = 1, z = 1):
-        '''tiles the crystal out'''
-        #Make copy of original crystal
+
+    def tile(self, x=1, y=1, z=1):
+        """tiles the crystal out"""
+        # Make copy of original crystal
         new = copy.deepcopy(self)
-        
-        #Get atoms in unit cell
+
+        # Get atoms in unit cell
         natoms = self.atoms.shape[0]
-        
-        #Initialize new atom list
-        new.atoms = np.zeros((natoms*x*y*z,3))
-        
-        #Calculate new unit cell size
-        new.unitcell = np.asarray([x,y,z])*self.unitcell
-        
-        #tile out the integer amounts
+
+        # Initialize new atom list
+        new.atoms = np.zeros((natoms * x * y * z, 3))
+
+        # Calculate new unit cell size
+        new.unitcell = np.asarray([x, y, z]) * self.unitcell
+
+        # tile out the integer amounts
         for j in range(int(x)):
             for k in range(int(y)):
                 for l in range(int(z)):
-                    
-                    #Calculate origin of this particular tile
-                    origin = [float(j)/factorx,float(k)/factory,float(l)/factorz]
-                    
-                    #Calculate index of this particular tile
-                    indx = j*int(y)*int(z)+y*int(z)+l
-                    
-                    #Add new atoms to unit cell
-                    new.atoms[indx:indx+int(z),:3] = self.atoms[:,:3] + origin[np.newaxis,:]
-                    new.atoms[indx:indx+int(z),3:] = self.atoms[:,3:]
-                        
-        #Return new crystal
+
+                    # Calculate origin of this particular tile
+                    origin = [
+                        float(j) / factorx,
+                        float(k) / factory,
+                        float(l) / factorz,
+                    ]
+
+                    # Calculate index of this particular tile
+                    indx = j * int(y) * int(z) + y * int(z) + l
+
+                    # Add new atoms to unit cell
+                    new.atoms[indx : indx + int(z), :3] = (
+                        self.atoms[:, :3] + origin[np.newaxis, :]
+                    )
+                    new.atoms[indx : indx + int(z), 3:] = self.atoms[:, 3:]
+
+        # Return new crystal
         return new
-        
-    def concatenate_crystals(self, other,axis = 2,side = 1,eps=1e-3):
-        '''adds other crystal to the crystal object slice is added to the bottom (top being z =0)
+
+    def concatenate_crystals(self, other, axis=2, side=1, eps=1e-3):
+        """adds other crystal to the crystal object slice is added to the bottom (top being z =0)
         only works if slices are the same size or their x and y dimensions are integer multiples of
-        each other '''
-        #Make deep copies of the crystal object and the slice
-        #this is so that these objects remain untouched by the operation
-        #of this function
+        each other """
+        # Make deep copies of the crystal object and the slice
+        # this is so that these objects remain untouched by the operation
+        # of this function
         new = copy.deepcopy(self)
         other_ = copy.deepcopy(other)
-        
-        #Check if the two slices are the same size and
-        #tile accordingly
+
+        # Check if the two slices are the same size and
+        # tile accordingly
         for ax in range(3):
-            #If this axis is the concatenation axis, then it's not necessary 
-            #that the crystals are the same size
-            if ax==axis: continue
-            
-            factor = self.unitcell[ax]/other.unitcell[ax]
-            tile = [0,0,0]
-            
-            if factor > 1 :
+            # If this axis is the concatenation axis, then it's not necessary
+            # that the crystals are the same size
+            if ax == axis:
+                continue
+
+            factor = self.unitcell[ax] / other.unitcell[ax]
+            tile = [0, 0, 0]
+
+            if factor > 1:
                 tile[ax] = int(factor)
                 other_ = other_.tile(*tile)
-            elif factor <1 :
-                tile[ax] = int(1/factor)
+            elif factor < 1:
+                tile[ax] = int(1 / factor)
                 new = new.tile(*tile)
-        
+
         axes = np.arange(3) != axis
-        assert np.all(np.abs(new.unitcell[axes]-other_.unitcell[axes])<eps), "Crystal axes mismatch"
-        
-        #Update the thickness of the resulting
-        #crystal object.
-        new.unitcell[axis] = self.unitcell[axis]+other_.unitcell[axis]
-        
-        #Adjust fractional coordinates of atoms
-        new.atoms[:,axis]   /= new.unitcell[axis]/self.unitcell[axis]
-        other_.atoms[:,axis] /= new.unitcell[axis]/other_.unitcell[axis]
-        
-        if side == 0:  new.atoms[:,axis] += self.unitcell[axis]/new.unitcell[axis]
-        else: other_.atoms[:,axis] += self.unitcell[axis]/new.unitcell[axis]
-        new.atoms = np.concatenate([new.atoms,other_.atoms],axis=0)
-        
+        assert np.all(
+            np.abs(new.unitcell[axes] - other_.unitcell[axes]) < eps
+        ), "Crystal axes mismatch"
+
+        # Update the thickness of the resulting
+        # crystal object.
+        new.unitcell[axis] = self.unitcell[axis] + other_.unitcell[axis]
+
+        # Adjust fractional coordinates of atoms
+        new.atoms[:, axis] /= new.unitcell[axis] / self.unitcell[axis]
+        other_.atoms[:, axis] /= new.unitcell[axis] / other_.unitcell[axis]
+
+        if side == 0:
+            new.atoms[:, axis] += self.unitcell[axis] / new.unitcell[axis]
+        else:
+            other_.atoms[:, axis] += self.unitcell[axis] / new.unitcell[axis]
+        new.atoms = np.concatenate([new.atoms, other_.atoms], axis=0)
+
         return new
-        
-    def reflect(self,axes):
+
+    def reflect(self, axes):
         """Reflect crystal in each of the axes enumerated in list axes"""
         self_ = copy.deepcopy(self)
         for ax in axes:
-            self_.atoms[:,ax] = 1 - self_.atoms[:,ax]
+            self_.atoms[:, ax] = 1 - self_.atoms[:, ax]
         return self_
-    
-    def slice(self,range,axis):
+
+    def slice(self, range, axis):
         """Make a slice of crystal object ranging from range[0] to range[1] through
         specified axis"""
-        
-        #Work out which atoms will stay in the sliced structure
-        mask = np.logical_and(self.atoms[:,axis]>=range[0], self.atoms[:,axis]<=range[1])
-        
-        #Make a copy of the crystal
+
+        # Work out which atoms will stay in the sliced structure
+        mask = np.logical_and(
+            self.atoms[:, axis] >= range[0], self.atoms[:, axis] <= range[1]
+        )
+
+        # Make a copy of the crystal
         new = copy.deepcopy(self)
-        
-        #Put remaining atoms back in 
-        new.atoms = self.atoms[mask,:]
-        
-        #Adjust unit cell dimensions
-        new.unitcell[axis] = (range[1]-range[0])*self.unitcell[axis]
-        
-        #Adjust origin of atomic coordinates
+
+        # Put remaining atoms back in
+        new.atoms = self.atoms[mask, :]
+
+        # Adjust unit cell dimensions
+        new.unitcell[axis] = (range[1] - range[0]) * self.unitcell[axis]
+
+        # Adjust origin of atomic coordinates
         origin = np.zeros((3))
         origin[axis] = range[0]
-        new.atoms[:,axis] = (new.atoms[:,axis] - range[0])*self.unitcell[axis]/new.unitcell[axis]
-        
-        #Return modified crystal structure
+        new.atoms[:, axis] = (
+            (new.atoms[:, axis] - range[0]) * self.unitcell[axis] / new.unitcell[axis]
+        )
+
+        # Return modified crystal structure
         return new
