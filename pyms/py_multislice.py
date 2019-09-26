@@ -12,6 +12,7 @@ from .utils.torch_utils import (
     roll_n,
     cx_from_numpy,
     cx_to_numpy,
+    complex_matmul,
     complex_mul,
     torch_c_exp,
     fourier_shift_array,
@@ -181,6 +182,7 @@ def multislice(
     device_type=None,
     seed=None,
     return_numpy=True,
+    qspace_out = False
 ):
     """For a given probe or set of probes, propagators, and transmission 
         functions perform the multislice algorithm for nslices iterations."""
@@ -215,7 +217,7 @@ def multislice(
 
     nT, nsubslices, nopiy, nopix = T.size()[:4]
 
-    for slice in range(nslices):
+    for islice in range(nslices):
         for subslice in range(nsubslices):
             # Pick random phase grating
             it = r.randint(0, nT)
@@ -262,8 +264,11 @@ def multislice(
                 psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
 
             # Propagate and inverse Fourier transform
-            psi = torch.ifft(complex_mul(psi, P[subslice, ...]), signal_ndim=2)
-            # print(torch.sum(amplitude(psi)))
+            psi = complex_mul(psi, P[subslice, ...])
+            
+            if not np.all([qspace_out, islice == nslices-1,subslice == nsubslices-1]): 
+                psi = torch.ifft(psi,signal_ndim=2)
+            
     if return_numpy:
         return cx_to_numpy(psi)
     return psi
@@ -299,6 +304,7 @@ def STEM(
     nslices,
     eV,
     alpha,
+    S = None,
     batch_size=1,
     detectors=None,
     FourD_STEM=False,
@@ -333,7 +339,7 @@ def STEM(
 
         # Calculate number of scan positions in STEM scan
         nscan = nyquist_sampling(FOV, eV=eV, alpha=alpha)
-        print(nscan)
+        
         # Get scan position in pixel coordinates
         scan_posn = []
         # Y scan coordinates
@@ -418,29 +424,63 @@ def STEM(
         probes = fourier_shift_array(gridshape, posn, dtype=dtype, device=device)
 
         # Apply shift to original probe
-        probes = torch.ifft(
-            complex_mul(probe_.view(1, *probe_.size()), probes), signal_ndim=2
-        )
+        probes = complex_mul(probe_.view(1, *probe_.size()), probes)
 
         # Thickness series
         for it, t in enumerate(nslices):
-            # Perform multislice
-            probes = multislice(
-                probes,
-                propagators,
-                transmission_functions,
-                t,
-                tiling,
-                device,
-                seed,
-                return_numpy=False,
-            )
-            # Fourier transform probes to diffraction plane
-            probes = torch.fft(probes, signal_ndim=2, normalized=True)
+            if(S is None):
+                probes = torch.ifft(probes,signal_ndim=2)
+                # Perform multislice
+                probes = multislice(
+                    probes,
+                    propagators,
+                    transmission_functions,
+                    t,
+                    tiling,
+                    device,
+                    seed,
+                    return_numpy=False,
+                )
+                # Fourier transform probes to diffraction plane
+                probes = torch.fft(probes, signal_ndim=2, normalized=True)
+
+            else:
+                #Calculate STEM images using a scattering matrix
+                #TODO Implement PRISM thickness series
+                #Perform matrix multiplication of scattering matrix with
+                #probe vector
+                
+                probe_vec = complex_matmul(probes[:,S.beams[:,0],S.beams[:,1]],S.S)
+
+                #Now reshape output from vectors to square arrays
+                probes[...] = 0
+                probes[:,S.bw_mapping[:,0],S.bw_mapping[:,1],:] = probe_vec
+                
+                
+                #Apply PRISM cropping in real space if appropriate
+                if(np.any([S.PRISM_factor[i]>1 for i in [0,1]])):
+                    #Transform probe to real space
+                    probes = torch.ifft(probes,signal_ndim=2)
+                    
+                    #Distance function to calculate windows about scan positions
+                    dist = lambda x,X: np.abs((np.arange(X)-x+X//2)%X-X//2)
+
+                    for k in range(K):
+                        
+                        #Calculate windows in vertical and horizontal directions
+                        ywindow = dist(yscan[k],gridshape[0])<=gridshape[0]/S.PRISM_factor[0]/2
+                        xwindow = dist(xscan[k],gridshape[1])<=gridshape[1]/S.PRISM_factor[1]/2
+
+                        #Set array values outside windows to zero
+                        probes[k,np.logical_not(ywindow),...] = 0
+                        probes[k,:,np.logical_not(xwindow),:] = 0
+                    
+                    #Transform probe back to Fourier space
+                    probes = torch.fft(probes,signal_ndim=2)
 
             # Calculate amplitude of probes
             amp = amplitude(probes)
-
+            
             # Calculate STEM images
             if conventional_STEM:
                 # broadcast detector and probe arrays to
@@ -495,99 +535,132 @@ def max_grid_resolution(gridshape, rsize, bandwidthlimit=2 / 3, eV=None):
 
     return max_res / wavev(eV) * 1e3
 
+class scattering_matrix:
 
-def make_scattering_matrix(
-    rsize,
-    propagators,
-    transmission_functions,
-    nslices,
-    eV,
-    alpha,
-    batch_size=1,
-    device=None,
-    PRISM_factor=[1, 1],
-    tiling = [1,1],
-    device_type=None,
-    seed=None,
-    showProgress=True,
-    mode="stream",
-):
-    """Make a scattering matrix for the dynamical scattering calculations using 
-    the PRISM algorithm"""
-    
-    from .Probe import wavev, plane_wave_illumination
 
-    # Get size of grid
-    gridshape = np.shape(propagators)[1:3]
+    def __init__(self,
+        rsize,
+        propagators,
+        transmission_functions,
+        nslices,
+        eV,
+        alpha,
+        batch_size=1,
+        device=None,
+        PRISM_factor=[1, 1],
+        tiling = [1,1],
+        device_type=None,
+        seed=None,
+        showProgress=True,
+        bandwidth_limit=2/3
+    ):
+        """Make a scattering matrix for dynamical scattering calculations using 
+        the PRISM algorithm"""
+        
+        from .Probe import wavev, plane_wave_illumination
 
-    # Datatype (precision) is inferred from transmission functions
-    dtype = transmission_functions.dtype
+        # Get size of grid
+        gridshape = np.shape(propagators)[1:3]
 
-    # Device (CPU or GPU) is also inferred from transmission functions
-    if device is None:
-        device = transmission_functions.device
+        # Datatype (precision) is inferred from transmission functions
+        dtype = transmission_functions.dtype
 
-    # Get alpha in units of inverse Angstrom
-    alpha_ = wavev(eV) * alpha * 1e-3
+        # Device (CPU or GPU) is also inferred from transmission functions
+        if device is None:
+            device = transmission_functions.device
 
-    # Make a list of beams in the scattering matrix
-    q = q_space_array(gridshape, rsize)
-    beams = np.argwhere(np.logical_and(
-        np.logical_and(
-            np.less_equal(q[0] ** 2 + q[1] ** 2, alpha_),
+        # Get alpha in units of inverse Angstrom
+        self.alpha_ = wavev(eV) * alpha * 1e-3
+
+        # Make a list of beams in the scattering matrix
+        q = q_space_array(gridshape, rsize)
+        self.beams = np.argwhere(np.logical_and(
+            np.logical_and(
+                np.less_equal(q[0] ** 2 + q[1] ** 2, self.alpha_),
+                (
+                    np.mod(
+                        np.fft.fftfreq(gridshape[0], d=1 / gridshape[0]).astype(np.int),
+                        PRISM_factor[0],
+                    )
+                    == 0
+                )[:, np.newaxis],
+            ),
             (
                 np.mod(
-                    np.fft.fftfreq(gridshape[0], d=1 / gridshape[0]).astype(np.int),
-                    PRISM_factor[0],
+                    np.fft.fftfreq(gridshape[1], d=1 / gridshape[1]).astype(np.int),
+                    PRISM_factor[1],
                 )
                 == 0
-            )[:, np.newaxis],
-        ),
-        (
-            np.mod(
-                np.fft.fftfreq(gridshape[1], d=1 / gridshape[1]).astype(np.int),
-                PRISM_factor[1],
+            )[np.newaxis, :],
+        ))
+        nbeams = self.beams.shape[0]
+
+        #We will only store output of the scattering matrix up to the band
+        #width limit of the calculation, since this is a circular band-width
+        #limit on a square grid we have to get somewhat fancy and store a mapping
+        #of the pixels within the bandwidth limit to a one-dimensional vector
+        self.bw_mapping = np.argwhere((np.fft.fftfreq(gridshape[0])**2)[:,np.newaxis]
+                                    +(np.fft.fftfreq(gridshape[1])**2)[np.newaxis,:]<(bandwidth_limit/2)**2)
+        self.nbout = self.bw_mapping.shape[0]
+        
+        # Initialize scattering matrix
+        self.S = torch.zeros(nbeams, self.nbout, 2, dtype=dtype, device=device)
+
+        if seed is None:
+            # If no seed passed to random number generator then make one to pass to
+            # the multislice algorithm. This ensure that each column in the scattering
+            # matrix sees the same frozen phonon configuration
+            seed = np.random.randint(0, 2 ** 32 - 1)
+
+        # Initialize probe wave function array
+        psi = torch.zeros(batch_size, *gridshape, 2, dtype=dtype, device=device)
+        
+        for i in tqdm(range(int(np.ceil(nbeams / batch_size))), disable=not showProgress):
+            for j in range(batch_size):
+                jj = j + batch_size * i
+                psi[j, ...] = cx_from_numpy(plane_wave_illumination(
+                    gridshape, rsize[:2], tilt=self.beams[jj, :], tilt_units="pixels"
+                ))
+            
+            psi = multislice(
+                psi,
+                propagators,
+                transmission_functions,
+                nslices,
+                tiling,
+                device,
+                seed,
+                return_numpy=False,
+                qspace_out=True
             )
-            == 0
-        )[np.newaxis, :],
-    ))
-    nbeams = beams.shape[0]
+            
+            self.S[i * batch_size : (i + 1) * batch_size, ...] = psi[:,self.bw_mapping[:,0],self.bw_mapping[:,1],:]
+        
+        self.gridshape = gridshape
+        self.PRISM_factor = PRISM_factor
 
-    # Initialize scattering matrix...
-    if mode == "stream":
-        # ... on CPU for streaming
-        S = torch.zeros(nbeams, *gridshape, 2, dtype=dtype, device="cpu")
-    else:
-        # ... on specified device otherwise
-        S = torch.zeros(nbeams, *gridshape, 2, dtype=dtype, device=device)
+    def plot(self,show=True):
+        """Make a montage plot of the scattering matrix"""
+        from .utils import colorize
 
-    if seed is None:
-        # If no seed passed to random number generator then make one to pass to
-        # the multislice algorithm. This ensure that each column in the scattering
-        # matrix sees the same frozen phonon configuration
-        seed = np.random.randint(0, 2 ** 32 - 1)
+        nopiy,nopix = self.gridshape
 
-    # Initialize probe wave function array
-    psi = torch.zeros(batch_size, *gridshape, 2, dtype=dtype, device=device)
-    
-    for i in tqdm(range(int(np.ceil(nbeams / batch_size))), disable=not showProgress):
-        for j in range(batch_size):
-            jj = j + batch_size * i
-            psi[j, ...] = cx_from_numpy(plane_wave_illumination(
-                gridshape, rsize[:2], tilt=beams[jj, :], tilt_units="pixels"
-            ))
-        psi = multislice(
-            psi,
-            propagators,
-            transmission_functions,
-            nslices,
-            tiling,
-            device,
-            seed,
-            return_numpy=False,
-        )
-        if mode == 'stream': 
-            S[i * batch_size : (i + 1) * batch_size, ...] = psi.cpu()
-        else:
-            S[i * batch_size : (i + 1) * batch_size, ...] = psi
-    return S,beams
+        yind = (self.beams[:,0]+np.amax(self.beams[self.beams[:,0]<nopiy//2,0]))%nopiy//self.PRISM_factor[0]
+        xind = (self.beams[:,1]+np.amax(self.beams[self.beams[:,1]<nopix//2,1]))%nopix//self.PRISM_factor[1]
+        
+        nrows=max(yind)+1
+        ncols=max(xind)+1
+
+        fig,ax = plt.subplots(nrows=nrows,ncols=ncols)
+
+        for i in range(nrows*ncols): ax[i%nrows,i//nrows].set_axis_off()
+
+        for ibeam in range(self.beams.shape[0]):
+            S = torch.zeros((nopiy,nopix,2),dtype=self.S.dtype,device=self.S.device)
+            S[self.bw_mapping[:,0],self.bw_mapping[:,1],:] =self.S[ibeam,...]
+            
+            S =  torch.ifft(S,signal_ndim=2).cpu()
+            ax[yind[ibeam],xind[ibeam]].imshow(colorize(cx_to_numpy(S)))
+
+        if show: plt.show(block=True)
+        return fig

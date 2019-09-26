@@ -14,8 +14,27 @@ def check_complex(A):
                 "taking complex_mul of non-complex tensor! a.shape " + str(a.shape)
             )
 
+def complex_matmul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tensor:
+    """Complex matrix multiplication of tensors a and b. Pass conjugate = True
+    to conjugate tensor b in the multiplication."""
+    check_complex([a, b])
+    are = a[re]
+    aim = a[im]
+    bre = b[re]
+    bim = b[im]
+    if conjugate:
+        real = are @ bre + aim @ bim
+        imag = -are @ bim + aim @ bre
+    else:
+        real = are @ bre - aim @ bim
+        imag = are @ bim + aim @ bre
+
+    return torch.stack([real, imag], -1)
+
 
 def complex_mul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tensor:
+    """Complex array multiplication of tensors a and b. Pass conjugate = True
+    to conjugate tensor b in the multiplication."""
     check_complex([a, b])
     are = a[re]
     aim = a[im]
@@ -33,15 +52,20 @@ def complex_mul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tens
 
 def colorize(z, ccc=None, max=None, min=None):
     from colorsys import hls_to_rgb
-
+    #Get shape of array
     n, m = z.shape
+    
+    #Intialize RGB array
     c = np.zeros((n, m, 3))
+
+    #Set infinite and nan values to constant
     c[np.isinf(z)] = (1.0, 1.0, 1.0)
     c[np.isnan(z)] = (0.5, 0.5, 0.5)
 
     idx = ~(np.isinf(z) + np.isnan(z))
-    A = (np.angle(z[idx])) / (2 * np.pi)
-    A = (A) % 1.0
+    #Map phase to float between 0 and 1 and store in array A
+    A = ((np.angle(z[idx])) / (2 * np.pi))%1.0
+    
     B = np.ones_like(A)
     if min is None:
         min_ = np.abs(z).min()
