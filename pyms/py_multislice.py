@@ -7,6 +7,7 @@ from re import split, match
 from os.path import splitext
 from .atomic_scattering_params import e_scattering_factors, atomic_symbol
 from .crystal import crystal
+from .utils.numpy_utils import bandwidth_limit_array, q_space_array,fourier_interpolate_2d,crop
 from .utils.torch_utils import (
     sinc,
     roll_n,
@@ -19,47 +20,20 @@ from .utils.torch_utils import (
     amplitude,
 )
 
+def make_propagators(pixelsize, gridsize, eV, subslices = [1.0]):
+    """Make the Fresnel freespace propagators for a multislice simulation.
 
-def q_space_array(pixels, gridsize):
-    """Returns the appropriately scaled 2D reciprocal space array for pixel size
-    given by pixels (#y pixels, #x pixels) and real space size given by gridsize
-    (y size, x size)"""
-    return np.meshgrid(
-        *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
-    )
-
-
-def bandwidth_limit_array(array, limit=2 / 3):
-    """Band-width limit an array to fraction of its maximum given by limit"""
-    if isinstance(array, np.ndarray):
-        pixelsize = array.shape[:2]
-        array[
-            (
-                np.square(np.fft.fftfreq(pixelsize[0]))[:, np.newaxis]
-                + np.square(np.fft.fftfreq(pixelsize[1]))[np.newaxis, :]
-            )
-            * (2 / limit) ** 2
-            > 1
-        ] = 0
-    else:
-        pixelsize = array.size()[:2]
-        array[
-            (
-                torch.from_numpy(np.fft.fftfreq(pixelsize[0]) ** 2).view(
-                    pixelsize[0], 1
-                )
-                + torch.from_numpy(np.fft.fftfreq(pixelsize[1]) ** 2).view(
-                    1, pixelsize[1]
-                )
-            )
-            * (2 / limit) ** 2
-            > 1
-        ] = 0
-
-    return array
-
-
-def make_propagators(pixelsize, gridsize, eV, subslices):
+    Keyword arguments:
+    pixelsize -- Pixel dimensions of the 2D grid
+    gridsize  -- Size of the grid in real space (first two dimensions) and
+                 thickness of the object in multislice (third dimension)
+    eV        -- Probe energy in electron volts
+    subslices -- A one dimensional array-like object containing the depths
+                 (in fractional coordinates) at which the object will be
+                 subsliced. The last entry should always be 1.0. For example,
+                 to slice the object into four equal sized slices pass
+                 [0.25,0.5,0.75,1.0]
+    """
     from .Probe import make_contrast_transfer_function
 
     # We will use the make_contrast_transfer_function function to generate the propagator, the
@@ -311,11 +285,43 @@ def STEM(
     scan_posn=None,
     device=None,
     tiling=[1, 1],
-    device_type=None,
     seed=None,
     showProgress=True,
 ):
-    """Perform a STEM image simulation."""
+    """Perform a STEM image simulation.
+
+    Keyword arguments:
+    rsize       -- The real space size of the grid in Angstroms
+    probe       -- The probe that will be rastered over the object
+    propagators -- The Fresnel free-space propagators for the multislice 
+                    algorithm
+    transmission_functions -- The specimen transmission functions for the
+                              multislice algorithm
+    nslices     -- The number of slices to perform multislice over
+    eV          -- Accelerating voltage of the probe, needed to work out probe
+                   sampling requirements
+    alpha       -- The convergence angle of the probe in mrad, needed to work 
+                   out probe sampling requirements
+    S           -- A scattering matrix object to perform STEM simulations with
+                   using the PRISM algorithm (optional)
+    batch_size  -- Number of probes to perform multislice on simultaneously
+    detectors   -- Diffraction plane detectors to perform conventional STEM
+                    imaging with
+    fourD_STEM  -- Pass fourD_STEM = True to perform 4D-STEM simulations. To
+                    save disk space a tuple containing pixel size and 
+                    diffraction space extent of the datacube can be passed in.
+                    For example ([64,64],[1.2,1.2]) will output diffraction 
+                    patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
+                    Angstroms.
+    scan_posn   -- Tuple containing arrays of y and x scan positions, overrides
+                    internal calculations of STEM sampling
+    device      -- torch.device object which will determine which device (CPU
+                    or GPU) the calculations will run on
+    tiling      -- Tiling of the simulation object on the grid
+    seed        -- Seed for the random number generator for frozen phonon 
+                    configurations
+    showProgress-- Pass showProgress=False to disable progress bar.
+    """         
     from .Probe import nyquist_sampling
 
     # Get number of thicknesses in the series
@@ -380,7 +386,26 @@ def STEM(
 
     # Initialize array in which to store resulting 4D-STEM datacube
     if FourD_STEM:
-        datacube = np.zeros((nthick, nscantot, *gridshape))
+        
+        #Check whether a resampling directive has been given
+        if isinstance(FourD_STEM,(list,tuple)):
+            #Get output grid and diffraction space size of that grid from tuple
+            gridout = FourD_STEM[0]
+            sizeout = FourD_STEM[1]
+            print(gridout)
+            #
+            diff_pat_crop = np.round(np.asarray(sizeout)*np.asarray(rsize[:2])).astype(np.int)
+                        
+            #Define resampling function
+            resize = lambda array: fourier_interpolate_2d(crop(array,diff_pat_crop),gridout)
+        else:
+            #If no resampling then the output size is just the simulation
+            #grid size
+            gridout = gridshape
+            #Define a do nothing function
+            resize = lambda array: array
+
+        datacube = np.zeros((nthick, nscantot, *gridout))
 
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
@@ -426,10 +451,12 @@ def STEM(
         # Apply shift to original probe
         probes = complex_mul(probe_.view(1, *probe_.size()), probes)
 
+        if(S is None): probes = torch.ifft(probes,signal_ndim=2)
+
         # Thickness series
         for it, t in enumerate(nslices):
             if(S is None):
-                probes = torch.ifft(probes,signal_ndim=2)
+                
                 # Perform multislice
                 probes = multislice(
                     probes,
@@ -496,16 +523,16 @@ def STEM(
                 )
             # Store datacube
             if FourD_STEM:
-                datacube[it, scan_index, ...] = amp.cpu().numpy()
+                datacube[it, scan_index, ...] = resize(np.fft.fftshift(amp.cpu().numpy(),axes=(-1,-2)))
 
             # Fourier transform probes back to real space
             if it < len(nslices):
                 probes = torch.ifft(probes, signal_ndim=2, normalized=True)
 
     if conventional_STEM and FourD_STEM:
-        return STEM_image.reshape(ndet, nthick, *nscan), Four_D_STEM.reshape(*nscan)
+        return STEM_image.reshape(ndet, nthick, *nscan), datacube.reshape(nthick, *nscan, *gridout)
     if FourD_STEM:
-        return datacube.reshape(nthick, *nscan, *gridshape)
+        return datacube.reshape(nthick, *nscan, *gridout)
     if conventional_STEM:
         return STEM_image.reshape(ndet, nthick, *nscan)
 
@@ -536,7 +563,6 @@ def max_grid_resolution(gridshape, rsize, bandwidthlimit=2 / 3, eV=None):
     return max_res / wavev(eV) * 1e3
 
 class scattering_matrix:
-
 
     def __init__(self,
         rsize,

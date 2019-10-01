@@ -7,6 +7,7 @@ from re import split, match
 from os.path import splitext
 from .atomic_scattering_params import e_scattering_factors, atomic_symbol
 from .Probe import wavev, relativistic_mass_correction
+from .utils.numpy_utils import bandwidth_limit_array, q_space_array
 from .utils.torch_utils import (
     sinc,
     roll_n,
@@ -17,37 +18,6 @@ from .utils.torch_utils import (
     fourier_shift_array,
     amplitude,
 )
-
-
-def bandwidth_limit_array(array, limit=2 / 3):
-    """Band-width limit an array to fraction of its maximum given by limit"""
-    if isinstance(array, np.ndarray):
-        pixelsize = array.shape[:2]
-        array[
-            (
-                np.square(np.fft.fftfreq(pixelsize[0]))[:, np.newaxis]
-                + np.square(np.fft.fftfreq(pixelsize[1]))[np.newaxis, :]
-            )
-            * (2 / limit) ** 2
-            > 1
-        ] = 0
-    else:
-        pixelsize = array.size()[:2]
-        array[
-            (
-                torch.from_numpy(np.fft.fftfreq(pixelsize[0]) ** 2).view(
-                    pixelsize[0], 1
-                )
-                + torch.from_numpy(np.fft.fftfreq(pixelsize[1]) ** 2).view(
-                    1, pixelsize[1]
-                )
-            )
-            * (2 / limit) ** 2
-            > 1
-        ] = 0
-
-    return array
-
 
 def Xray_scattering_factor(Z, gsq, units="A"):
     # Bohr radius in Angstrom
@@ -102,14 +72,6 @@ def interaction_constant(E, units="rad/VA"):
         return gamma / k0
 
 
-def q_space_array(pixels, gridsize):
-    """Returns the appropriately scaled 2D reciprocal space array for pixel size
-    given by pixels (#y pixels, #x pixels) and real space size given by gridsize
-    (y size, x size)"""
-    return np.meshgrid(
-        *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
-    )
-
 
 def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
     """Generates the rotational matrix for a rotation of angle theta in radians
@@ -138,6 +100,8 @@ def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
     return R
 
 
+
+
 class crystal:
     # Elements in a crystal object:
     # unitcell - An array containing the side lengths of the orthorhombic unit cell
@@ -149,7 +113,9 @@ class crystal:
     #        the atomic occupancy (not yet implemented in the multislice) in the
     #        fifth entry and mean squared atomic displacement in the sixth entry
     #
-    def __init__(self, fnam, temperature_factor_units="urms"):
+    def __init__(self, fnam, temperature_factor_units="urms",
+                atomic_coordinates = "fractional", EPS=1e-2,
+                psuedo_rational_tiling=1e-2):
         """Initializes a crystal object by reading in a *.p1 file, which is
         outputted by the vesta software:
 
@@ -173,7 +139,10 @@ class crystal:
             f.readline()
 
             # Get unit cell vector - WARNING assume an orthorhombic unit cell
-            self.unitcell = np.diag(np.loadtxt(f, max_rows=3, dtype=np.float))
+            self.unitcell = np.loadtxt(f, max_rows=3, dtype=np.float)
+            
+            # Check to see if unit cell is orthorhombic
+            ortho = np.abs(np.sum(self.unitcell)-np.trace(self.unitcell))<EPS
 
             # Get the atomic symbol of each element
             self.atomtypes = np.loadtxt(f, max_rows=1, dtype=str, ndmin=1)
@@ -202,6 +171,16 @@ class crystal:
                     match("([A-Za-z]+)", atominfo[3]).group(0)
                 )
                 self.atoms[i, 4:6] = np.asarray(atominfo[4:6], dtype=np.float)
+            
+            if ortho:
+                # If unit cell is orthorhombic then extract unit cell
+                # dimension
+                self.unitcell = np.diag(self.unitcell)
+            else:
+                # If not orthorhombic attempt psuedo rational tiling
+                # (only implemented for hexagonal structures)
+                self.orthorhombic_supercell(EPS=EPS)
+
         elif ext == ".xyz":
             # Read in unit cell dimensions
             self.unitcell = np.asarray(
@@ -228,16 +207,48 @@ class crystal:
             self.atoms[:, :3] = atoms[:, 1:4]
             self.atoms[:, 3] = atoms[:, 0]
             self.atoms[:, 4:6] = atoms[:, 4:6]
-
-            # Convert atomic positions to fractional coordinates
-            self.atoms[:, :3] /= self.unitcell[:3][np.newaxis, :]
-
         else:
             print("File extension: {0} not recognized".format(ext))
             return None
         # If temperature factors are given as B then convert to urms
         if temperature_factor_units == "B":
             self.atoms[:, 5] /= 8 * np.pi ** 2
+
+        # If necessary, Convert atomic positions to fractional coordinates
+        if atomic_coordinates == 'cartesian':
+            self.atoms[:, :3] /= self.unitcell[:3][np.newaxis, :]
+    
+    def orthorhombic_supercell(self,EPS):
+        # If not orthorhombic attempt psuedo rational tiling
+        # (only implemented for hexagonal structures)
+        tiley = int(np.round(np.abs(self.unitcell[1,0]/self.unitcell[0,0])/EPS))
+        tilex = int(np.round(1/EPS))
+
+        #Remove common denominators
+        from math import gcd
+        g_ = gcd(tiley,tilex)
+        while (g_>1):
+            tiley = tiley//g_
+            tilex = tilex//g_
+            g_ = gcd(tiley,tilex)
+
+        #Make deepcopy of old unit cell    
+        import copy
+        olduc = copy.deepcopy(self.unitcell)
+
+        #Calculate length of unit cell sides
+        self.unitcell = np.sqrt(np.sum(np.square(self.unitcell),axis=1))
+        
+        #Tile out atoms
+        self.tile(tiley,tilex,1)
+        
+        #Calculate size of old unit cell under tiling
+        olduc = np.asarray([tiley,tilex,1])[:,np.newaxis]*olduc
+        
+        self.unitcell = np.diag(olduc)
+        
+        #Now calculate fractional coordinates in new orthorhombic cell
+        self.atoms[:,:3] = np.mod(self.atoms[:,:3] @ olduc @ np.diag(1/self.unitcell),1.0)
 
     def quickplot(self, atomscale=0.01, cmap=plt.get_cmap("Dark2")):
         """Makes a quick 3D scatter plot of the crystal"""
@@ -342,7 +353,7 @@ class crystal:
         device=None,
         dtype=torch.float,
     ):
-        """"Calculates the projected electrostatic potential for a 
+        """Calculates the projected electrostatic potential for a 
             crystal on a pixel grid with dimensions specified by array 
             pixels. Subslicing the unit cell is achieved by passing an 
             array subslices that contains as its entries the depths at 
@@ -442,7 +453,6 @@ class crystal:
                     * urms
                 )
 
-                # print(disp)
                 posn[:, :2] += disp
 
             yc = (
@@ -548,16 +558,18 @@ class crystal:
     def tile(self, x=1, y=1, z=1):
         """tiles the crystal out"""
         # Make copy of original crystal
-        new = copy.deepcopy(self)
+        # new = copy.deepcopy(self)
+
+        tiling = np.asarray([x,y,z])
 
         # Get atoms in unit cell
         natoms = self.atoms.shape[0]
 
         # Initialize new atom list
-        new.atoms = np.zeros((natoms * x * y * z, 3))
+        newatoms = np.zeros((natoms * x * y * z, 6))
 
         # Calculate new unit cell size
-        new.unitcell = np.asarray([x, y, z]) * self.unitcell
+        self.unitcell *= np.asarray([x, y, z])
 
         # tile out the integer amounts
         for j in range(int(x)):
@@ -565,23 +577,22 @@ class crystal:
                 for l in range(int(z)):
 
                     # Calculate origin of this particular tile
-                    origin = [
-                        float(j) / factorx,
-                        float(k) / factory,
-                        float(l) / factorz,
-                    ]
+                    origin = np.asarray([j,k,l])
 
                     # Calculate index of this particular tile
-                    indx = j * int(y) * int(z) + y * int(z) + l
+                    indx = j * int(y) * int(z) + k * int(z) + l
 
                     # Add new atoms to unit cell
-                    new.atoms[indx : indx + int(z), :3] = (
+                    newatoms[indx*natoms : (indx+1)*natoms, :3] = (
                         self.atoms[:, :3] + origin[np.newaxis, :]
-                    )
-                    new.atoms[indx : indx + int(z), 3:] = self.atoms[:, 3:]
+                    )/tiling[np.newaxis,:]
+
+                    #Copy other information about atoms
+                    newatoms[indx*natoms : (indx+1)*natoms, 3:] = self.atoms[:, 3:]
+        self.atoms = newatoms
 
         # Return new crystal
-        return new
+        # return new
 
     def concatenate_crystals(self, other, axis=2, side=1, eps=1e-3):
         """adds other crystal to the crystal object slice is added to the bottom (top being z =0)

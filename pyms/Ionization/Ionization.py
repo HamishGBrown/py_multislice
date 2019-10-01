@@ -76,9 +76,10 @@ class orbital:
 
         # Use pfac (Python flexible atomic code) interface to
         # communicate with underlying fac code
+        import pfac.fac
 
         # Get atom
-        pfac.fac.SetAtom(ATOMICSYMBOL[Z])
+        pfac.fac.SetAtom(pfac.fac.ATOMICSYMBOL[Z])
         if n == 0:
             configstring = pfac.fac.ATOMICSYMBOL[Z] + "ex"
         else:
@@ -133,15 +134,28 @@ class orbital:
 
         from scipy.interpolate import interp1d
 
-        # If continuum wave function load phase-amplitude solution
-        #
+        
         if self.n == 0:
+            # If continuum wave function load phase-amplitude solution
             self.__amplitude = interp1d(
                 table[self.ilast - 1 :, 1], table[self.ilast - 1 :, 2], fill_value=0
             )
             self.__phase = interp1d(
                 table[self.ilast - 1 :, 1], table[self.ilast - 1 :, 3], fill_value=0
             )
+
+            # If continuum wave function also change normalization units from
+            # 1/sqrt(k) in atomic units to units of 1/sqrt(Angstrom eV)
+            # Hartree atomic energy unit in eV
+            Eh = 27.211386245988
+            # Fine structure constant
+            alpha = 7.2973525693e-3
+            #Convert energy to Hartree units
+            eH = epsilon/Eh
+            #wavenumber in atomic units
+            ke = np.sqrt(2*eH*(1+alpha**2*eH/2))
+            #Normalization
+            norm = 1/np.sqrt(ke)
 
         # For bound wave functions we simply interpolate the
         # tabulated values of a0 the wavefunction
@@ -230,11 +244,16 @@ def transition_potential(
        electron from orbital 1 to orbital 2 on grid with shape gridshape
        and real space dimensions in Angstrom given by gridsize"""
 
+    #Import the python flexible atomic code
+    import pfac
+
     # Bohr radius in Angstrom
     a0 = 5.29177210903e-1
 
     # Calculate energy loss
     deltaE = orb1.energy - orb2.energy
+    # Calculate wave number in inverse Angstrom of incident and scattered
+    # electrons
     k0 = wavev(keV * 1e3)
     kn = wavev(keV * 1e3 + deltaE)
 
