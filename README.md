@@ -15,7 +15,7 @@ Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-at
 - [x] CBED
 - [x] Conventional STEM (HAADF, ABF, BF and 4D-STEM)
 - [ ] STEM EELS
-- [ ] PRISM
+- [x] PRISM
 - [ ] STEM EDX
 
 
