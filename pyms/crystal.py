@@ -269,12 +269,9 @@ class crystal:
         1272-1276 (2011).
         """
         f = open(splitext(fnam)[0] + ".xtl", "w")
-        f.write("TITLE " + self.Title + "\n")
-        f.write("CELL " + "\n")
+        f.write("TITLE " + self.Title + "\n CELL \n")
         f.write("  {0:.2f} {1:.2f} {2:.2f} 90 90 90\n".format(*self.unitcell))
-        f.write("SYMMETRY NUMBER 1" + "\n")
-        f.write("SYMMETRY LABEL  P1" + "\n")
-        f.write("ATOMS " + "\n")
+        f.write("SYMMETRY NUMBER 1\n SYMMETRY LABEL  P1\n ATOMS \n")
         f.write("NAME         X           Y           Z" + "\n")
         for i in range(self.atoms.shape[0]):
             f.write(
@@ -283,6 +280,17 @@ class crystal:
                 )
             )
         f.write("EOF")
+        f.close()
+    
+    def output_xyz(self,fnam,atomic_coordinates="cartesian"):
+        f = open(splitext(fnam)[0] + ".xyz", "w")
+        f.write(self.Title+'\n {0:.4f} {1:.4f} {2:.4f}\n'.format(*self.unitcell))
+        print(self.atoms.shape)
+        for atom in self.atoms:
+            f.write('{0:d} {1:.4f} {2:.4f} {3:.4f} {4:.2f}  {5:.3f}\n'
+                        .format(int(atom[3]),*(atom[:3]*self.unitcell),*atom[4:6]))
+        print(self.atoms.shape)                        
+        f.write('-1')
         f.close()
 
     def make_transmission_functions(

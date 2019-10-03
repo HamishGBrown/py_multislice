@@ -282,6 +282,7 @@ def STEM(
     batch_size=1,
     detectors=None,
     FourD_STEM=False,
+    datacube=None,
     scan_posn=None,
     device=None,
     tiling=[1, 1],
@@ -384,7 +385,8 @@ def STEM(
         else:
             D = detectors
 
-    # Initialize array in which to store resulting 4D-STEM datacube
+    # Initialize array in which to store resulting 4D-STEM datacube if required
+    return_datacube = False
     if FourD_STEM:
         
         #Check whether a resampling directive has been given
@@ -392,7 +394,7 @@ def STEM(
             #Get output grid and diffraction space size of that grid from tuple
             gridout = FourD_STEM[0]
             sizeout = FourD_STEM[1]
-            print(gridout)
+            
             #
             diff_pat_crop = np.round(np.asarray(sizeout)*np.asarray(rsize[:2])).astype(np.int)
                         
@@ -405,7 +407,11 @@ def STEM(
             #Define a do nothing function
             resize = lambda array: array
 
-        datacube = np.zeros((nthick, nscantot, *gridout))
+        #Check whether a datacube is already provided or not
+        if datacube is None: 
+            datacube = np.zeros((nthick, nscantot, *gridout))
+        else:
+            return_datacube = True
 
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
@@ -523,15 +529,15 @@ def STEM(
                 )
             # Store datacube
             if FourD_STEM:
-                datacube[it, scan_index, ...] = resize(np.fft.fftshift(amp.cpu().numpy(),axes=(-1,-2)))
+                datacube[it, scan_index, ...] += resize(np.fft.fftshift(amp.cpu().numpy(),axes=(-1,-2)))
 
             # Fourier transform probes back to real space
             if it < len(nslices):
                 probes = torch.ifft(probes, signal_ndim=2, normalized=True)
 
-    if conventional_STEM and FourD_STEM:
+    if conventional_STEM and return_datacube:
         return STEM_image.reshape(ndet, nthick, *nscan), datacube.reshape(nthick, *nscan, *gridout)
-    if FourD_STEM:
+    if return_datacube:
         return datacube.reshape(nthick, *nscan, *gridout)
     if conventional_STEM:
         return STEM_image.reshape(ndet, nthick, *nscan)
