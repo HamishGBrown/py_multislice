@@ -224,7 +224,7 @@ def multislice(
 
                 # Generate an array to perform Fourier shift of transmission
                 # function
-                FFT_shift_array = fourier_shift_array([nopiy, nopix], shift)
+                FFT_shift_array = fourier_shift_array([nopiy, nopix], shift, dtype=T.dtype, device=T.device)
 
                 # Apply Fourier shift theorem for sub-pixel shift
                 T_ = torch.ifft(
@@ -410,8 +410,13 @@ def STEM(
         #Check whether a datacube is already provided or not
         if datacube is None: 
             datacube = np.zeros((nthick, nscantot, *gridout))
-        else:
             return_datacube = True
+        else:
+            # If datacube is provided, flatten the scan dimensions of the array
+            # the reshape function `should` provide a new view of the object,
+            # not a copy of the whole array
+            datacube = datacube.reshape((nthick, nscantot, *gridout))
+
 
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
@@ -423,8 +428,6 @@ def STEM(
         # frozen phonon configuration if we are doing batched multislice
         # calculations
         seed = np.random.randint(0, 2 ** 32 - 1)
-
-    from tqdm import tqdm
 
     for i in tqdm(range(int(np.ceil(nscantot / batch_size))), disable=not showProgress):
 
@@ -535,10 +538,13 @@ def STEM(
             if it < len(nslices):
                 probes = torch.ifft(probes, signal_ndim=2, normalized=True)
 
+    #Unflatten 4D-STEM datacube scan dimensions
+    if FourD_STEM : datacube = datacube.reshape(nthick, *nscan, *gridout)
+
     if conventional_STEM and return_datacube:
-        return STEM_image.reshape(ndet, nthick, *nscan), datacube.reshape(nthick, *nscan, *gridout)
+        return STEM_image.reshape(ndet, nthick, *nscan), datacube
     if return_datacube:
-        return datacube.reshape(nthick, *nscan, *gridout)
+        return datacube
     if conventional_STEM:
         return STEM_image.reshape(ndet, nthick, *nscan)
 

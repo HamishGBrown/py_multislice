@@ -9,7 +9,7 @@ atomic_symbol = [
     "Be",
     "B",
     "C",
-    "N ",
+    "N",
     "O",
     "F",
     "Ne",
