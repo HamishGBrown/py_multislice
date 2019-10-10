@@ -9,8 +9,12 @@ setup(
     url="https://github.com/HamishGBrown/py_multislice/",
     packages=find_packages(),
      install_requires=[
-        'numpy >= 1.15, < 2.0',
-        'torch >= 1.2, < 2.0',
+        'ipython >= 4.0',
+        'scipy >= 1.1',
+        'matplotlib >= 3.0',
+        'numpy >= 1.15',
+        'Pillow >= 6.0',
+        'torch >= 1.2',
         'tqdm >= 4.0'
         ]
 

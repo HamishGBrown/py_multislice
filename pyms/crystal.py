@@ -334,6 +334,7 @@ class crystal:
         fe=None,
         displacements=True,
         fftout=True,
+        dtype=None,
         device=None,
         fractional_occupancy = True
     ):
@@ -343,7 +344,7 @@ class crystal:
 
         # Make the specimen electrostatic potential
         T = self.make_potential(
-            pixels, subslices, tiling, fe=fe, displacements=displacements, device=device,fractional_occupancy=fractional_occupancy
+            pixels, subslices, tiling, fe=fe, displacements=displacements, device=device,dtype=dtype, fractional_occupancy=fractional_occupancy
         )
 
         # Now take the complex exponential of the electrostatic potential
