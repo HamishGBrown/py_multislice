@@ -19,6 +19,7 @@ from .utils.torch_utils import (
     amplitude,
 )
 
+
 def Xray_scattering_factor(Z, gsq, units="A"):
     # Bohr radius in Angstrom
     a0 = 0.529177
@@ -50,34 +51,37 @@ def electron_scattering_factor(Z, gsq, units="VA"):
     elif units == "A":
         return fe
 
-def find_equivalent_sites(positions,EPS=1e-3):
+
+def find_equivalent_sites(positions, EPS=1e-3):
     """Finds equivalent atomic sites, ie two atoms sharing the same 
     postions with fractional occupancy, and return an index of these equivalent
     sites"""
     from scipy.spatial.distance import pdist
+
     natoms = positions.shape[0]
-    #Calculate pairwise distance between each atomic site
+    # Calculate pairwise distance between each atomic site
     distance_matrix = pdist(positions)
 
-    #Initialize index of equivalent sites (initially assume all sites are
+    # Initialize index of equivalent sites (initially assume all sites are
     # independent)
-    equivalent_sites = np.arange(natoms,dtype=np.int)
+    equivalent_sites = np.arange(natoms, dtype=np.int)
 
-    #Find equivalent sites
-    equiv = distance_matrix<EPS
-    
-    #If there are equivalent sites correct the index of equivalent sites
+    # Find equivalent sites
+    equiv = distance_matrix < EPS
+
+    # If there are equivalent sites correct the index of equivalent sites
     if np.any(equiv):
-        #Masking function to get indices from distance_matrix
-        iu = np.mask_indices(natoms, np.triu,1)
+        # Masking function to get indices from distance_matrix
+        iu = np.mask_indices(natoms, np.triu, 1)
 
-        #Get a list of equivalent sites
+        # Get a list of equivalent sites
         sites = np.nonzero(equiv)[0]
         for site in sites:
-            #Use the masking function to 
+            # Use the masking function to
             equivalent_sites[iu[1][site]] = iu[0][site]
     print(equivalent_sites)
     return equivalent_sites
+
 
 def interaction_constant(E, units="rad/VA"):
     """Calculates the interaction constant, sigma, to convert electrostatic
@@ -98,7 +102,6 @@ def interaction_constant(E, units="rad/VA"):
         return 2 * np.pi * gamma * me * qe / k0 / h / h
     elif units == "rad/A":
         return gamma / k0
-
 
 
 def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
@@ -128,8 +131,6 @@ def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
     return R
 
 
-
-
 class crystal:
     # Elements in a crystal object:
     # unitcell - An array containing the side lengths of the orthorhombic unit cell
@@ -141,9 +142,14 @@ class crystal:
     #        the atomic occupancy (not yet implemented in the multislice) in the
     #        fifth entry and mean squared atomic displacement in the sixth entry
     #
-    def __init__(self, fnam, temperature_factor_units="urms",
-                atomic_coordinates = "fractional", EPS=1e-2,
-                psuedo_rational_tiling=1e-2):
+    def __init__(
+        self,
+        fnam,
+        temperature_factor_units="urms",
+        atomic_coordinates="fractional",
+        EPS=1e-2,
+        psuedo_rational_tiling=1e-2,
+    ):
         """Initializes a crystal object by reading in a *.p1 file, which is
         outputted by the vesta software:
 
@@ -168,9 +174,9 @@ class crystal:
 
             # Get unit cell vector - WARNING assume an orthorhombic unit cell
             self.unitcell = np.loadtxt(f, max_rows=3, dtype=np.float)
-            
+
             # Check to see if unit cell is orthorhombic
-            ortho = np.abs(np.sum(self.unitcell)-np.trace(self.unitcell))<EPS
+            ortho = np.abs(np.sum(self.unitcell) - np.trace(self.unitcell)) < EPS
 
             # Get the atomic symbol of each element
             self.atomtypes = np.loadtxt(f, max_rows=1, dtype=str, ndmin=1)
@@ -199,7 +205,7 @@ class crystal:
                     match("([A-Za-z]+)", atominfo[3]).group(0)
                 )
                 self.atoms[i, 4:6] = np.asarray(atominfo[4:6], dtype=np.float)
-            
+
             if ortho:
                 # If unit cell is orthorhombic then extract unit cell
                 # dimension
@@ -243,43 +249,47 @@ class crystal:
             self.atoms[:, 5] /= 8 * np.pi ** 2
 
         # If necessary, Convert atomic positions to fractional coordinates
-        if atomic_coordinates == 'cartesian':
+        if atomic_coordinates == "cartesian":
             self.atoms[:, :3] /= self.unitcell[:3][np.newaxis, :]
-        
+
         # Build list of equivalent sites
-        self.equivalent_sites = find_equivalent_sites(self.atoms[:,:3])
-    
-    def orthorhombic_supercell(self,EPS):
+        self.equivalent_sites = find_equivalent_sites(self.atoms[:, :3])
+
+    def orthorhombic_supercell(self, EPS):
         # If not orthorhombic attempt psuedo rational tiling
         # (only implemented for hexagonal structures)
-        tiley = int(np.round(np.abs(self.unitcell[1,0]/self.unitcell[0,0])/EPS))
-        tilex = int(np.round(1/EPS))
+        tiley = int(np.round(np.abs(self.unitcell[1, 0] / self.unitcell[0, 0]) / EPS))
+        tilex = int(np.round(1 / EPS))
 
-        #Remove common denominators
+        # Remove common denominators
         from math import gcd
-        g_ = gcd(tiley,tilex)
-        while (g_>1):
-            tiley = tiley//g_
-            tilex = tilex//g_
-            g_ = gcd(tiley,tilex)
 
-        #Make deepcopy of old unit cell    
+        g_ = gcd(tiley, tilex)
+        while g_ > 1:
+            tiley = tiley // g_
+            tilex = tilex // g_
+            g_ = gcd(tiley, tilex)
+
+        # Make deepcopy of old unit cell
         import copy
+
         olduc = copy.deepcopy(self.unitcell)
 
-        #Calculate length of unit cell sides
-        self.unitcell = np.sqrt(np.sum(np.square(self.unitcell),axis=1))
-        
-        #Tile out atoms
-        self.tile(tiley,tilex,1)
-        
-        #Calculate size of old unit cell under tiling
-        olduc = np.asarray([tiley,tilex,1])[:,np.newaxis]*olduc
-        
+        # Calculate length of unit cell sides
+        self.unitcell = np.sqrt(np.sum(np.square(self.unitcell), axis=1))
+
+        # Tile out atoms
+        self.tile(tiley, tilex, 1)
+
+        # Calculate size of old unit cell under tiling
+        olduc = np.asarray([tiley, tilex, 1])[:, np.newaxis] * olduc
+
         self.unitcell = np.diag(olduc)
-        
-        #Now calculate fractional coordinates in new orthorhombic cell
-        self.atoms[:,:3] = np.mod(self.atoms[:,:3] @ olduc @ np.diag(1/self.unitcell),1.0)
+
+        # Now calculate fractional coordinates in new orthorhombic cell
+        self.atoms[:, :3] = np.mod(
+            self.atoms[:, :3] @ olduc @ np.diag(1 / self.unitcell), 1.0
+        )
 
     def quickplot(self, atomscale=0.01, cmap=plt.get_cmap("Dark2")):
         """Makes a quick 3D scatter plot of the crystal"""
@@ -289,8 +299,9 @@ class crystal:
         ax = fig.add_subplot(111, projection="3d")
         colors = cmap(self.atoms[:, 3] / np.amax(self.atoms[:, 3]))
         sizes = self.atoms[:, 3] ** (4) * atomscale
-        ax.scatter(*[self.atoms[:, i] for i in range(3)], c=colors, s=sizes)        
-        for fun in [ax.set_xlim3d,ax.set_ylim3d,ax.set_zlim3d]:fun(0, 1.0)
+        ax.scatter(*[self.atoms[:, i] for i in range(3)], c=colors, s=sizes)
+        for fun in [ax.set_xlim3d, ax.set_ylim3d, ax.set_zlim3d]:
+            fun(0, 1.0)
         plt.show(block=True)
 
     def output_vesta_xtl(self, fnam):
@@ -313,16 +324,19 @@ class crystal:
             )
         f.write("EOF")
         f.close()
-    
-    def output_xyz(self,fnam,atomic_coordinates="cartesian"):
+
+    def output_xyz(self, fnam, atomic_coordinates="cartesian"):
         f = open(splitext(fnam)[0] + ".xyz", "w")
-        f.write(self.Title+'\n {0:.4f} {1:.4f} {2:.4f}\n'.format(*self.unitcell))
+        f.write(self.Title + "\n {0:.4f} {1:.4f} {2:.4f}\n".format(*self.unitcell))
         print(self.atoms.shape)
         for atom in self.atoms:
-            f.write('{0:d} {1:.4f} {2:.4f} {3:.4f} {4:.2f}  {5:.3f}\n'
-                        .format(int(atom[3]),*(atom[:3]*self.unitcell),*atom[4:6]))
-        print(self.atoms.shape)                        
-        f.write('-1')
+            f.write(
+                "{0:d} {1:.4f} {2:.4f} {3:.4f} {4:.2f}  {5:.3f}\n".format(
+                    int(atom[3]), *(atom[:3] * self.unitcell), *atom[4:6]
+                )
+            )
+        print(self.atoms.shape)
+        f.write("-1")
         f.close()
 
     def make_transmission_functions(
@@ -336,7 +350,7 @@ class crystal:
         fftout=True,
         dtype=None,
         device=None,
-        fractional_occupancy = True
+        fractional_occupancy=True,
     ):
         """Make the transmission functions for this crystal, which are the
            exponential of the specimen potential scaled by the interaction
@@ -344,7 +358,14 @@ class crystal:
 
         # Make the specimen electrostatic potential
         T = self.make_potential(
-            pixels, subslices, tiling, fe=fe, displacements=displacements, device=device,dtype=dtype, fractional_occupancy=fractional_occupancy
+            pixels,
+            subslices,
+            tiling,
+            fe=fe,
+            displacements=displacements,
+            device=device,
+            dtype=dtype,
+            fractional_occupancy=fractional_occupancy,
         )
 
         # Now take the complex exponential of the electrostatic potential
@@ -359,7 +380,7 @@ class crystal:
         if fftout:
             return torch.ifft(T, signal_ndim=2)
         return T
-    
+
     def calculate_scattering_factors(self, pixels, tiling=[1, 1]):
         """Calculates the electron scattering factors on a reciprocal space
            grid of pixel size pixels assuming a unit cell tiling given by 
@@ -466,7 +487,7 @@ class crystal:
         )
 
         if displacements:
-            #Generate thermal displacements
+            # Generate thermal displacements
             urms = torch.tensor(
                 np.sqrt(self.atoms[:, 5])[:, np.newaxis] * pixperA[np.newaxis, :],
                 dtype=P.dtype,
@@ -497,10 +518,11 @@ class crystal:
                     * urms
                 )
 
-                #If using fractional occupancy force atoms occupying equivalent
-                #sites to have the same displacement
-                if fractional_occupancy: disp = disp[self.equivalent_sites,:]
-                
+                # If using fractional occupancy force atoms occupying equivalent
+                # sites to have the same displacement
+                if fractional_occupancy:
+                    disp = disp[self.equivalent_sites, :]
+
                 posn[:, :2] += disp
 
             yc = (
@@ -523,10 +545,10 @@ class crystal:
             xh = torch.remainder(posn[:, 1], 1.0)
             xl = 1.0 - xh
 
-            #Account for fractional occupancy of atomic sites if requested
+            # Account for fractional occupancy of atomic sites if requested
             if fractional_occupancy:
-                xh *= torch.from_numpy(self.atoms[:,4]).type(P.dtype).to(device)
-                xl *= torch.from_numpy(self.atoms[:,4]).type(P.dtype).to(device)
+                xh *= torch.from_numpy(self.atoms[:, 4]).type(P.dtype).to(device)
+                xl *= torch.from_numpy(self.atoms[:, 4]).type(P.dtype).to(device)
 
             # Each pixel is set to the overlap of a shifted rectangle in that pixel
             P.scatter_add_(0, ielement + islice + yc + xc, yh * xh)
@@ -607,8 +629,8 @@ class crystal:
 
         # Return rotated crystal
         return new
-    
-    def rot90(self, k=1, axes=(0,1)):
+
+    def rot90(self, k=1, axes=(0, 1)):
         """Rotates a crystal by 90 degrees in the plane specified by axes.
 
         Rotation direction is from the first towards the second axis.
@@ -621,24 +643,27 @@ class crystal:
             The array is rotated in the plane defined by the axes.
             Axes must be different."""
 
-        #Much of the following is adapted from the numpy.rot90 function
+        # Much of the following is adapted from the numpy.rot90 function
         axes = tuple(axes)
-        if len(axes) != 2: raise ValueError("len(axes) must be 2.")
+        if len(axes) != 2:
+            raise ValueError("len(axes) must be 2.")
 
         k %= 4
-        
+
         if k == 0:
-            #Do nothing
+            # Do nothing
             return
         if k == 2:
-            #Reflect in both axes
+            # Reflect in both axes
             self.reflect(axes)
             return
 
         axes_list = np.arange(0, 3)
-        (axes_list[axes[0]], axes_list[axes[1]]) = (axes_list[axes[1]],
-                                                    axes_list[axes[0]])
-        
+        (axes_list[axes[0]], axes_list[axes[1]]) = (
+            axes_list[axes[1]],
+            axes_list[axes[0]],
+        )
+
         if k == 1:
             self.reflect([axes[1]])
             self.transpose(axes_list)
@@ -646,10 +671,9 @@ class crystal:
             # k == 3
             self.transpose(axes_list)
             self.reflect([axes[1]])
-        
 
-    def transpose(self,axes):
-        self.atoms[:,:3] = self.atoms[:,axes]
+    def transpose(self, axes):
+        self.atoms[:, :3] = self.atoms[:, axes]
         self.unitcell = self.unitcell[axes]
 
     def tile(self, x=1, y=1, z=1):
@@ -657,7 +681,7 @@ class crystal:
         # Make copy of original crystal
         # new = copy.deepcopy(self)
 
-        tiling = np.asarray([x,y,z])
+        tiling = np.asarray([x, y, z])
 
         # Get atoms in unit cell
         natoms = self.atoms.shape[0]
@@ -674,18 +698,20 @@ class crystal:
                 for l in range(int(z)):
 
                     # Calculate origin of this particular tile
-                    origin = np.asarray([j,k,l])
+                    origin = np.asarray([j, k, l])
 
                     # Calculate index of this particular tile
                     indx = j * int(y) * int(z) + k * int(z) + l
 
                     # Add new atoms to unit cell
-                    newatoms[indx*natoms : (indx+1)*natoms, :3] = (
+                    newatoms[indx * natoms : (indx + 1) * natoms, :3] = (
                         self.atoms[:, :3] + origin[np.newaxis, :]
-                    )/tiling[np.newaxis,:]
+                    ) / tiling[np.newaxis, :]
 
-                    #Copy other information about atoms
-                    newatoms[indx*natoms : (indx+1)*natoms, 3:] = self.atoms[:, 3:]
+                    # Copy other information about atoms
+                    newatoms[indx * natoms : (indx + 1) * natoms, 3:] = self.atoms[
+                        :, 3:
+                    ]
         self.atoms = newatoms
 
         # Return new crystal
@@ -742,7 +768,8 @@ class crystal:
 
     def reflect(self, axes):
         """Reflect crystal in each of the axes enumerated in list axes"""
-        for ax in axes: self.atoms[:, ax] = 1 - self.atoms[:, ax]
+        for ax in axes:
+            self.atoms[:, ax] = 1 - self.atoms[:, ax]
 
     def slice(self, range, axis):
         """Make a slice of crystal object ranging from range[0] to range[1] through
