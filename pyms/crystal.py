@@ -354,7 +354,7 @@ class crystal:
         # Band-width limit the transmission function, see Earl Kirkland's book
         # for an discussion of why this is necessary
         for i in range(T.shape[0]):
-            T[i, ...] = bandwidth_limit_array(T[i, ...])
+            T[i] = bandwidth_limit_array(T[i])
 
         if fftout:
             return torch.ifft(T, signal_ndim=2)

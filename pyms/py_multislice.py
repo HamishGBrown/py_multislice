@@ -101,14 +101,14 @@ def multislice_cupy(
             # Transmit and forward Fourier transform
 
             if tiling is None or (tiling[0] == 1 & tiling[1] == 1):
-                psi = cp.fft.fft2(T[it, subslice, ...] * psi)
+                psi = cp.fft.fft2(T[it, subslice] * psi)
                 # If the transmission function is from a tiled unit cell then
                 # there is the option of randomly shifting it around to
                 # generate "more" transmission functions
             elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
                 # Shift an integer number of pixels in y and x
                 T_ = cp.roll(
-                    T[it, subslice, ...],
+                    T[it, subslice],
                     (
                         r.randint(0, tiling[0]) * (nopiy // tiling[0]),
                         r.randint(1, tiling[1]) * (nopix // tiling[1]),
@@ -131,7 +131,7 @@ def multislice_cupy(
                 # Apply Fourier shift theorem for sub-pixel shift
                 T_ = torch.ifft(
                     complex_mul(
-                        FFT_shift_array, torch.fft(T[it, subslice, ...], signal_ndim=2)
+                        FFT_shift_array, torch.fft(T[it, subslice], signal_ndim=2)
                     ),
                     signal_ndim=2,
                 )
@@ -140,7 +140,7 @@ def multislice_cupy(
                 psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
 
             # Propagate and inverse Fourier transform
-            psi = torch.ifft(complex_mul(psi, P[subslice, ...]), signal_ndim=2)
+            psi = torch.ifft(complex_mul(psi, P[subslice]), signal_ndim=2)
 
     if return_numpy:
         return cx_to_numpy(psi)
@@ -199,14 +199,14 @@ def multislice(
             # Transmit and forward Fourier transform
 
             if tiling is None or (tiling[0] == 1 & tiling[1] == 1):
-                psi = torch.fft(complex_mul(T[it, subslice, ...], psi), signal_ndim=2)
+                psi = torch.fft(complex_mul(T[it, subslice], psi), signal_ndim=2)
                 # If the transmission function is from a tiled unit cell then
                 # there is the option of randomly shifting it around to
                 # generate "more" transmission functions
             elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
                 # Shift an integer number of pixels in y
                 T_ = roll_n(
-                    T[it, subslice, ...],
+                    T[it, subslice],
                     0,
                     r.randint(0, tiling[0]) * (nopiy // tiling[0]),
                 )
@@ -229,7 +229,7 @@ def multislice(
                 # Apply Fourier shift theorem for sub-pixel shift
                 T_ = torch.ifft(
                     complex_mul(
-                        FFT_shift_array, torch.fft(T[it, subslice, ...], signal_ndim=2)
+                        FFT_shift_array, torch.fft(T[it, subslice], signal_ndim=2)
                     ),
                     signal_ndim=2,
                 )
@@ -238,7 +238,7 @@ def multislice(
                 psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
 
             # Propagate and inverse Fourier transform
-            psi = complex_mul(psi, P[subslice, ...])
+            psi = complex_mul(psi, P[subslice])
             
             if not np.all([qspace_out, islice == nslices-1,subslice == nsubslices-1]): 
                 psi = torch.ifft(psi,signal_ndim=2)
@@ -532,7 +532,7 @@ def STEM(
                 )
             # Store datacube
             if FourD_STEM:
-                datacube[it, scan_index, ...] += resize(np.fft.fftshift(amp.cpu().numpy(),axes=(-1,-2)))
+                datacube[it, scan_index] += resize(np.fft.fftshift(amp.cpu().numpy(),axes=(-1,-2)))
 
             # Fourier transform probes back to real space
             if it < len(nslices):
@@ -656,7 +656,7 @@ class scattering_matrix:
         for i in tqdm(range(int(np.ceil(nbeams / batch_size))), disable=not showProgress):
             for j in range(batch_size):
                 jj = j + batch_size * i
-                psi[j, ...] = cx_from_numpy(plane_wave_illumination(
+                psi[j] = cx_from_numpy(plane_wave_illumination(
                     gridshape, rsize[:2], tilt=self.beams[jj, :], tilt_units="pixels"
                 ))
             
@@ -672,7 +672,7 @@ class scattering_matrix:
                 qspace_out=True
             )
             
-            self.S[i * batch_size : (i + 1) * batch_size, ...] = psi[:,self.bw_mapping[:,0],self.bw_mapping[:,1],:]
+            self.S[i * batch_size : (i + 1) * batch_size] = psi[:,self.bw_mapping[:,0],self.bw_mapping[:,1],:]
         
         self.gridshape = gridshape
         self.PRISM_factor = PRISM_factor
