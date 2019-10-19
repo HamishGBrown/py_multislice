@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import re
 import scipy.integrate as integrate
+from .Probe import wavev, relativistic_mass_correction
+from .crystal import interaction_constant
 
 # from py_multislice import wavev, relativistic_mass_correction, interaction_constant
 
@@ -134,7 +136,6 @@ class orbital:
 
         from scipy.interpolate import interp1d
 
-        
         if self.n == 0:
             # If continuum wave function load phase-amplitude solution
             self.__amplitude = interp1d(
@@ -150,12 +151,12 @@ class orbital:
             Eh = 27.211386245988
             # Fine structure constant
             alpha = 7.2973525693e-3
-            #Convert energy to Hartree units
-            eH = epsilon/Eh
-            #wavenumber in atomic units
-            ke = np.sqrt(2*eH*(1+alpha**2*eH/2))
-            #Normalization
-            norm = 1/np.sqrt(ke)
+            # Convert energy to Hartree units
+            eH = epsilon / Eh
+            # wavenumber in atomic units
+            ke = np.sqrt(2 * eH * (1 + alpha ** 2 * eH / 2))
+            # Normalization
+            norm = 1 / np.sqrt(ke)
 
         # For bound wave functions we simply interpolate the
         # tabulated values of a0 the wavefunction
@@ -244,7 +245,7 @@ def transition_potential(
        electron from orbital 1 to orbital 2 on grid with shape gridshape
        and real space dimensions in Angstrom given by gridsize"""
 
-    #Import the python flexible atomic code
+    # Import the python flexible atomic code
     import pfac
 
     # Bohr radius in Angstrom
@@ -414,92 +415,4 @@ def transition_potential(
 
 
 if __name__ == "__main__":
-    for lprime in [0, 1, 2]:
-        Sifree = orbital(14, "1s1 2s2 2p6 3s2 3p2", 0, lprime, epsilon=1e5)
-        Sifree.plot(np.linspace(0, 1))
-    sys.exit()
-
-    keV = 300
-
-    # GaK = orbital(31,'1s1 2s2 2p6 3s2 3p6 4s2 3d10 4p1',0,0,epsilon=1e3)
-    # GaK.plot(np.linspace(0,1,num=200))
-    # sys.exit()
-
-    FeL = orbital(26, "1s2 2s2 2p6 3s2 3p6 4s2 3d6", 2, 1)
-
-    FeFree = orbital(26, "1s2 2s2 2p6 3s2 3p6 4s2 3d6", 0, 2, epsilon=1)
-    rdims = [2 * 3.905, 2 * 3.905]
-    grid = [256, 256]
-    Hn0 = np.fft.fftshift(transition_potential(FeL, FeFree, grid, rdims, 0, 1, keV))
-    Hn0_inten = np.abs(Hn0) ** 2
-    print(np.amax(Hn0_inten), np.amin(Hn0_inten), np.mean(Hn0_inten))
-    fig, ax = plt.subplots()
-    ax.imshow(Hn0_inten)
-    plt.show(block=True)
-    sys.exit()
-
-    LaN45 = orbital(57, "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 5d1 6s2", 4, 2)
-    # LaN45.plot(np.linspace(0,5,num=200))
-
-    print(integrate.quad(lambda x: LaN45.wfn(x) ** 2, 0, 5)[0])
-    LaFree = orbital(
-        57, "1s2 2s2 2p6 3s2 3p6 4s2 3d10 4p6 5s2 4d9 5p6 6s2 5d1", 0, 3, epsilon=1
-    )
-    # LaFree.plot(np.linspace(0,50,num=200))
-    rdims = [2 * 11.76, 2 * 11.76]
-    grid = [128, 128]
-    Hn0s = np.zeros((4, *grid), dtype=np.complex)
-    mls = 0
-    # lprimes
-
-    for rdims in ([40, 40], [50, 50])[:1]:
-        fig, ax = plt.subplots(nrows=2, ncols=2, figsize=(8, 8))
-        Hn0 = np.fft.fftshift(
-            transition_potential(LaN45, LaFree, grid, rdims, 0, 0, keV)
-        )
-        ax[1, 1].imshow(np.log(np.abs(np.fft.fftshift(np.fft.fft2(Hn0)))))
-        Hn0 *= -1j  # interaction_constant(keV*1e3,units = 'rad/VA')
-        ax[0, 0].imshow(np.abs(Hn0) ** 2)
-        ax[0, 1].imshow(colorize(Hn0))
-
-        ax[1, 0].plot(
-            np.linspace(-rdims[0] / 2, rdims[0] / 2, num=grid[0]),
-            np.mean(np.abs(Hn0) ** 2, axis=0),
-        )
-        # ax[1,0].set_ylim([0,0.005])
-        ax[1, 0].set_xlim([-5.88, 5.88])
-        print(np.amax(np.abs(Hn0) ** 2), np.amin(np.abs(Hn0) ** 2))
-        plt.show(block=True)
-    sys.exit()
-    Sifree = orbital(14, "1s1 2s2 2p6 3s2 3p2", 0, 1, epsilon=10)
-    # Ofree.plot()
-    Si1s = orbital(14, "1s2 2s2 2p6 3s2 3p2", 1, 0)
-    # O1s.plot()
-    keV = 100
-
-    from mpl_toolkits import mplot3d
-
-    # plt.rc('text', usetex=True)
-    fig = plt.figure(figsize=(4, 12))
-    funcs = [np.real, np.imag, np.real]
-    for iqnum, qnums in enumerate([(0, 0), (1, 0), (1, 1)]):
-        lprime, mlprime = qnums
-        Sifree = orbital(14, "1s1 2s2 2p6 3s2 3p2", 0, lprime, epsilon=10)
-        Hn0 = transition_potential(Si1s, Sifree, [128, 128], [2, 2], 0, mlprime, keV)
-        Hn0 = np.fft.fftshift(Hn0)
-
-        ax = fig.add_subplot(311 + iqnum, projection="3d")
-        grid = np.linspace(-1.0, 1.0, num=128)
-        # colors = plt.get_cmap('hsv')((np.angle(Hn0)+np.pi)/(2*np.pi))
-        ax.plot_surface(
-            grid[:, np.newaxis], grid[np.newaxis, :], funcs[iqnum](Hn0)
-        )  # ,
-        # facecolors = colors)
-        ax.set_xlabel(r"x")
-        ax.set_ylabel(r"y")
-        ax.set_title("l'={0}, m'={1}".format(lprime, mlprime))
-
-    fig.savefig("Dwyer_reproduction.pdf")
-    plt.show(block=True)
-
-    sys.exit()
+    pass
