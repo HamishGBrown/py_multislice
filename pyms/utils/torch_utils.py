@@ -163,6 +163,18 @@ def sinc(x):
     y = torch.where(torch.abs(x) < 1.0e-20, torch.tensor([1.0e-20], dtype=x.dtype), x)
     return torch.sin(np.pi * y) / np.pi / y
 
+def ensure_torch_array(array, dtype=torch.float, device=torch.device("cpu")):
+    """Takes an array and converts it to a pytorch array if it is numpy
+    and does nothing if the array is already a numpy array"""
+
+    if not isinstance(array, torch.Tensor):
+        if np.iscomplexobj(array):
+            return cx_from_numpy(array, dtype=dtype, device=device)
+        else:
+            return torch.from_numpy(array).type(dtype).to(device)
+    else:
+        return array
+
 
 def torch_output(array, fnam, add1=True):
     """Outputs a pytorch tensor as a 32-bit tiff for quick inspection"""
@@ -183,7 +195,12 @@ def modulus_square(r):
 
 
 def amplitude(r):
-    return r[..., 0] * r[..., 0] + r[..., 1] * r[..., 1]
+    """Calculate the amplitude of a complex tensor (final dimension is 2) otherwise
+    do nothing"""
+    if r.size(-1) == 2:
+        return r[..., 0] * r[..., 0] + r[..., 1] * r[..., 1]
+    else:
+        return r
 
 
 def roll_n(X, axis, n):
@@ -533,6 +550,18 @@ def fourier_shift_array_1d(y, posn, dtype=torch.float, device=torch.device("cpu"
     ramp[..., 1] = -torch.sin(ky)
     return ramp
 
+def fourier_shift(array,posn, dtype=torch.float, device=torch.device("cpu"),qspace_in = False,qspace_out=False):
+    """Apply Fourier shift theorem to array. Calls Fourier_shift_array to generate
+    the shift array"""
+
+    if not qspace_in:
+        array = torch.fft.fft2(array,signal_ndim = 2)
+        
+    array = complex_mul(array,fourier_shift_array(array.size()[-3:-1],posn,dtype=array.dtype,device=array.device))
+
+    if qspace_out: return array
+
+    return torch.ifft(array,signal_ndim = 2)
 
 def fourier_shift_array(size, posn, dtype=torch.float, device=torch.device("cpu")):
     """Fourier shift theorem array for array shape size, 

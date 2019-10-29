@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import re
 import scipy.integrate as integrate
+import torch
+import tqdm
 from .Probe import wavev, relativistic_mass_correction
 from .crystal import interaction_constant
 
@@ -239,7 +241,7 @@ class orbital:
 
 
 def transition_potential(
-    orb1, orb2, gridshape, gridsize, ml, mlprime, keV, bandwidth_limiting=2.0 / 3
+    orb1, orb2, gridshape, gridsize, ml, mlprime, eV, bandwidth_limiting=2.0 / 3
 ):
     """Evaluate an inelastic transition potential for excitation of an
        electron from orbital 1 to orbital 2 on grid with shape gridshape
@@ -255,8 +257,8 @@ def transition_potential(
     deltaE = orb1.energy - orb2.energy
     # Calculate wave number in inverse Angstrom of incident and scattered
     # electrons
-    k0 = wavev(keV * 1e3)
-    kn = wavev(keV * 1e3 + deltaE)
+    k0 = wavev(eV)
+    kn = wavev(eV + deltaE)
 
     # Minimum momentum transfer at this energy loss
     qz = k0 - kn
@@ -397,9 +399,9 @@ def transition_potential(
     qe = 1.60217662e-19
 
     # Relativistic electron mass correction
-    gamma = relativistic_mass_correction(keV * 1e3)
+    gamma = relativistic_mass_correction(eV)
 
-    sigma = interaction_constant(keV * 1e3 + deltaE, units="rad/VA")
+    sigma = interaction_constant(eV + deltaE, units="rad/VA")
 
     # Need to multiply by area of k-space pixel (1/gridsize) and multiply by
     # #pixels to get correct units from inverse Fourier transform
@@ -412,6 +414,199 @@ def transition_potential(
     )
     # return 2*np.pi**1.5/a0**3*np.fft.ifft2(Hn0/qabs**2,norm='ortho')
     # return 2*np.pi**1.5/a0**2*const*np.fft.ifft2(Hn0/qabs**2,norm='ortho')
+
+
+def transition_potential_multislice(
+    probes,
+    nslices,
+    subslices,
+    propagators,
+    transmission_functions,
+    ionization_potentials,
+    ionization_sites,
+    tiling=None,
+    device_type=None,
+    seed=None,
+    return_numpy=True,
+    qspace_in=False,
+    qspace_out=False,
+    posn=None,
+    image_CTF=None,
+    threshhold = 1e-4,
+    showProgress = True
+
+):
+    from .py_multislice import multislice
+    from .utils.torch_utils import amplitude,complex_mul,modulus_square,get_device,ensure_torch_array,fourier_shift,cx_to_numpy
+
+    # Number of subslices
+    nsubslices = len(subslices)
+
+    # Get grid shape
+    gridshape = np.asarray(transmission_functions.size()[-3:-1])
+
+    # Total number of slices in multislice
+    niterations = nslices * nsubslices
+    
+    if device_type is None:
+        device = transmission_functions.device
+
+    #Ensure pytorch arrays
+    transmission_functions = ensure_torch_array(transmission_functions, device=device)
+    dtype = transmission_functions.dtype
+    # Initialize device cuda if available, CPU if no cuda is available
+    
+    ionization_potentials = ensure_torch_array(ionization_potentials,dtype=dtype,device=device)
+    image_CTF = ensure_torch_array(image_CTF,dtype = dtype,device=device)
+    propagators = ensure_torch_array(propagators,dtype = dtype,device=device)
+    probes = ensure_torch_array(probes,dtype=dtype,device=device)
+
+    if not threshhold is None:
+        trigger = np.zeros((ionization_potentials.size(0),))
+        for i,ionization_potential in enumerate(ionization_potentials): 
+            trigger[i] = threshhold*modulus_square(ionization_potential)/np.prod(gridshape)
+    
+    # Ionization potentials must be in reciprocal space
+    ionization_potentials = torch.fft(ionization_potentials,signal_ndim=2)
+
+    # Diffraction pattern
+    if image_CTF is None:
+        output = torch.zeros(*probes.size()[:-1], device=device_type, dtype=dtype)
+    else:
+        output = torch.zeros(*image_CTF.size()[:-1], device=device_type, dtype=dtype)
+
+    # Loop over slices of specimens
+    for i in tqdm.tqdm(range(niterations), disable = not showProgress):
+
+        islice, subslice = np.unravel_index(i, (nslices, nsubslices))
+
+        # Find inelastic transitions within this slice
+        zmin = 0 if subslice == 0 else subslices[i - 1]
+        atoms_in_slice = np.nonzero(
+            (ionization_sites[:, 2] % 1.0 >= zmin)
+            & (ionization_sites[:, 2] % 1.0 < subslices[i])
+        )
+        # fig,ax = plt.subplots()
+        # ax.imshow(colorize(cx_to_numpy(probes)))
+        # ax.set_title('Elastic wave')
+        # plt.show(block=True)
+        #Loop over inelastic transitions within the slice
+        for atom in tqdm.tqdm(atoms_in_slice[0], disable = not showProgress):
+
+            for j,ionization_potential in enumerate(ionization_potentials):
+                
+                # Calculate inelastically scattered wave for ionization transition
+                # potential shifted to position of slice
+                posn =  torch.from_numpy(ionization_sites[atom, :2] * gridshape).type(dtype).to(device)
+                psi_n = complex_mul(
+                    fourier_shift(
+                        ionization_potential,posn,qspace_in=True
+                    )
+                    , probes
+                )
+                # fig,ax = plt.subplots()
+                # ax.imshow(np.abs(cx_to_numpy(psi_n)))
+                # ax.plot(posn[1],posn[0],'rx')
+                # ax.set_title('Image so far')
+                # plt.show(block=True)
+                # fig,ax = plt.subplots()
+                # ax.imshow(colorize(cx_to_numpy(psi_n)))
+                # ax.set_title('Inelastically scattered wave')
+                # plt.show(block=True)
+                # Only propagate this wave to the exit surface if it is deemed
+                # to contribute significantly (above a user-determined threshhold)
+                # to the image. Pass threshhold = None to disable this feature
+                if not threshhold is None:
+                    if (modulus_square(psi_n)<trigger[j]): 
+                        continue
+
+                # Propagate to exit surface
+                psi_n = multislice(
+                    psi_n,
+                    np.arange(i, niterations),
+                    propagators,
+                    transmission_functions,
+                    tiling=tiling,
+                    qspace_out=True,
+                    subslicing=True,
+                    return_numpy=False,
+                )
+                # fig,ax = plt.subplots()
+                # ax.imshow(colorize(cx_to_numpy(psi_n)))
+                # ax.set_title('Exit surface wave')
+                # plt.show(block=True)
+                # Perform imaging if requested, otherwise just accumulate diffraction
+                # pattern
+                if image_CTF is None:
+                    output += amplitude(psi_n)
+                else:
+                    output += amplitude(
+                        torch.ifft(complex_mul(psi_n, image_CTF), signal_ndim=2)
+                    )
+                    # fig,ax = plt.subplots()
+                    # ax.imshow(output[0,...])
+                    # ax.plot(posn[1],posn[0],'rx')
+                    # ax.set_title('Image so far')
+                    # plt.show(block=True)
+
+        # Propagate probe one slice
+        probes = multislice(probes, [i+1], propagators, transmission_functions,return_numpy=False)
+    
+    if return_numpy:
+        return output.cpu().numpy()
+    return output
+
+
+def multislice_STEM_EELS(
+    rsize,
+    probe,
+    propagators,
+    transmission_functions,
+    ionization_potentials,
+    ionization_sites,
+    nslices,
+    eV,
+    alpha,
+    batch_size=1,
+    detectors=None,
+    FourD_STEM=False,
+    datacube=None,
+    scan_posn=None,
+    dtype=None,
+    device=None,
+    tiling=[1, 1],
+    seed=None,
+    showProgress=True,
+):
+    """Perform a STEM simulation using only the multislice algorithm"""
+    if dtype is None:
+        dtype = transmission_functions.dtype
+    if device is None:
+        device = transmission_functions.device
+
+    method = multislice
+    args = (propagators, transmission_functions, tiling, device, seed)
+    kwargs = {"return_numpy": False, "qspace_in": True, "qspace_out": True}
+
+    return STEM(
+        rsize,
+        probe,
+        method,
+        nslices,
+        eV,
+        alpha,
+        batch_size=batch_size,
+        detectors=detectors,
+        FourD_STEM=FourD_STEM,
+        datacube=datacube,
+        scan_posn=scan_posn,
+        device=device,
+        tiling=tiling,
+        seed=seed,
+        showProgress=showProgress,
+        method_args=args,
+        method_kwargs=kwargs,
+    )
 
 
 if __name__ == "__main__":

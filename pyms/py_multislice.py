@@ -24,6 +24,7 @@ from .utils.torch_utils import (
     fourier_shift_array,
     amplitude,
     get_device,
+    ensure_torch_array
 )
 
 
@@ -154,30 +155,21 @@ def multislice_cupy(
     return psi
 
 
-def ensure_torch_array(array, dtype=torch.float, device=torch.device("cpu")):
-    """Takes an array and converts it to a pytorch array if it is numpy
-    and does nothing if the array is already a numpy array"""
-
-    if not isinstance(array, torch.Tensor):
-        if np.iscomplexobj(array):
-            return cx_from_numpy(array, dtype=dtype, device=device)
-        else:
-            return torch.from_numpy(array).type(dtype).to(device)
-    else:
-        return array
 
 
 def multislice(
     probes,
+    nslices,
     propagators,
     transmission_functions,
-    nslices,
     tiling=None,
     device_type=None,
     seed=None,
     return_numpy=True,
     qspace_in=False,
     qspace_out=False,
+    posn=None,
+    subslicing=False,
 ):
     """For a given probe or set of probes, propagators, and transmission 
         functions perform the multislice algorithm for nslices iterations."""
@@ -201,66 +193,70 @@ def multislice(
     # Probe needs to start multislice algorithm in real space (warning
     # this is not a normalized fft)
     if qspace_in:
-        psi = torch.ifft(psi, signal_ndim=2)#,normalized=True)
-    
-    for islice in range(nslices):
-        for subslice in range(nsubslices):
-            # Pick random phase grating
-            it = r.randint(0, nT)
+        psi = torch.ifft(psi, signal_ndim=2)  # ,normalized=True)
 
-            # Transmit and forward Fourier transform
+    if isinstance(nslices, int):
+        # Number of iterations of the multslice algorithm
+        niterations = nslices if subslicing else nslices * nsubslices
+        slices = np.arange(niterations)
+    else:
+        slices = nslices
 
-            if tiling is None or (tiling[0] == 1 & tiling[1] == 1):
-                psi = torch.fft(complex_mul(T[it, subslice, ...], psi), signal_ndim=2)
-                # If the transmission function is from a tiled unit cell then
-                # there is the option of randomly shifting it around to
-                # generate "more" transmission functions
-            elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
-                # Shift an integer number of pixels in y
-                T_ = roll_n(
-                    T[it, subslice, ...],
-                    0,
-                    r.randint(0, tiling[0]) * (nopiy // tiling[0]),
-                )
+    for i,islice in enumerate(slices):
+        subslice = islice % nsubslices
 
-                # Shift an integer number of pixels in x
-                T_ = roll_n(T_, 1, r.randint(1, tiling[1]) * (nopix // tiling[1]))
+        # Pick random phase grating
+        it = r.randint(0, nT)
 
-                # Perform transmission operation
-                psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
-            else:
-                # Case of a non-integer shifting of the unit cell
-                yshift = r.randint(0, tiling[0]) * (nopiy / tiling[0])
-                xshift = r.randint(0, tiling[1]) * (nopix / tiling[1])
-                shift = torch.tensor([yshift, xshift])
+        # Transmit and forward Fourier transform
 
-                # Generate an array to perform Fourier shift of transmission
-                # function
-                FFT_shift_array = fourier_shift_array(
-                    [nopiy, nopix], shift, dtype=T.dtype, device=T.device
-                )
+        if tiling is None or (tiling[0] == 1 & tiling[1] == 1):
+            psi = torch.fft(complex_mul(T[it, subslice, ...], psi), signal_ndim=2)
+            # If the transmission function is from a tiled unit cell then
+            # there is the option of randomly shifting it around to
+            # generate "more" transmission functions
+        elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
+            # Shift an integer number of pixels in y
+            T_ = roll_n(
+                T[it, subslice, ...], 0, r.randint(0, tiling[0]) * (nopiy // tiling[0])
+            )
 
-                # Apply Fourier shift theorem for sub-pixel shift
-                T_ = torch.ifft(
-                    complex_mul(
-                        FFT_shift_array, torch.fft(T[it, subslice, ...], signal_ndim=2)
-                    ),
-                    signal_ndim=2,
-                )
+            # Shift an integer number of pixels in x
+            T_ = roll_n(T_, 1, r.randint(1, tiling[1]) * (nopix // tiling[1]))
 
-                # Perform transmission operation
-                psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
+            # Perform transmission operation
+            psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
+        else:
+            # Case of a non-integer shifting of the unit cell
+            yshift = r.randint(0, tiling[0]) * (nopiy / tiling[0])
+            xshift = r.randint(0, tiling[1]) * (nopix / tiling[1])
+            shift = torch.tensor([yshift, xshift])
 
-            # Propagate
-            psi = complex_mul(psi, P[subslice, ...])
+            # Generate an array to perform Fourier shift of transmission
+            # function
+            FFT_shift_array = fourier_shift_array(
+                [nopiy, nopix], shift, dtype=T.dtype, device=T.device
+            )
 
-            # This logic statement allows for the probe to be returned
-            # in reciprocal space
-            if not np.all(
-                [qspace_out, islice == nslices - 1, subslice == nsubslices - 1]
-            ):
-                psi = torch.ifft(psi, signal_ndim=2)
-            
+            # Apply Fourier shift theorem for sub-pixel shift
+            T_ = torch.ifft(
+                complex_mul(
+                    FFT_shift_array, torch.fft(T[it, subslice, ...], signal_ndim=2)
+                ),
+                signal_ndim=2,
+            )
+
+            # Perform transmission operation
+            psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
+
+        # Propagate
+        psi = complex_mul(psi, P[subslice, ...])
+        
+        # This logic statement allows for the probe to be returned
+        # in reciprocal space
+        if not (qspace_out and i == len(slices)-1):
+            psi = torch.ifft(psi, signal_ndim=2)
+
     if return_numpy:
         return cx_to_numpy(psi)
     return psi
@@ -288,11 +284,78 @@ def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     return np.where(detector, 1, 0)
 
 
-def STEM(
+def generate_STEM_raster(gridshape, FOV, eV, alpha, tiling=[1, 1]):
+    """For field of view FOV and a focused electron probe of energy eV in
+    electron volts and probe forming aperture alpha generate the STEM scan
+    raster positions in units of pixels. Option of scanning only a single unit
+    cell if tiling = 1 is passed"""
+
+    # Calculate number of scan positions in STEM scan
+    from .Probe import nyquist_sampling
+
+    nscan = nyquist_sampling(FOV / np.asarray(tiling), eV=eV, alpha=alpha)
+
+    # Generate Y and X scan coordinates
+    return [
+        np.arange(0, gridshape[i] / tiling[i], step=gridshape[i] / nscan[i] / tiling[i])
+        for i in range(2)
+    ]
+
+
+def multislice_STEM(
     rsize,
     probe,
     propagators,
     transmission_functions,
+    nslices,
+    eV,
+    alpha,
+    batch_size=1,
+    detectors=None,
+    FourD_STEM=False,
+    datacube=None,
+    scan_posn=None,
+    dtype=None,
+    device=None,
+    tiling=[1, 1],
+    seed=None,
+    showProgress=True,
+):
+    """Perform a STEM simulation using only the multislice algorithm"""
+    if dtype is None:
+        dtype = transmission_functions.dtype
+    if device is None:
+        device = transmission_functions.device
+
+    method = multislice
+    args = (propagators, transmission_functions, tiling, device, seed)
+    kwargs = {"return_numpy": False, "qspace_in": True, "qspace_out": True}
+
+    return STEM(
+        rsize,
+        probe,
+        method,
+        nslices,
+        eV,
+        alpha,
+        batch_size=batch_size,
+        detectors=detectors,
+        FourD_STEM=FourD_STEM,
+        datacube=datacube,
+        scan_posn=scan_posn,
+        device=device,
+        tiling=tiling,
+        seed=seed,
+        showProgress=showProgress,
+        method_args=args,
+        method_kwargs=kwargs,
+    )
+
+
+def STEM(
+    rsize,
+    probe,
+    method,
     nslices,
     eV,
     alpha,
@@ -302,20 +365,21 @@ def STEM(
     FourD_STEM=False,
     datacube=None,
     scan_posn=None,
-    device=None,
+    dtype=torch.float32,
+    device=torch.device("cpu"),
     tiling=[1, 1],
     seed=None,
     showProgress=True,
+    method_args=(),
+    method_kwargs={},
 ):
     """Perform a STEM image simulation.
 
     Keyword arguments:
     rsize       -- The real space size of the grid in Angstroms
     probe       -- The probe that will be rastered over the object
-    propagators -- The Fresnel free-space propagators for the multislice 
-                    algorithm
-    transmission_functions -- The specimen transmission functions for the
-                              multislice algorithm
+    method      -- A function that takes a probe and propagates it to the exit
+                   surface of the specimen
     nslices     -- The number of slices to perform multislice over
     eV          -- Accelerating voltage of the probe, needed to work out probe
                    sampling requirements
@@ -341,50 +405,33 @@ def STEM(
                     configurations
     showProgress-- Pass showProgress=False to disable progress bar.
     """
-    from .Probe import nyquist_sampling
 
     # Get number of thicknesses in the series
     nthick = len(nslices)
 
     # Get shape of grid
-    gridshape = propagators.shape[-2:]
+    gridshape = probe.shape[-2:]
 
     # Datatype (precision) is inferred from transmission functions
-    dtype = transmission_functions.dtype
+    # dtype = transmission_functions.dtype
 
     # Device (CPU or GPU) is also inferred from transmission functions
-    if device is None: device = transmission_functions.device
+    # if device is None:
+    #     device = transmission_functions.device
 
     # Generate scan positions if not supplied
     if scan_posn is None:
+        scan_posn = generate_STEM_raster(gridshape, rsize[:2], eV, alpha, tiling)
 
-        # Calculate field of view of scan
-        FOV = np.asarray(rsize[:2]) / np.asarray(tiling)
-
-        # Calculate number of scan positions in STEM scan
-        nscan = nyquist_sampling(FOV, eV=eV, alpha=alpha)
-
-        # Get scan position in pixel coordinates
-        scan_posn = []
-        # Y scan coordinates
-        scan_posn.append(
-            np.arange(
-                0, gridshape[0] / tiling[0], step=gridshape[0] / nscan[0] / tiling[0]
-            )
-        )
-        # X scan coordinates
-        scan_posn.append(
-            np.arange(
-                0, gridshape[1] / tiling[1], step=gridshape[1] / nscan[1] / tiling[1]
-            )
-        )
-
-    # Total number of scan positions
-    nscantot = scan_posn[0].shape[0] * scan_posn[1].shape[0]
+    # Number of scan positions
+    nscan = [x.size for x in scan_posn]
+    nscantot = np.prod(nscan)
 
     # Assume real space probe is passed in so perform Fourier transform in
     # anticipation of application of Fourier shift theorem
-    probe_ = torch.fft(ensure_torch_array(probe,dtype=dtype, device=device), signal_ndim=2)
+    probe_ = torch.fft(
+        ensure_torch_array(probe, dtype=dtype, device=device), signal_ndim=2
+    )
 
     # Work out whether to perform conventional STEM or not
     conventional_STEM = not detectors is None
@@ -397,7 +444,7 @@ def STEM(
         STEM_image = np.zeros((ndet, nthick, nscantot))
 
         # Also move detectors to pytorch if necessary
-        D = ensure_torch_array(detectors,device=device,dtype=dtype)
+        D = ensure_torch_array(detectors, device=device, dtype=dtype)
 
     # Initialize array in which to store resulting 4D-STEM datacube if required
     return_datacube = False
@@ -477,66 +524,18 @@ def STEM(
         # Apply shift to original probe
         probes = complex_mul(probe_.view(1, *probe_.size()), probes)
 
-        # Thickness series
-        for it, t in enumerate(nslices):
-            if S is None:
-                # Perform multislice
-                probes = multislice(
-                    probes,
-                    propagators,
-                    transmission_functions,
-                    t,
-                    tiling,
-                    device,
-                    seed,
-                    return_numpy=False,
-                    qspace_in=True,
-                    qspace_out=True,
-                )
+        # Thickness series6
+        #  - need to take the difference between sequential thickness variations
+        for it, t in enumerate(np.diff(nslices, prepend=0)):
 
-            else:
-                # Calculate STEM images using a scattering matrix
-                # TODO Implement PRISM thickness series
-                # Perform matrix multiplication of scattering matrix with
-                # probe vector
-
-                probe_vec = complex_matmul(probes[:, S.beams[:, 0], S.beams[:, 1]], S.S)
-
-                # Now reshape output from vectors to square arrays
-                probes[...] = 0
-                probes[:, S.bw_mapping[:, 0], S.bw_mapping[:, 1], :] = probe_vec
-
-                # Apply PRISM cropping in real space if appropriate
-                if np.any([S.PRISM_factor[i] > 1 for i in [0, 1]]):
-                    # Transform probe to real space
-                    probes = torch.ifft(probes, signal_ndim=2)
-
-                    # Distance function to calculate windows about scan positions
-                    dist = lambda x, X: np.abs((np.arange(X) - x + X // 2) % X - X // 2)
-
-                    for k in range(K):
-
-                        # Calculate windows in vertical and horizontal directions
-                        ywindow = (
-                            dist(yscan[k], gridshape[0])
-                            <= gridshape[0] / S.PRISM_factor[0] / 2
-                        )
-                        xwindow = (
-                            dist(xscan[k], gridshape[1])
-                            <= gridshape[1] / S.PRISM_factor[1] / 2
-                        )
-
-                        # Set array values outside windows to zero
-                        probes[k, np.logical_not(ywindow), ...] = 0
-                        probes[k, :, np.logical_not(xwindow), :] = 0
-
-                    # Transform probe back to Fourier space
-                    probes = torch.fft(probes, signal_ndim=2)
+            # Evaluate exit surface wave function from input probes
+            probes = method(probes, t, *method_args, posn=posn.cpu().numpy(), **method_kwargs)
 
             # Calculate amplitude of probes
             amp = amplitude(probes)
-            if S is None: amp /= np.prod(probes.size()[-3:-1])
-            
+            if S is None:
+                amp /= np.prod(probes.size()[-3:-1])
+
             # Calculate STEM images
             if conventional_STEM:
                 # broadcast detector and probe arrays to
@@ -683,6 +682,7 @@ class scattering_matrix:
         for i in tqdm(
             range(int(np.ceil(nbeams / batch_size))), disable=not showProgress
         ):
+            #
             for j in range(batch_size):
                 jj = j + batch_size * i
                 psi[j, ...] = cx_from_numpy(
@@ -696,9 +696,9 @@ class scattering_matrix:
 
             psi = multislice(
                 psi,
+                nslices,
                 propagators,
                 transmission_functions,
-                nslices,
                 tiling,
                 device,
                 seed,
@@ -712,6 +712,88 @@ class scattering_matrix:
 
         self.gridshape = gridshape
         self.PRISM_factor = PRISM_factor
+        self.rsize = rsize
+        self.tiling = tiling
+        self.eV = eV
+
+    def __call__(self, probes, nslices, posn=None):
+        """Evaluate the the Smatrix probe matrix multiplication for a number
+        of probes in windows centred about window_posn nslices does nothing
+        and is only included to match the function call signature for the
+        STEM routine"""
+
+        # Distance function to calculate windows about scan positions
+        dist = lambda x, X: np.abs((np.arange(X) - x + X // 2) % X - X // 2)
+
+        # TODO Implement PRISM thickness series
+        # Perform matrix multiplication of scattering matrix with
+        # probe vector
+
+        probe_vec = complex_matmul(
+            probes[:, self.beams[:, 0], self.beams[:, 1]], self.S
+        )
+
+        # Now reshape output from vectors to square arrays
+        probes[...] = 0
+        probes[:, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :] = probe_vec
+
+        # Apply PRISM cropping in real space if appropriate
+        if np.any([self.PRISM_factor[i] > 1 for i in [0, 1]]):
+            # Transform probe to real space
+            probes = torch.ifft(probes, signal_ndim=2)
+
+            for k in range(probes.size(0)):
+
+                # Calculate windows in vertical and horizontal directions
+                window = [
+                    (
+                        dist(posn[k][i], self.gridshape[i])
+                        > self.gridshape[i] / self.PRISM_factor[i] / 2
+                    )
+                    for i in range(2)
+                ]
+
+                # Set array values outside windows to zero
+                probes[k, window[0]] = 0
+                probes[k, :, window[1]] = 0
+
+            # Transform probe back to Fourier space
+            probes = torch.fft(probes, signal_ndim=2)
+        return probes
+
+    def Smatrix_STEM(
+        self,
+        probe,
+        alpha,
+        batch_size=1,
+        detectors=None,
+        datacube=None,
+        showProgress=True,
+        FourD_STEM=False,
+        scan_posn=None,
+    ):
+        """Using the scattering matrix simulate a STEM experiment"""
+        dtype = self.S.dtype
+        device = self.S.device
+
+        method = self
+
+        return STEM(
+            self.rsize,
+            probe,
+            method,
+            [1],
+            self.eV,
+            alpha,
+            batch_size=batch_size,
+            detectors=detectors,
+            FourD_STEM=FourD_STEM,
+            datacube=datacube,
+            scan_posn=scan_posn,
+            device=device,
+            tiling=self.tiling,
+            showProgress=showProgress,
+        )
 
     def plot(self, show=True):
         """Make a montage plot of the scattering matrix"""

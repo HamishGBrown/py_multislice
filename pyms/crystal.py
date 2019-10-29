@@ -105,8 +105,8 @@ def interaction_constant(E, units="rad/VA"):
 
 
 def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
-    """Generates the rotational matrix for a rotation of angle theta in radians
-    around vector u."""
+    """Generates the 3D rotational matrix for a rotation of angle theta in 
+    radians around axis given by vector u."""
     from numpy import sin, cos, pi
 
     c = cos(theta)
@@ -132,16 +132,16 @@ def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
 
 
 class crystal:
-    # Elements in a crystal object:
-    # unitcell - An array containing the side lengths of the orthorhombic unit cell
-    # atomtypes - A string array containing the symbols of atomic elements in the cell
-    # natoms - Total number of atoms of each element within the cell
-    # atoms - An array of dimensions total number of atoms by 6 which for each atom
-    #        contains the fractional cooordinates within the unit cell for each atom
-    #        in the first three entries, the atomic number in the fourth entry,
-    #        the atomic occupancy (not yet implemented in the multislice) in the
-    #        fifth entry and mean squared atomic displacement in the sixth entry
-    #
+    ''' Elements in a crystal object:
+     unitcell - An array containing the side lengths of the orthorhombic unit cell
+     atomtypes - A string array containing the symbols of atomic elements in the cell
+     natoms - Total number of atoms of each element within the cell
+     atoms - An array of dimensions total number of atoms by 6 which for each atom
+            contains the fractional cooordinates within the unit cell for each atom
+            in the first three entries, the atomic number in the fourth entry,
+            the atomic occupancy (not yet implemented in the multislice) in the
+            fifth entry and mean squared atomic displacement in the sixth entry'''
+    
     def __init__(
         self,
         fnam,
@@ -251,9 +251,6 @@ class crystal:
         # If necessary, Convert atomic positions to fractional coordinates
         if atomic_coordinates == "cartesian":
             self.atoms[:, :3] /= self.unitcell[:3][np.newaxis, :]
-
-        # Build list of equivalent sites
-        self.equivalent_sites = find_equivalent_sites(self.atoms[:, :3])
 
     def orthorhombic_supercell(self, EPS):
         # If not orthorhombic attempt psuedo rational tiling
@@ -441,6 +438,8 @@ class crystal:
         # Get number of unique atomic elements
         nelements = len(elements)
         nsubslices = len(subslices)
+        # Build list of equivalent sites
+        equivalent_sites = find_equivalent_sites(self.atoms[:, :3], EPS=1e-3)
 
         # FDES method
         # Intialize potential array
@@ -515,7 +514,7 @@ class crystal:
                 # If using fractional occupancy force atoms occupying equivalent
                 # sites to have the same displacement
                 if fractional_occupancy:
-                    disp = disp[self.equivalent_sites, :]
+                    disp = disp[equivalent_sites, :]
 
                 posn[:, :2] += disp
 
