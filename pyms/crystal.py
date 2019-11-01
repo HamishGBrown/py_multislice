@@ -132,7 +132,7 @@ def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
 
 
 class crystal:
-    ''' Elements in a crystal object:
+    """ Elements in a crystal object:
      unitcell - An array containing the side lengths of the orthorhombic unit cell
      atomtypes - A string array containing the symbols of atomic elements in the cell
      natoms - Total number of atoms of each element within the cell
@@ -140,8 +140,8 @@ class crystal:
             contains the fractional cooordinates within the unit cell for each atom
             in the first three entries, the atomic number in the fourth entry,
             the atomic occupancy (not yet implemented in the multislice) in the
-            fifth entry and mean squared atomic displacement in the sixth entry'''
-    
+            fifth entry and mean squared atomic displacement in the sixth entry"""
+
     def __init__(
         self,
         fnam,

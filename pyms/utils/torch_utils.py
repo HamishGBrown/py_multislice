@@ -7,9 +7,13 @@ re = np.s_[..., 0]
 im = np.s_[..., 1]
 
 
+def iscomplex(a: torch.Tensor):
+    return a.shape[-1] == 2
+
+
 def check_complex(A):
     for a in A:
-        if a.shape[-1] != 2:
+        if not iscomplex(a):
             raise RuntimeWarning(
                 "taking complex_mul of non-complex tensor! a.shape " + str(a.shape)
             )
@@ -162,6 +166,7 @@ def sinc(x):
     """sinc function return sin(pi x)/(pi x)"""
     y = torch.where(torch.abs(x) < 1.0e-20, torch.tensor([1.0e-20], dtype=x.dtype), x)
     return torch.sin(np.pi * y) / np.pi / y
+
 
 def ensure_torch_array(array, dtype=torch.float, device=torch.device("cpu")):
     """Takes an array and converts it to a pytorch array if it is numpy
@@ -543,27 +548,53 @@ def fftfreq(n, dtype=torch.float, device=torch.device("cpu")):
     return (torch.arange(n, dtype=dtype, device=device) + n // 2) % n - n // 2
 
 
-def fourier_shift_array_1d(y, posn, dtype=torch.float, device=torch.device("cpu")):
+def fourier_shift_array_1d(
+    y, posn, dtype=torch.float, device=torch.device("cpu"), units="pixels"
+):
     ramp = torch.empty(y, 2, dtype=dtype, device=device)
-    ky = 2 * np.pi * fftfreq(y) * posn / y
+    ky = 2 * np.pi * fftfreq(y) * posn
+    if units == "pixels":
+        ky /= y
     ramp[..., 0] = torch.cos(ky)
     ramp[..., 1] = -torch.sin(ky)
     return ramp
 
-def fourier_shift(array,posn, dtype=torch.float, device=torch.device("cpu"),qspace_in = False,qspace_out=False):
+
+def fourier_shift_torch(
+    array,
+    posn,
+    dtype=torch.float,
+    device=torch.device("cpu"),
+    qspace_in=False,
+    qspace_out=False,
+    units="pixels",
+):
     """Apply Fourier shift theorem to array. Calls Fourier_shift_array to generate
     the shift array"""
 
     if not qspace_in:
-        array = torch.fft.fft2(array,signal_ndim = 2)
-        
-    array = complex_mul(array,fourier_shift_array(array.size()[-3:-1],posn,dtype=array.dtype,device=array.device))
+        array = torch.fft.fft2(array, signal_ndim=2)
 
-    if qspace_out: return array
+    array = complex_mul(
+        array,
+        fourier_shift_array(
+            array.size()[-3:-1],
+            posn,
+            dtype=array.dtype,
+            device=array.device,
+            units=units,
+        ),
+    )
 
-    return torch.ifft(array,signal_ndim = 2)
+    if qspace_out:
+        return array
 
-def fourier_shift_array(size, posn, dtype=torch.float, device=torch.device("cpu")):
+    return torch.ifft(array, signal_ndim=2)
+
+
+def fourier_shift_array(
+    size, posn, dtype=torch.float, device=torch.device("cpu"), units="pixels"
+):
     """Fourier shift theorem array for array shape size, 
        to (pixel) position given by list posn.
        
@@ -577,10 +608,14 @@ def fourier_shift_array(size, posn, dtype=torch.float, device=torch.device("cpu"
 
     if nn == 1:
         # Make y ramp exp(-2pi i ky y)
-        yramp = fourier_shift_array_1d(y, posn[0], dtype=dtype, device=device)
+        yramp = fourier_shift_array_1d(
+            y, posn[0], units=units, dtype=dtype, device=device
+        )
 
         # Make y ramp exp(-2pi i kx x)
-        xramp = fourier_shift_array_1d(x, posn[1], dtype=dtype, device=device)
+        xramp = fourier_shift_array_1d(
+            x, posn[1], units=units, dtype=dtype, device=device
+        )
 
         # Multiply both arrays together, view statements for
         # appropriate broadcasting to 2D
@@ -594,8 +629,9 @@ def fourier_shift_array(size, posn, dtype=torch.float, device=torch.device("cpu"
             * np.pi
             * fftfreq(y, dtype=dtype, device=device).view(1, y)
             * posn[:, 0].view(K, 1)
-            / y
         )
+        if units == "pixels":
+            ky /= y
         yramp[..., 0] = torch.cos(ky)
         yramp[..., 1] = -torch.sin(ky)
 
@@ -606,11 +642,78 @@ def fourier_shift_array(size, posn, dtype=torch.float, device=torch.device("cpu"
             * np.pi
             * fftfreq(x, dtype=dtype, device=device).view(1, x)
             * posn[:, 1].view(K, 1)
-            / x
         )
+        if units == "pixels":
+            kx /= x
+
         xramp[..., 0] = torch.cos(kx)
         xramp[..., 1] = -torch.sin(kx)
 
         # Multiply both arrays together, view statements for
         # appropriate broadcasting to 2D
         return complex_mul(yramp.view(K, y, 1, 2), xramp.view(K, 1, x, 2))
+
+
+def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
+    # initialize array to hold flattened index in
+
+    return (
+        indices[-1].view(1, indices[-1].size(0))
+        + indices[-2].view(indices[-2].size(0), 1) * shape[-1]
+    ).flatten()
+
+
+def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
+    """Crop an array to its bandwidth limit (ie remove superfluous array entries)"""
+
+    from .numpy_utils import crop_window_to_flattened_indices
+
+    # Check if array is complex or not
+    complx = iscomplex(array)
+
+    # Get array shape, taking into account final dimension of size 2 if the array
+    # is complex
+    gridshape = list(array.size())[-2 - int(complx) :][:2]
+
+    # New shape of final dimensions
+    newshape = tuple([int(round(gridshape[i] * limit)) for i in range(2)])
+
+    # Indices of values to take
+    ind = [
+        (np.fft.fftfreq(newshape[i], 1 / newshape[i]).astype(np.int) + gridshape[i])
+        % gridshape[i]
+        for i in range(2)
+    ]
+    ind = crop_window_to_flattened_indices(ind, gridshape)
+
+    # flatten final two dimensions of array
+    flat_shape = tuple(array.size()[: -2 - int(complx)]) + (int(np.prod(gridshape)),)
+    newshape = tuple(array.size()[: -2 - int(complx)]) + newshape
+
+    if complx:
+        flat_shape += (2,)
+        newshape += (2,)
+        return array.view(flat_shape)[..., ind, :].view(newshape)
+    return array.view(flat_shape)[..., ind].view(newshape)
+
+
+def size_of_bandwidth_limited_array(shape):
+    return list(crop_to_bandwidth_limit_torch(torch.zeros(*shape)).size())
+
+
+def detect(detector, diffraction_pattern):
+    """Calculates the signal in a diffraction pattern detector even if the size
+    of the diffraction pattern and the detector are mismatched, assumes that
+    the zeroth coordinate in reciprocal space is in the top-left hand corner
+    of the array."""
+    minsize = min(detector.size()[-2:], diffraction_pattern.size()[-2:])
+    wind = [
+        torch.arange(-minsize[i] // 2, minsize[i] // 2) + minsize[i] % 2 for i in [0, 1]
+    ]
+    Dwind = crop_window_to_flattened_indices_torch(wind, detector.size())
+    DPwind = crop_window_to_flattened_indices_torch(wind, diffraction_pattern.size())
+    return torch.sum(
+        detector.flatten(-2, -1)[:, None, Dwind]
+        * diffraction_pattern.flatten(-2, -1)[None, :, DPwind],
+        dim=-1,
+    )

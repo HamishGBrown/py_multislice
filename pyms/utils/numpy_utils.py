@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import copy
 
 
 def q_space_array(pixels, gridsize):
@@ -11,8 +12,38 @@ def q_space_array(pixels, gridsize):
     )
 
 
-def bandwidth_limit_array(array, limit=2 / 3):
+def crop_window_to_flattened_indices(indices, shape):
+    # initialize array to hold flattened index in
+
+    return (indices[-1][np.newaxis, :] + indices[-2][:, np.newaxis] * shape[-1]).ravel()
+
+
+def crop_to_bandwidth_limit(array, limit=2 / 3):
+    """Crop an array to its bandwidth limit (ie remove superfluous array entries)"""
+    # Get array shape
+    gridshape = array.shape[-2:]
+
+    # New shape of final dimensions
+    newshape = tuple([round(gridshape[i] * limit) for i in range(2)])
+
+    # Indices of values to take
+    ind = [
+        (np.fft.fftfreq(newshape[i], 1 / newshape[i]).astype(np.int) + gridshape[i])
+        % gridshape[i]
+        for i in range(2)
+    ]
+    ind = crop_window_to_flattened_indices(ind, array.shape[-2:])
+
+    # flatten final two dimensions of array
+    flat_shape = array.shape[:-2] + (np.prod(array.shape[-2:]),)
+    newshape = array.shape[:-2] + newshape
+
+    return array.reshape(flat_shape)[..., ind].reshape(newshape)
+
+
+def bandwidth_limit_array(arrayin, limit=2 / 3):
     """Band-width limit an array to fraction of its maximum given by limit"""
+    array = copy.deepcopy(arrayin)
     if isinstance(array, np.ndarray):
         pixelsize = array.shape[:2]
         array[
@@ -105,27 +136,24 @@ def fourier_interpolate_2d(ain, shapeout):
         return aout
 
 
-def oned_shift(len, shift):
+def oned_shift(N, shift, pixel_units=True):
     """Constructs a one dimensional shift array of array size 
     len that shifts an array number of pixels given by shift."""
-    # Check if the pixel length is even or not
-    even = len % 2 == 0
 
-    # Create the Fourier space pixel coordinates of the shift
-    # array
-    if even:
-        shiftarray = np.empty((len))
-        shiftarray[: len / 2] = np.arange(len / 2)
-        shiftarray[len / 2 :] = np.arange(-len / 2, 0)
-    else:
-        shiftarray = np.arange(-len / 2 + 1, len / 2 + 1)
+    # Create the Fourier space pixel coordinates of the shift array
+    shiftarray = (np.arange(N) + N // 2) % N - N // 2
 
-    # The shift array is given mathematically as e^(-2pi i k
-    # Delta x) and this is what is returned.
+    # Conversion necessary if the shift is in units of pixels, and not fractions
+    # of the array
+    if pixel_units:
+        shiftarray = shiftarray / N
+
+    # The shift array is given mathematically as e^(-2pi i k Delta x) and this
+    # is what is returned.
     return np.exp(-2 * np.pi * 1j * shiftarray * shift)
 
 
-def fourier_shift(arrayin, shift, qspace=False):
+def fourier_shift(arrayin, shift, qspace=False, pixel_units=True):
     """Shifts a 2d array by an amount given in the tuple shift 
     using the Fourier shift theorem."""
 
@@ -134,21 +162,22 @@ def fourier_shift(arrayin, shift, qspace=False):
     y, x = np.shape(arrayin)[-2:]
 
     # Construct shift array
-    shifty = oned_shift(y, shifty)
-    shiftx = oned_shift(x, shiftx)
+    shifty = oned_shift(y, shifty, pixel_units)
+    shiftx = oned_shift(x, shiftx, pixel_units)
     shiftarray = shiftx[np.newaxis, :] * shifty[:, np.newaxis]
 
     # Now Fourier transform array and apply shift
-    real = array_real(arrayin)
+    real = not np.iscomplexobj(arrayin)
+
     if real:
         array = np.asarray(arrayin, dtype=np.complex)
     else:
         array = arrayin
 
-    if qspace:
-        array = ifft2(shiftarray * array)
-    else:
-        array = ifft2(shiftarray * fft2(array))
+    if not qspace:
+        array = np.fft.fft2(array)
+
+    array = np.fft.ifft2(shiftarray * array)
 
     if real:
         return np.real(array)
