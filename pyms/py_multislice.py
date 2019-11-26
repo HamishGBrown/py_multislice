@@ -27,6 +27,7 @@ from .utils.torch_utils import (
     ensure_torch_array,
     crop_to_bandwidth_limit_torch,
     size_of_bandwidth_limited_array,
+    fourier_interpolate_2d_torch,
 )
 
 
@@ -96,6 +97,8 @@ def multislice(
     posn=None,
     subslicing=False,
     output_to_bandwidth_limit=True,
+    reverse=False,
+    transpose=False,
 ):
     """For a given probe or set of probes, propagators, and transmission 
         functions perform the multislice algorithm for nslices iterations."""
@@ -131,20 +134,18 @@ def multislice(
         # If an array-like object is passed then this will be used to uniquely
         # and reproducibly seed each iteration of the multislice algorithm
         if not seed_initialized:
-            r = np.random.RandomState(seed[slice])
+            r = np.random.RandomState(seed[islice])
 
         subslice = islice % nsubslices
 
         # Pick random phase grating
         it = r.randint(0, nT)
 
-        # Transmit and forward Fourier transform
-
+        # If the transmission function is from a tiled unit cell then
+        # there is the option of randomly shifting it around to
+        # generate "more" transmission functions
         if tiling is None or (tiling[0] == 1 & tiling[1] == 1):
-            psi = torch.fft(complex_mul(T[it, subslice, ...], psi), signal_ndim=2)
-            # If the transmission function is from a tiled unit cell then
-            # there is the option of randomly shifting it around to
-            # generate "more" transmission functions
+            T_ = T[it, subslice, ...]
         elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
             # Shift an integer number of pixels in y
             T_ = roll_n(
@@ -153,9 +154,6 @@ def multislice(
 
             # Shift an integer number of pixels in x
             T_ = roll_n(T_, 1, r.randint(1, tiling[1]) * (nopix // tiling[1]))
-
-            # Perform transmission operation
-            psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
         else:
             # Case of a non-integer shifting of the unit cell
             yshift = r.randint(0, tiling[0]) * (nopiy / tiling[0])
@@ -176,11 +174,25 @@ def multislice(
                 signal_ndim=2,
             )
 
-            # Perform transmission operation
-            psi = torch.fft(complex_mul(T_, psi), signal_ndim=2)
-
-        # Propagate
-        psi = complex_mul(psi, P[subslice, ...])
+        # Perform multislice iteration
+        if transpose or reverse:
+            # Reverse multislice complex conjugates the transmission and propagation
+            # Both reverse and transpose multislice reverse the order of the transmission
+            # and conjugation operations
+            psi = complex_mul(
+                torch.ifft(
+                    complex_mul(
+                        torch.fft(psi, signal_ndim=2), P[subslice, ...], reverse
+                    ),
+                    signal_ndim=2,
+                ),
+                T_,
+                reverse,
+            )
+        else:
+            psi = complex_mul(
+                torch.fft(complex_mul(psi, T_), signal_ndim=2), P[subslice, ...]
+            )
 
         if i == len(slices) - 1 and output_to_bandwidth_limit:
             # The probe can be cropped to the bandwidth limit, this removes
@@ -274,7 +286,12 @@ def multislice_STEM(
 
     method = multislice
     args = (propagators, transmission_functions, tiling, device, seed)
-    kwargs = {"return_numpy": False, "qspace_in": True, "qspace_out": True}
+    kwargs = {
+        "return_numpy": False,
+        "qspace_in": True,
+        "qspace_out": True,
+        "output_to_bandwidth_limit": False,
+    }
 
     return STEM(
         rsize,
@@ -484,7 +501,7 @@ def STEM(
 
             # Store datacube
             if FourD_STEM:
-                datacube[it, scan_index, ...] += resize(
+                datacube[it, scan_index] += resize(
                     np.fft.fftshift(amp.cpu().numpy(), axes=(-1, -2))
                 )
 
@@ -535,6 +552,7 @@ class scattering_matrix:
         nslices,
         eV,
         alpha,
+        GPU_streaming=False,
         batch_size=1,
         device=None,
         PRISM_factor=[1, 1],
@@ -590,6 +608,7 @@ class scattering_matrix:
                 )[np.newaxis, :],
             )
         )
+
         self.nbeams = self.beams.shape[0]
 
         # We will only store output of the scattering matrix up to the band
@@ -611,26 +630,30 @@ class scattering_matrix:
         self.eV = eV
         self.Fourier_space_output = Fourier_space_output
         self.tiling = tiling
+        self.nsubslices = propagators.shape[0]
         self.nslices = generate_slice_indices(
             nslices, propagators.shape[0], subslicing=False
         )
+        self.GPU_streaming = GPU_streaming
 
         self.seed = seed
         if self.seed is None:
             # If no seed passed to random number generator then make one to pass to
             # the multislice algorithm. This ensure that each column in the scattering
             # matrix sees the same frozen phonon configuration
+
             self.seed = np.random.randint(0, 2 ** 32 - 1, size=len(self.nslices))
 
         # This switch tells the propagate function to initialize the Smatrix
         # to plane waves
         self.initialized = False
         # Propagate wave functions of scattering matrix
+        self.current_slice = 0
         self.Propagate(nslices, propagators, transmission_functions)
 
     def Propagate(
         self,
-        nslices,
+        nslice,
         propagators,
         transmission_functions,
         batch_size=3,
@@ -638,13 +661,34 @@ class scattering_matrix:
         subslicing=False,
         showProgress=True,
     ):
-        """Advance a scattering matrix a number of slices through the specimen"""
+        """Propagate a scattering matrix to slice nslice of the specimen"""
         from .utils.torch_utils import (
             cx_from_numpy,
             crop_to_bandwidth_limit_torch,
             size_of_bandwidth_limited_array,
         )
         from .Probe import plane_wave_illumination
+
+        direction = np.sign(nslice - self.current_slice)
+        slices = generate_slice_indices(nslice, self.nsubslices)
+        if np.amax(slices) > np.amax(self.nslices):
+            newslices = generate_slice_indices(nslice, self.nsubslices)
+            # Add new slices onto list if propagating beyond previous maxima
+            newslices = np.arange(np.amax(self.nslices) + 1, np.amax(newslices))
+            self.nslices = np.concatenate([self.nslices, newslices])
+            # and new seeds for multislice
+            self.seed = np.concatenate(
+                [self.seed, np.random.randint(0, 2 ** 32 - 1, size=len(newslices))]
+            )
+
+        if self.current_slice > 0:
+            slices = np.arange(
+                generate_slice_indices(self.current_slice, self.nsubslices)[-1] + 1,
+                slices[-1],
+                direction,
+            )
+        else:
+            slices = np.arange(self.current_slice, slices[-1], direction)
 
         # Initialize scattering matrix if necessary
         if not self.initialized and self.Fourier_space_output:
@@ -664,10 +708,17 @@ class scattering_matrix:
                 device=self.device
             )
 
-        # Initialize probe wave function array
+        # Initialize array that will be used as input to the multislice routine
         psi = torch.zeros(
             batch_size, *self.gridshape, 2, dtype=self.dtype, device=self.device
         )
+
+        # If streaming of Smatrix columns to the GPU is being used, ensure
+        # that propagators and transmission functions for the multislice are
+        # already on the GPU
+        if self.GPU_streaming:
+            propagators = ensure_torch_array(propagators).cuda()
+            transmission_functions = ensure_torch_array(transmission_functions).cuda()
 
         for i in tqdm(
             range(int(np.ceil(self.nbeams / batch_size))), disable=not showProgress
@@ -679,13 +730,11 @@ class scattering_matrix:
 
             if self.initialized and self.Fourier_space_output:
                 # Expand S-matrix input to full grid for multislice propagation
-                psi[beams, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :] = self.S[
-                    beams
-                ]
+                psi[:, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :] = self.S[beams]
             elif self.initialized:
                 # Fourier interpolate stored real space S-matrix column onto
                 # multislice grid
-                pass
+                psi = fourier_interpolate_2d_torch(self.S[beams], self.gridshape, False)
             else:
                 for ibeam, beam in enumerate(beams):
                     # Initialize S-matrix to plane-waves
@@ -705,9 +754,12 @@ class scattering_matrix:
                 # is cropped out in real space)
                 psi *= torch.prod(torch.tensor(self.PRISM_factor, dtype=self.dtype))
 
+            if self.GPU_streaming:
+                psi = ensure_torch_array(psi, dtype=self.dtype).to("cuda")
+
             output = multislice(
                 psi[: beams.shape[0]],
-                nslices,
+                slices,
                 propagators,
                 transmission_functions,
                 self.tiling,
@@ -716,6 +768,9 @@ class scattering_matrix:
                 return_numpy=False,
                 qspace_out=self.Fourier_space_output,
             )
+
+            if self.GPU_streaming:
+                output = output.to(self.device)
 
             if self.Fourier_space_output:
                 # Take into account the sqrt(# of pixels) that would have been
@@ -730,6 +785,7 @@ class scattering_matrix:
             else:
                 self.S[beams, ...] = output
 
+        self.current_slice = nslice
         self.initialized = True
 
     def __call__(self, probes, nslices, posn=None):
@@ -818,13 +874,7 @@ class scattering_matrix:
                     dim=0,
                 ) / np.sqrt(np.prod(self.gridshape))
             output = output.reshape(probes.size(0), *self.S.size()[-3:])
-            # nrows = min(probes.size(0),3)
-            # fig,ax=plt.subplots(nrows= nrows)
-            # for k in range(nrows):
-            #     ax[k].imshow(np.abs(cx_to_numpy(output[k])))
-            #     ax[k].plot(posn[k,1]*self.stored_gridshape[1],posn[k,0]*self.stored_gridshape[0],'ro')
-            #     ax[k].set_title('Amp = {0}'.format(torch.sum(amplitude(output[k]))))
-            # plt.show()
+
             return torch.fft(output, signal_ndim=2, normalized=True)
 
     def Smatrix_STEM(

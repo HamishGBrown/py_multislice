@@ -204,7 +204,7 @@ def focused_probe(
 
 
 def plane_wave_illumination(
-    gridshape, gridsize, tilt=[0, 0], eV=None, tilt_units="mrad"
+    gridshape, gridsize, tilt=[0, 0], eV=None, tilt_units="mrad",qspace=False
 ):
     """Create plane wave illumination with transverse momentum given by vector
        tilt in units of inverse Angstrom or mrad. To maintain periodicitiy of 
@@ -230,7 +230,7 @@ def plane_wave_illumination(
     # Convert inverse Angstrom to pixel coordinates, this will be rounded
     # to the nearest pixel
     if tilt_units != "pixels":
-        tilt_ = np.round(tilt_ * gridsize).astype(int)
+        tilt_ = np.round(tilt_ * gridsize[:2]).astype(int)
 
     # Set the value of wavefunction amplitude such that after inverse Fourier
     # transform (and resulting division by the total number of pixels) the sum
@@ -238,7 +238,10 @@ def plane_wave_illumination(
     illum[tilt_[0], tilt_[1]] = np.sqrt(np.product(gridshape))
 
     # Return wave function in real space
-    return np.fft.ifft2(illum)
+    if qspace:
+        return illum
+    else:
+        return np.fft.ifft2(illum)
 
 
 def wavev(E):

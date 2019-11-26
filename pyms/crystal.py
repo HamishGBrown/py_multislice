@@ -52,6 +52,23 @@ def electron_scattering_factor(Z, gsq, units="VA"):
     elif units == "A":
         return fe
 
+def calculate_scattering_factors(gridshape, gridsize, elements):
+    """Calculates the electron scattering factors on a reciprocal space
+        grid of pixel size pixels assuming a unit cell tiling given by 
+        tiling"""
+
+    # Get reciprocal space array
+    g = q_space_array(gridshape, gridsize)
+    gsq = np.square(g[0]) + np.square(g[1])
+
+    # Initialise scattering factor array
+    fe = np.zeros((len(elements), *gridshape), dtype=np.float32)
+
+    # Loop over unique elements
+    for ielement, element in enumerate(elements):
+        fe[ielement, :, :] = electron_scattering_factor(element, gsq)
+
+    return fe
 
 def find_equivalent_sites(positions, EPS=1e-3):
     """Finds equivalent atomic sites, ie two atoms sharing the same 
@@ -200,10 +217,14 @@ class crystal:
 
             for i in range(totnatoms):
                 atominfo = split(r"\s+", f.readline().strip())[:6]
+                # First three entries are the atomic coordinates
                 self.atoms[i, :3] = np.asarray(atominfo[:3], dtype=np.float)
+                # Fourth entry is the atomic symbol
                 self.atoms[i, 3] = atomic_symbol.index(
                     match("([A-Za-z]+)", atominfo[3]).group(0)
                 )
+                # Final entries are the fractional occupancy and the temperature (Debye-Waller)
+                # factor
                 self.atoms[i, 4:6] = np.asarray(atominfo[4:6], dtype=np.float)
 
             if ortho:
@@ -370,35 +391,13 @@ class crystal:
         # Band-width limit the transmission function, see Earl Kirkland's book
         # for an discussion of why this is necessary
         for i in range(T.shape[0]):
-            T[i, ...] = bandwidth_limit_array(T[i, ...])
+            T[i] = bandwidth_limit_array(T[i])
 
         if fftout:
             return torch.ifft(T, signal_ndim=2)
         return T
 
-    def calculate_scattering_factors(self, pixels, tiling=[1, 1]):
-        """Calculates the electron scattering factors on a reciprocal space
-           grid of pixel size pixels assuming a unit cell tiling given by 
-           tiling"""
-        # Get real space and pixel dimensions of the array as numpy arrays
-        rsize = np.asarray(self.unitcell[:2]) * np.asarray(tiling[:2])
-        psize = np.asarray(pixels)
-
-        # Get reciprocal space array
-        g = q_space_array(psize, rsize)
-        gsq = np.square(g[0]) + np.square(g[1])
-
-        # Get a list of unique atomic elements
-        elements = list(set(np.asarray(self.atoms[:, 3], dtype=np.int)))
-
-        # Initialise scattering factor array
-        fe = np.zeros((len(elements), *pixels), dtype=np.float32)
-
-        # Loop over unique elements
-        for ielement, element in enumerate(elements):
-            fe[ielement, :, :] = electron_scattering_factor(element, gsq)
-
-        return fe
+    
 
     def make_potential(
         self,
@@ -410,7 +409,7 @@ class crystal:
         fractional_occupancy=True,
         fe=None,
         device=None,
-        dtype=torch.float,
+        dtype=torch.float32,
     ):
         """Calculates the projected electrostatic potential for a 
             crystal on a pixel grid with dimensions specified by array 
@@ -576,12 +575,11 @@ class crystal:
         # Option to precalculate scattering factors and pass to program which
         # saves computation for
         if fe is None:
-            fe_ = self.calculate_scattering_factors(pixels, tiling)
+            fe_ = calculate_scattering_factors(psize,gsize,elements)
         else:
             fe_ = fe
 
-        # Convolve with electron scattering factors using Fourier
-        # convolution theorem
+        # Convolve with electron scattering factors using Fourier convolution theorem
         P *= torch.from_numpy(fe_).view(nelements, 1, *pixels, 1).to(device)
 
         norm = np.prod(pixels) / np.prod(self.unitcell[:2]) / np.prod(tiling)

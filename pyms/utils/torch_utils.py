@@ -18,6 +18,11 @@ def check_complex(A):
                 "taking complex_mul of non-complex tensor! a.shape " + str(a.shape)
             )
 
+def to_complex(real,imag=None):
+    if imag is None:
+        return torch.stack([real,torch.zeros(real.size(),dtype=real.dtype,device=real.device)],-1)
+    else:
+        return torch.stack([real, imag], -1)
 
 def get_device(device_type=None):
     """ Initialize device cuda if available, CPU if no cuda is available"""
@@ -717,3 +722,52 @@ def detect(detector, diffraction_pattern):
         * diffraction_pattern.flatten(-2, -1)[None, :, DPwind],
         dim=-1,
     )
+
+def fourier_interpolate_2d_torch(ain, shapeout,correct_norm = True):
+    """Perfoms a fourier interpolation on array ain so that its shape matches
+    that given by shapeout.
+
+    Arguments:   
+    ain      -- Input numpy array
+    shapeout -- Shape of output array
+    correct_norm -- If True normalization such that values are conserved, if false
+                    normalization such that sum square is conserved
+    """
+    dtype = ain.dtype
+    inputComplex = iscomplex(ain)
+    # Make input complex
+    aout = torch.zeros(ain.shape[:-2 - int(inputComplex)] + (np.prod(shapeout),2), dtype=dtype)
+
+    # Get input dimensions
+    npiyin, npixin = ain.size()[-2- int(inputComplex):][:2]
+    npiyout, npixout = shapeout
+
+    # Get Fourier interpolation masks
+    # PyTorch does not yet do element-wise logic operations, so we have to do
+    # this bit in numpy
+    from .numpy_utils import Fourier_interpolation_masks
+    maskin,maskout = [torch.from_numpy(x).flatten() for x in Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)]
+
+    # Now transfer over Fourier coefficients from input to output array
+    if inputComplex:
+        ain_ = torch.fft(ain, signal_ndim=2).flatten(-3,-2)
+    else:
+        ain_ = torch.fft(to_complex(ain), signal_ndim=2).flatten(-3,-2)
+
+    aout[..., maskout,:] = ain_[..., maskin,:]
+    # fig,ax = plt.subplots(nrows=2)
+    # ax[0].imshow(aout.view(ain.shape[:-2 - int(inputComplex)] + tuple(shapeout)+(2,))[0,:,:,0].numpy())
+    # ax[1].imshow(ain_[0,:,:,0].numpy())
+    # plt.show(block=True)
+    # Fourier transform result with appropriate normalization
+    aout = aout.reshape(ain.shape[:-2 - int(inputComplex)] + tuple(shapeout)+(2,))
+    aout = torch.ifft(aout,signal_ndim=2) 
+    if correct_norm: 
+        aout *= np.prod(shapeout) / np.prod([npiyin,npixin])
+    else:
+        aout *= np.sqrt( np.prod(shapeout) / np.prod([npiyin,npixin]))
+    
+    # Return correct array data type
+    if inputComplex:
+        return aout
+    return aout[re]

@@ -71,24 +71,7 @@ def bandwidth_limit_array(arrayin, limit=2 / 3):
 
     return array
 
-
-def fourier_interpolate_2d(ain, shapeout):
-    """Perfoms a fourier interpolation on array ain so that its shape matches
-    that given by shapeout.
-
-    Arguments:   
-    ain      -- Input numpy array
-    shapeout -- Shape of output array
-    """
-    # Import required FFT functions
-    from numpy.fft import fftshift, fft2, ifft2
-
-    # Make input complex
-    aout = np.zeros(np.shape(ain)[:-2] + tuple(shapeout), dtype=np.complex)
-
-    # Get input dimensions
-    npiyin, npixin = np.shape(ain)[-2:]
-    npiyout, npixout = shapeout
+def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
 
     # Construct input and output fft grids
     qyin, qxin, qyout, qxout = [
@@ -120,6 +103,29 @@ def fourier_interpolate_2d(ain, shapeout):
         np.logical_and(qqxout <= maxqx, qqxout >= minqx),
         np.logical_and(qqyout <= maxqy, qqyout >= minqy),
     )
+
+    return maskin,maskout
+
+def fourier_interpolate_2d(ain, shapeout):
+    """Perfoms a fourier interpolation on array ain so that its shape matches
+    that given by shapeout.
+
+    Arguments:   
+    ain      -- Input numpy array
+    shapeout -- Shape of output array
+    """
+    # Import required FFT functions
+    from numpy.fft import fftshift, fft2, ifft2
+
+    # Make input complex
+    aout = np.zeros(np.shape(ain)[:-2] + tuple(shapeout), dtype=np.complex)
+
+    # Get input dimensions
+    npiyin, npixin = np.shape(ain)[-2:]
+    npiyout, npixout = shapeout
+
+    #Get Fourier interpolation masks
+    maskin,maskout = Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)
 
     # Now transfer over Fourier coefficients from input to output array
     aout[..., maskout] = fft2(np.asarray(ain, dtype=np.complex))[..., maskin]
