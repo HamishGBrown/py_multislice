@@ -52,6 +52,7 @@ def electron_scattering_factor(Z, gsq, units="VA"):
     elif units == "A":
         return fe
 
+
 def calculate_scattering_factors(gridshape, gridsize, elements):
     """Calculates the electron scattering factors on a reciprocal space
         grid of pixel size pixels assuming a unit cell tiling given by 
@@ -69,6 +70,7 @@ def calculate_scattering_factors(gridshape, gridsize, elements):
         fe[ielement, :, :] = electron_scattering_factor(element, gsq)
 
     return fe
+
 
 def find_equivalent_sites(positions, EPS=1e-3):
     """Finds equivalent atomic sites, ie two atoms sharing the same 
@@ -397,8 +399,6 @@ class crystal:
             return torch.ifft(T, signal_ndim=2)
         return T
 
-    
-
     def make_potential(
         self,
         pixels,
@@ -575,7 +575,7 @@ class crystal:
         # Option to precalculate scattering factors and pass to program which
         # saves computation for
         if fe is None:
-            fe_ = calculate_scattering_factors(psize,gsize,elements)
+            fe_ = calculate_scattering_factors(psize, gsize, elements)
         else:
             fe_ = fe
 

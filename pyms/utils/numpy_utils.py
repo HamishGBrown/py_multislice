@@ -9,7 +9,7 @@ def q_space_array(pixels, gridsize):
     (y size, x size)"""
     return np.meshgrid(
         *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
-    )
+    )[::-1]
 
 
 def crop_window_to_flattened_indices(indices, shape):

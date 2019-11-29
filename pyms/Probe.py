@@ -1,4 +1,5 @@
 import numpy as np
+from .utils.numpy_utils import q_space_array
 
 
 class aberration:
@@ -51,15 +52,6 @@ def aberration_starter_pack():
     aberrations.append(aberration("C54", "R5", "5th order rosette", 0.0, 0.0, 5, 4))
     aberrations.append(aberration("C56", "A5", "6-Fold astig.    ", 0.0, 0.0, 5, 6))
     return aberrations
-
-
-def q_space_array(pixels, gridsize):
-    """Returns the appropriately scaled 2D reciprocal space array for pixel size
-    given by pixels (#y pixels, #x pixels) and real space size given by gridsize
-    (y size, x size)"""
-    return np.meshgrid(
-        *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
-    )
 
 
 def chi(q, qphi, lam, df=0.0, aberrations=[]):
@@ -147,7 +139,7 @@ def make_contrast_transfer_function(
 
     # Calculate azimuth of reciprocal space array in case it is required for
     # aberrations
-    qphi = np.arctan2(q[0], q[1])
+    qphi = np.arctan2(q[0] - optic_axis[0], q[1] - optic_axis[1])
 
     # Only calculate CTF for region within the aperture
     mask = qarray2 < app_
@@ -204,7 +196,7 @@ def focused_probe(
 
 
 def plane_wave_illumination(
-    gridshape, gridsize, tilt=[0, 0], eV=None, tilt_units="mrad",qspace=False
+    gridshape, gridsize, tilt=[0, 0], eV=None, tilt_units="mrad", qspace=False
 ):
     """Create plane wave illumination with transverse momentum given by vector
        tilt in units of inverse Angstrom or mrad. To maintain periodicitiy of 

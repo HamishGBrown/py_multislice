@@ -31,7 +31,7 @@ from .utils.torch_utils import (
 )
 
 
-def make_propagators(pixelsize, gridsize, eV, subslices=[1.0]):
+def make_propagators(pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0]):
     """Make the Fresnel freespace propagators for a multislice simulation.
 
     Keyword arguments:
@@ -44,13 +44,18 @@ def make_propagators(pixelsize, gridsize, eV, subslices=[1.0]):
                  subsliced. The last entry should always be 1.0. For example,
                  to slice the object into four equal sized slices pass
                  [0.25,0.5,0.75,1.0]
+    tilt      -- Allows the user to simulate a (small < 50 mrad) tilt of the
+                 specimen, units in mrad.
     """
-    from .Probe import make_contrast_transfer_function
+    from .Probe import make_contrast_transfer_function, wavev
 
     # We will use the make_contrast_transfer_function function to generate the propagator, the
     # aperture of this propagator will supply the bandwidth limit of our simulation
     # it must be 2/3rds of our pixel gridsize
     app = np.amax(np.asarray(pixelsize) / np.asarray(gridsize[:2]) / 2)
+
+    # Shift of optic axis to take
+    optic_axis = np.asarray(tilt) * 1e-3 * wavev(eV)
 
     # Intitialize array
     prop = np.zeros((len(subslices), *pixelsize), dtype=np.complex)
@@ -63,7 +68,13 @@ def make_propagators(pixelsize, gridsize, eV, subslices=[1.0]):
         # Calculate propagator
         prop[islice, :, :] = bandwidth_limit_array(
             make_contrast_transfer_function(
-                pixelsize, gridsize[:2], eV, app, df=deltaz, app_units="invA"
+                pixelsize,
+                gridsize[:2],
+                eV,
+                app,
+                df=deltaz,
+                app_units="invA",
+                optic_axis=optic_axis,
             )
         )
 
@@ -337,7 +348,7 @@ def STEM(
 ):
     """Perform a STEM image simulation.
 
-    Keyword arguments:
+    Arguments:
     rsize       -- The real space size of the grid in Angstroms
     probe       -- The probe that will be rastered over the object
     method      -- A function that takes a probe and propagates it to the exit
@@ -347,6 +358,8 @@ def STEM(
                    sampling requirements
     alpha       -- The convergence angle of the probe in mrad, needed to work 
                    out probe sampling requirements
+    
+    Keyword arguments
     S           -- A scattering matrix object to perform STEM simulations with
                    using the PRISM algorithm (optional)
     batch_size  -- Number of probes to perform multislice on simultaneously
@@ -549,7 +562,7 @@ class scattering_matrix:
         rsize,
         propagators,
         transmission_functions,
-        nslices,
+        nslice,
         eV,
         alpha,
         GPU_streaming=False,
@@ -563,6 +576,7 @@ class scattering_matrix:
         bandwidth_limit=2 / 3,
         Fourier_space_output=False,
         subslicing=False,
+        transposed = False
     ):
         """Make a scattering matrix for dynamical scattering calculations using 
         the PRISM algorithm"""
@@ -632,7 +646,7 @@ class scattering_matrix:
         self.tiling = tiling
         self.nsubslices = propagators.shape[0]
         self.nslices = generate_slice_indices(
-            nslices, propagators.shape[0], subslicing=False
+            nslice, propagators.shape[0], subslicing=False
         )
         self.GPU_streaming = GPU_streaming
 
@@ -649,19 +663,39 @@ class scattering_matrix:
         self.initialized = False
         # Propagate wave functions of scattering matrix
         self.current_slice = 0
-        self.Propagate(nslices, propagators, transmission_functions)
+        self.Propagate(nslice, propagators, transmission_functions)
 
     def Propagate(
         self,
         nslice,
         propagators,
         transmission_functions,
+        subslicing = False,
         batch_size=3,
-        direction=1,
-        subslicing=False,
         showProgress=True,
     ):
-        """Propagate a scattering matrix to slice nslice of the specimen"""
+        """Propagate a scattering matrix to slice nslice of the specimen
+        Arguments:
+        nslice      -- The slice in the specimen to propagate the scattering
+                       matrix to
+        propagators -- Fresnel free space operators required for the multislice
+                       algorithm used to propagate the scattering matrix
+        transmission_functions -- The transmission functions describing the
+                        electron's interaction with the specimen for the 
+                        multislice algorithm
+        
+        Keyword arguments
+        batch_size  -- The multislice algorithm can be performed on multiple
+                       scattering matrix columns at once to parrallelize 
+                       computation
+        subslicing  -- Pass subslicing=True to access propagation to sub-slices
+                       of the unit cell, in this case nslices is taken to be
+                       in units of subslices to propagate rather than unit-cells
+                       (i.e. nslices = 3 will propagate 1.5 unit cells for 
+                       a subslicing of 2 subslices per unit cell)
+        showProgress -- Pass showProgress = False to disable live progress 
+                        readout
+        """
         from .utils.torch_utils import (
             cx_from_numpy,
             crop_to_bandwidth_limit_torch,
@@ -669,14 +703,45 @@ class scattering_matrix:
         )
         from .Probe import plane_wave_illumination
 
+        # Initialize scattering matrix if necessary
+        if not self.initialized:
+            if self.Fourier_space_output:
+                self.S = torch.zeros(
+                    self.nbeams, self.nbout, 2, dtype=self.dtype, device=self.device
+                )
+            elif not self.initialized:
+
+                self.stored_gridshape = size_of_bandwidth_limited_array(
+                    transmission_functions.size()[-3:-1]
+                )
+
+                self.S = torch.zeros(
+                    self.nbeams,
+                    *self.stored_gridshape,
+                    2,
+                    dtype=self.dtype,
+                    device=self.device
+                )
+
+        #Work out direction of propagation through specimen
         direction = np.sign(nslice - self.current_slice)
-        slices = generate_slice_indices(nslice, self.nsubslices)
+
+        #Generate slice indices for multislice algorithm
+        slices = generate_slice_indices(nslice, self.nsubslices,subslicing)
+
+        #Catch empty slices array
+        if slices.size==0: 
+            self.nslices = [0]
+            return
+
+        #Check if this slice of propagation is greater than previous limits
         if np.amax(slices) > np.amax(self.nslices):
+            # If so generate list containing extra slices
             newslices = generate_slice_indices(nslice, self.nsubslices)
-            # Add new slices onto list if propagating beyond previous maxima
+            # Add new slices onto existing list of slices
             newslices = np.arange(np.amax(self.nslices) + 1, np.amax(newslices))
             self.nslices = np.concatenate([self.nslices, newslices])
-            # and new seeds for multislice
+            # and new seeds to determine random translations for multislice
             self.seed = np.concatenate(
                 [self.seed, np.random.randint(0, 2 ** 32 - 1, size=len(newslices))]
             )
@@ -690,23 +755,7 @@ class scattering_matrix:
         else:
             slices = np.arange(self.current_slice, slices[-1], direction)
 
-        # Initialize scattering matrix if necessary
-        if not self.initialized and self.Fourier_space_output:
-            self.S = torch.zeros(
-                self.nbeams, self.nbout, 2, dtype=self.dtype, device=self.device
-            )
-        elif not self.initialized:
 
-            self.stored_gridshape = size_of_bandwidth_limited_array(
-                transmission_functions.size()[-3:-1]
-            )
-            self.S = torch.zeros(
-                self.nbeams,
-                *self.stored_gridshape,
-                2,
-                dtype=self.dtype,
-                device=self.device
-            )
 
         # Initialize array that will be used as input to the multislice routine
         psi = torch.zeros(
@@ -720,6 +769,8 @@ class scattering_matrix:
             propagators = ensure_torch_array(propagators).cuda()
             transmission_functions = ensure_torch_array(transmission_functions).cuda()
 
+        # Loop over the different plane wave components (or columns) of the
+        # scattering matrix
         for i in tqdm(
             range(int(np.ceil(self.nbeams / batch_size))), disable=not showProgress
         ):
