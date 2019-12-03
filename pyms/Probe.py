@@ -210,7 +210,11 @@ def plane_wave_illumination(
     # Case of an untilted plane wave (phase is zero everywhere)
     if tilt[0] == 0 and tilt[1] == 0:
         illum[:, :] = 1 / np.sqrt(np.product(gridshape))
-        return illum
+
+        if qspace:
+            return np.fft.fft2(illum)
+        else:
+            return illum
 
     # If units of the tilt are given in mrad, convert to inverse Angstrom
     if tilt_units == "mrad":

@@ -241,7 +241,7 @@ class orbital:
 
 
 def transition_potential(
-    orb1, orb2, gridshape, gridsize, ml, mlprime, eV, bandwidth_limiting=2.0 / 3
+    orb1, orb2, gridshape, gridsize, ml, mlprime, eV, bandwidth_limiting=2.0 / 3,qspace=False
 ):
     """Evaluate an inelastic transition potential for excitation of an
        electron from orbital 1 to orbital 2 on grid with shape gridshape
@@ -283,7 +283,10 @@ def transition_potential(
     qphi = np.arctan2(qgrid[1][np.newaxis, :], qgrid[0][:, np.newaxis])
 
     # Maximum coordinate at which transition potential will be evaluated
-    qmax = np.amax(qabs) * bandwidth_limiting
+    if not bandwidth_limiting is None:
+        qmax = np.amax(qabs) * bandwidth_limiting
+    else:
+        qmax = np.amax(qabs)
 
     # Initialize output array
     Hn0 = np.zeros(gridshape, dtype=np.complex)
@@ -407,11 +410,14 @@ def transition_potential(
     # #pixels to get correct units from inverse Fourier transform
     Hn0 *= np.prod(gridshape) ** 1.5 / np.prod(gridsize)
 
+    # Apply constants
+    Hn0 = qe / 4 / np.pi ** 2 / eps0 * sigma * Hn0 / qabs ** 2 * np.sqrt(2)
+
     # Return result of Eq. (10) from Dwyer Ultramicroscopy 104 (2005) 141-151
     # in real space
-    return (
-        qe / 4 / np.pi ** 2 / eps0 * sigma * np.fft.ifft2(Hn0 / qabs ** 2) * np.sqrt(2)
-    )
+    if not qspace: Hn0 = np.fft.ifft2(Hn0)
+    
+    return Hn0
     # return 2*np.pi**1.5/a0**3*np.fft.ifft2(Hn0/qabs**2,norm='ortho')
     # return 2*np.pi**1.5/a0**2*const*np.fft.ifft2(Hn0/qabs**2,norm='ortho')
 

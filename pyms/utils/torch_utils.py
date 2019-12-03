@@ -736,7 +736,7 @@ def fourier_interpolate_2d_torch(ain, shapeout,correct_norm = True):
     dtype = ain.dtype
     inputComplex = iscomplex(ain)
     # Make input complex
-    aout = torch.zeros(ain.shape[:-2 - int(inputComplex)] + (np.prod(shapeout),2), dtype=dtype)
+    aout = torch.zeros(ain.shape[:-2 - int(inputComplex)] + (np.prod(shapeout),2), dtype=dtype,device=ain.device)
 
     # Get input dimensions
     npiyin, npixin = ain.size()[-2- int(inputComplex):][:2]

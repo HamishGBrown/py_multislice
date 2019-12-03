@@ -159,7 +159,7 @@ def oned_shift(N, shift, pixel_units=True):
     return np.exp(-2 * np.pi * 1j * shiftarray * shift)
 
 
-def fourier_shift(arrayin, shift, qspace=False, pixel_units=True):
+def fourier_shift(arrayin, shift,qspacein=False, qspaceout=False, pixel_units=True):
     """Shifts a 2d array by an amount given in the tuple shift 
     using the Fourier shift theorem."""
 
@@ -180,10 +180,13 @@ def fourier_shift(arrayin, shift, qspace=False, pixel_units=True):
     else:
         array = arrayin
 
-    if not qspace:
+    if not qspacein:
         array = np.fft.fft2(array)
 
-    array = np.fft.ifft2(shiftarray * array)
+    array = shiftarray * array
+
+    if not qspaceout:
+        array = np.fft.ifft2(array)
 
     if real:
         return np.real(array)

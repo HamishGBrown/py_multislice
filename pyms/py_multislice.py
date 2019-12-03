@@ -116,10 +116,9 @@ def multislice(
 
     # If a single integer is passed to the routine then Seed random number generator,
     # , if None then np.random.RandomState will use the system clock as a seed
-    seed_initialized = False
-    if isinstance(seed, int) or (seed is None):
+    seed_provided = not (seed is None)
+    if not seed_provided:
         r = np.random.RandomState(seed)
-        seed_initialized = True
 
     # Initialize device cuda if available, CPU if no cuda is available
     device = get_device(device_type)
@@ -144,7 +143,7 @@ def multislice(
 
         # If an array-like object is passed then this will be used to uniquely
         # and reproducibly seed each iteration of the multislice algorithm
-        if not seed_initialized:
+        if seed_provided:
             r = np.random.RandomState(seed[islice])
 
         subslice = islice % nsubslices
@@ -193,7 +192,7 @@ def multislice(
             psi = complex_mul(
                 torch.ifft(
                     complex_mul(
-                        torch.fft(psi, signal_ndim=2), P[subslice, ...], reverse
+                        torch.fft(psi, signal_ndim=2), P[subslice], reverse
                     ),
                     signal_ndim=2,
                 ),
@@ -201,11 +200,11 @@ def multislice(
                 reverse,
             )
         else:
-            psi = complex_mul(
-                torch.fft(complex_mul(psi, T_), signal_ndim=2), P[subslice, ...]
-            )
+            psi = complex_mul(torch.fft(complex_mul(psi, T_), signal_ndim=2), P[subslice])
 
         if i == len(slices) - 1 and output_to_bandwidth_limit:
+            if (transpose or reverse):
+                psi = torch.fft(psi, signal_ndim=2)
             # The probe can be cropped to the bandwidth limit, this removes
             # superfluous array entries in reciprocal space that are zero
             # Since the next inverse FFT will apply a factor equal to the
@@ -218,11 +217,18 @@ def multislice(
             psi *= torch.sqrt(
                 torch.prod(torch.tensor(psi.size()[-3:-1], dtype=T.dtype))
             )
+            if (transpose or reverse) and not qspace_out:
+                psi = torch.ifft(psi, signal_ndim=2)
 
         # This logic statement allows for the probe to be returned
         # in reciprocal space
-        if not (qspace_out and i == len(slices) - 1):
+        # TODO the not (transpose or reverse) is a quick fix needs to be better
+        # thought out long term for predictable behaviour
+        if not np.all([qspace_out, i == len(slices) - 1]) and (not (transpose or reverse)):
             psi = torch.ifft(psi, signal_ndim=2)
+
+    if (transpose or reverse) and qspace_out:
+        psi = torch.fft(psi, signal_ndim=2)
 
     if return_numpy:
         return cx_to_numpy(psi)
@@ -599,6 +605,7 @@ class scattering_matrix:
 
         # Make a list of beams in the scattering matrix
         q = q_space_array(gridshape, rsize)
+        self.PRISM_factor = PRISM_factor
         self.beams = np.argwhere(
             np.logical_and(
                 np.logical_and(
@@ -608,7 +615,7 @@ class scattering_matrix:
                             np.fft.fftfreq(gridshape[0], d=1 / gridshape[0]).astype(
                                 np.int
                             ),
-                            PRISM_factor[0],
+                            self.PRISM_factor[0],
                         )
                         == 0
                     )[:, np.newaxis],
@@ -616,7 +623,7 @@ class scattering_matrix:
                 (
                     np.mod(
                         np.fft.fftfreq(gridshape[1], d=1 / gridshape[1]).astype(np.int),
-                        PRISM_factor[1],
+                        self.PRISM_factor[1],
                     )
                     == 0
                 )[np.newaxis, :],
@@ -645,10 +652,11 @@ class scattering_matrix:
         self.Fourier_space_output = Fourier_space_output
         self.tiling = tiling
         self.nsubslices = propagators.shape[0]
-        self.nslices = generate_slice_indices(
-            nslice, propagators.shape[0], subslicing=False
+        slices = generate_slice_indices(
+            nslice, propagators.shape[0], subslicing=subslicing
         )
         self.GPU_streaming = GPU_streaming
+        self.transposed=transposed
 
         self.seed = seed
         if self.seed is None:
@@ -656,14 +664,14 @@ class scattering_matrix:
             # the multislice algorithm. This ensure that each column in the scattering
             # matrix sees the same frozen phonon configuration
 
-            self.seed = np.random.randint(0, 2 ** 32 - 1, size=len(self.nslices))
+            self.seed = np.random.randint(0, 2 ** 32 - 1, size=len(slices))
 
         # This switch tells the propagate function to initialize the Smatrix
         # to plane waves
         self.initialized = False
         # Propagate wave functions of scattering matrix
         self.current_slice = 0
-        self.Propagate(nslice, propagators, transmission_functions)
+        self.Propagate(nslice, propagators, transmission_functions,subslicing=subslicing)
 
     def Propagate(
         self,
@@ -673,6 +681,7 @@ class scattering_matrix:
         subslicing = False,
         batch_size=3,
         showProgress=True,
+        transpose=False
     ):
         """Propagate a scattering matrix to slice nslice of the specimen
         Arguments:
@@ -695,6 +704,9 @@ class scattering_matrix:
                        a subslicing of 2 subslices per unit cell)
         showProgress -- Pass showProgress = False to disable live progress 
                         readout
+        transpose   -- Make a "transposed" scattering matrix - see Brown et al.
+                       (2019) Physical Review Research paper for a discussion
+                       of this 
         """
         from .utils.torch_utils import (
             cx_from_numpy,
@@ -709,7 +721,7 @@ class scattering_matrix:
                 self.S = torch.zeros(
                     self.nbeams, self.nbout, 2, dtype=self.dtype, device=self.device
                 )
-            elif not self.initialized:
+            else:
 
                 self.stored_gridshape = size_of_bandwidth_limited_array(
                     transmission_functions.size()[-3:-1]
@@ -722,40 +734,59 @@ class scattering_matrix:
                     dtype=self.dtype,
                     device=self.device
                 )
+            for ibeam in range(self.nbeams):
+                # Initialize S-matrix to plane-waves
+                psi = cx_from_numpy(
+                    plane_wave_illumination(
+                        self.gridshape,
+                        self.rsize[:2],
+                        tilt=self.beams[ibeam, :],
+                        tilt_units="pixels",
+                        qspace=True
+                    )
+                )
+
+                # Adjust intensity for correct normalization of S matrix rows
+                # taking into account the PRISM factor that needs to be applied
+                # when the Smatrix is evaluated (only 1/product(PRISM_factor)
+                # beams are taken and only 1/product(PRISM_factor) intensity
+                # is cropped out in real space)
+                psi *= torch.prod(torch.tensor(self.PRISM_factor, dtype=self.dtype))
+
+                if self.Fourier_space_output:
+                    self.S[ibeam, ...] = psi[
+                         self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
+                    ]
+                else:
+                    self.S[ibeam, ...] = crop_to_bandwidth_limit_torch(psi)
+            if not self.Fourier_space_output:
+                self.S = torch.ifft(self.S,signal_ndim=2,normalized=True)
+            self.initialized = True
+
+        # Make nslice_ which always accounts of subslices of the cyrstal structure
+        if subslicing:
+            nslice_ = nslice
+        else:
+            nslice_ = nslice*self.nsubslices
 
         #Work out direction of propagation through specimen
-        direction = np.sign(nslice - self.current_slice)
+        direction = np.sign(nslice_ - self.current_slice)
+        if direction == 0: direction =1
 
-        #Generate slice indices for multislice algorithm
-        slices = generate_slice_indices(nslice, self.nsubslices,subslicing)
-
-        #Catch empty slices array
-        if slices.size==0: 
-            self.nslices = [0]
-            return
-
-        #Check if this slice of propagation is greater than previous limits
-        if np.amax(slices) > np.amax(self.nslices):
-            # If so generate list containing extra slices
-            newslices = generate_slice_indices(nslice, self.nsubslices)
-            # Add new slices onto existing list of slices
-            newslices = np.arange(np.amax(self.nslices) + 1, np.amax(newslices))
-            self.nslices = np.concatenate([self.nslices, newslices])
-            # and new seeds to determine random translations for multislice
+        if nslice_ > len(self.seed):
+            # Add new seeds to determine random translations for frozen-phonon
+            # multislice (required for reversability of multislice) if required
             self.seed = np.concatenate(
-                [self.seed, np.random.randint(0, 2 ** 32 - 1, size=len(newslices))]
+                [self.seed, np.random.randint(0, 2 ** 32 - 1, size=nslice_-len(self.seed))]
             )
+        
+        #Now generate list of slices that the multislice algorithm will run through
+        slices = np.arange(self.current_slice,nslice_,direction)
+        if direction<0: slices += direction
 
-        if self.current_slice > 0:
-            slices = np.arange(
-                generate_slice_indices(self.current_slice, self.nsubslices)[-1] + 1,
-                slices[-1],
-                direction,
-            )
-        else:
-            slices = np.arange(self.current_slice, slices[-1], direction)
-
-
+        # For a transposed scattering matrix the order of the slices
+        # in multislice should be reversed
+        if self.transposed: slices = slices[::-1]
 
         # Initialize array that will be used as input to the multislice routine
         psi = torch.zeros(
@@ -769,6 +800,9 @@ class scattering_matrix:
             propagators = ensure_torch_array(propagators).cuda()
             transmission_functions = ensure_torch_array(transmission_functions).cuda()
 
+        self.current_slice = nslice_
+        if len(slices)<1: return
+
         # Loop over the different plane wave components (or columns) of the
         # scattering matrix
         for i in tqdm(
@@ -779,31 +813,13 @@ class scattering_matrix:
                 i * batch_size, min((i + 1) * batch_size, self.nbeams), dtype=np.int
             )
 
-            if self.initialized and self.Fourier_space_output:
+            if self.Fourier_space_output:
                 # Expand S-matrix input to full grid for multislice propagation
                 psi[:, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :] = self.S[beams]
-            elif self.initialized:
+            else:
                 # Fourier interpolate stored real space S-matrix column onto
                 # multislice grid
                 psi = fourier_interpolate_2d_torch(self.S[beams], self.gridshape, False)
-            else:
-                for ibeam, beam in enumerate(beams):
-                    # Initialize S-matrix to plane-waves
-                    psi[ibeam, ...] = cx_from_numpy(
-                        plane_wave_illumination(
-                            self.gridshape,
-                            self.rsize[:2],
-                            tilt=self.beams[beam, :],
-                            tilt_units="pixels",
-                        )
-                    )
-
-                # Adjust intensity for correct normalization of S matrix rows
-                # taking into account the PRISM factor that needs to be applied
-                # when the Smatrix is evaluated (only 1/product(PRISM_factor)
-                # beams are taken and only 1/product(PRISM_factor) intensity
-                # is cropped out in real space)
-                psi *= torch.prod(torch.tensor(self.PRISM_factor, dtype=self.dtype))
 
             if self.GPU_streaming:
                 psi = ensure_torch_array(psi, dtype=self.dtype).to("cuda")
@@ -816,15 +832,17 @@ class scattering_matrix:
                 self.tiling,
                 self.device,
                 self.seed,
-                return_numpy=False,
-                qspace_out=self.Fourier_space_output,
+                return_numpy = False,
+                qspace_out = self.Fourier_space_output,
+                transpose = self.transposed,
+                reverse = direction<0
             )
 
             if self.GPU_streaming:
                 output = output.to(self.device)
 
             if self.Fourier_space_output:
-                # Take into account the sqrt(# of pixels) that would have been
+                # Take into account the sqrt(# of pixels) that would otherwise have been
                 # applied by the inverse Fourier transform in the multislice routine
                 output /= torch.sqrt(
                     torch.prod(torch.tensor(self.gridshape, dtype=self.dtype))
@@ -836,8 +854,7 @@ class scattering_matrix:
             else:
                 self.S[beams, ...] = output
 
-        self.current_slice = nslice
-        self.initialized = True
+        
 
     def __call__(self, probes, nslices, posn=None):
         """Evaluate the the Smatrix probe matrix multiplication for a number
