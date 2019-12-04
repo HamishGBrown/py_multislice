@@ -191,19 +191,19 @@ def multislice(
             # and conjugation operations
             psi = complex_mul(
                 torch.ifft(
-                    complex_mul(
-                        torch.fft(psi, signal_ndim=2), P[subslice], reverse
-                    ),
+                    complex_mul(torch.fft(psi, signal_ndim=2), P[subslice], reverse),
                     signal_ndim=2,
                 ),
                 T_,
                 reverse,
             )
         else:
-            psi = complex_mul(torch.fft(complex_mul(psi, T_), signal_ndim=2), P[subslice])
+            psi = complex_mul(
+                torch.fft(complex_mul(psi, T_), signal_ndim=2), P[subslice]
+            )
 
         if i == len(slices) - 1 and output_to_bandwidth_limit:
-            if (transpose or reverse):
+            if transpose or reverse:
                 psi = torch.fft(psi, signal_ndim=2)
             # The probe can be cropped to the bandwidth limit, this removes
             # superfluous array entries in reciprocal space that are zero
@@ -224,7 +224,9 @@ def multislice(
         # in reciprocal space
         # TODO the not (transpose or reverse) is a quick fix needs to be better
         # thought out long term for predictable behaviour
-        if not np.all([qspace_out, i == len(slices) - 1]) and (not (transpose or reverse)):
+        if not np.all([qspace_out, i == len(slices) - 1]) and (
+            not (transpose or reverse)
+        ):
             psi = torch.ifft(psi, signal_ndim=2)
 
     if (transpose or reverse) and qspace_out:
@@ -582,7 +584,7 @@ class scattering_matrix:
         bandwidth_limit=2 / 3,
         Fourier_space_output=False,
         subslicing=False,
-        transposed = False
+        transposed=False,
     ):
         """Make a scattering matrix for dynamical scattering calculations using 
         the PRISM algorithm"""
@@ -656,7 +658,7 @@ class scattering_matrix:
             nslice, propagators.shape[0], subslicing=subslicing
         )
         self.GPU_streaming = GPU_streaming
-        self.transposed=transposed
+        self.transposed = transposed
 
         self.seed = seed
         if self.seed is None:
@@ -671,17 +673,19 @@ class scattering_matrix:
         self.initialized = False
         # Propagate wave functions of scattering matrix
         self.current_slice = 0
-        self.Propagate(nslice, propagators, transmission_functions,subslicing=subslicing)
+        self.Propagate(
+            nslice, propagators, transmission_functions, subslicing=subslicing
+        )
 
     def Propagate(
         self,
         nslice,
         propagators,
         transmission_functions,
-        subslicing = False,
+        subslicing=False,
         batch_size=3,
         showProgress=True,
-        transpose=False
+        transpose=False,
     ):
         """Propagate a scattering matrix to slice nslice of the specimen
         Arguments:
@@ -742,7 +746,7 @@ class scattering_matrix:
                         self.rsize[:2],
                         tilt=self.beams[ibeam, :],
                         tilt_units="pixels",
-                        qspace=True
+                        qspace=True,
                     )
                 )
 
@@ -755,38 +759,44 @@ class scattering_matrix:
 
                 if self.Fourier_space_output:
                     self.S[ibeam, ...] = psi[
-                         self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
+                        self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
                     ]
                 else:
                     self.S[ibeam, ...] = crop_to_bandwidth_limit_torch(psi)
             if not self.Fourier_space_output:
-                self.S = torch.ifft(self.S,signal_ndim=2,normalized=True)
+                self.S = torch.ifft(self.S, signal_ndim=2, normalized=True)
             self.initialized = True
 
         # Make nslice_ which always accounts of subslices of the cyrstal structure
         if subslicing:
             nslice_ = nslice
         else:
-            nslice_ = nslice*self.nsubslices
+            nslice_ = nslice * self.nsubslices
 
-        #Work out direction of propagation through specimen
+        # Work out direction of propagation through specimen
         direction = np.sign(nslice_ - self.current_slice)
-        if direction == 0: direction =1
+        if direction == 0:
+            direction = 1
 
         if nslice_ > len(self.seed):
             # Add new seeds to determine random translations for frozen-phonon
             # multislice (required for reversability of multislice) if required
             self.seed = np.concatenate(
-                [self.seed, np.random.randint(0, 2 ** 32 - 1, size=nslice_-len(self.seed))]
+                [
+                    self.seed,
+                    np.random.randint(0, 2 ** 32 - 1, size=nslice_ - len(self.seed)),
+                ]
             )
-        
-        #Now generate list of slices that the multislice algorithm will run through
-        slices = np.arange(self.current_slice,nslice_,direction)
-        if direction<0: slices += direction
+
+        # Now generate list of slices that the multislice algorithm will run through
+        slices = np.arange(self.current_slice, nslice_, direction)
+        if direction < 0:
+            slices += direction
 
         # For a transposed scattering matrix the order of the slices
         # in multislice should be reversed
-        if self.transposed: slices = slices[::-1]
+        if self.transposed:
+            slices = slices[::-1]
 
         # Initialize array that will be used as input to the multislice routine
         psi = torch.zeros(
@@ -801,7 +811,8 @@ class scattering_matrix:
             transmission_functions = ensure_torch_array(transmission_functions).cuda()
 
         self.current_slice = nslice_
-        if len(slices)<1: return
+        if len(slices) < 1:
+            return
 
         # Loop over the different plane wave components (or columns) of the
         # scattering matrix
@@ -832,10 +843,10 @@ class scattering_matrix:
                 self.tiling,
                 self.device,
                 self.seed,
-                return_numpy = False,
-                qspace_out = self.Fourier_space_output,
-                transpose = self.transposed,
-                reverse = direction<0
+                return_numpy=False,
+                qspace_out=self.Fourier_space_output,
+                transpose=self.transposed,
+                reverse=direction < 0,
             )
 
             if self.GPU_streaming:
@@ -853,8 +864,6 @@ class scattering_matrix:
                 ]
             else:
                 self.S[beams, ...] = output
-
-        
 
     def __call__(self, probes, nslices, posn=None):
         """Evaluate the the Smatrix probe matrix multiplication for a number

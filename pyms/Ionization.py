@@ -8,6 +8,7 @@ import torch
 import tqdm
 from .Probe import wavev, relativistic_mass_correction
 from .crystal import interaction_constant
+from .utils.numpy_utils import fourier_shift
 
 # from py_multislice import wavev, relativistic_mass_correction, interaction_constant
 
@@ -57,7 +58,7 @@ def colorize(z, ccc=None, max=None, min=None, gamma=1):
 
 
 class orbital:
-    def __init__(self, Z: int, config: str, n: int, l: int, epsilon=0):
+    def __init__(self, Z: int, config: str, n: int, l: int, epsilon=1):
         """Initialize the orbital class and return an orbital 
            object.
            Parameters:
@@ -76,6 +77,7 @@ class orbital:
         self.n = n
         self.l = l
         if self.n == 0:
+            assert epsilon > 0, "Energy of continuum electron must be > 0"
             self.epsilon = epsilon
 
         # Use pfac (Python flexible atomic code) interface to
@@ -241,7 +243,15 @@ class orbital:
 
 
 def transition_potential(
-    orb1, orb2, gridshape, gridsize, ml, mlprime, eV, bandwidth_limiting=2.0 / 3,qspace=False
+    orb1,
+    orb2,
+    gridshape,
+    gridsize,
+    ml,
+    mlprime,
+    eV,
+    bandwidth_limiting=2.0 / 3,
+    qspace=False,
 ):
     """Evaluate an inelastic transition potential for excitation of an
        electron from orbital 1 to orbital 2 on grid with shape gridshape
@@ -415,8 +425,9 @@ def transition_potential(
 
     # Return result of Eq. (10) from Dwyer Ultramicroscopy 104 (2005) 141-151
     # in real space
-    if not qspace: Hn0 = np.fft.ifft2(Hn0)
-    
+    if not qspace:
+        Hn0 = np.fft.ifft2(Hn0)
+
     return Hn0
     # return 2*np.pi**1.5/a0**3*np.fft.ifft2(Hn0/qabs**2,norm='ortho')
     # return 2*np.pi**1.5/a0**2*const*np.fft.ifft2(Hn0/qabs**2,norm='ortho')
@@ -469,7 +480,9 @@ def transition_potential_multislice(
     ionization_potentials = ensure_torch_array(
         ionization_potentials, dtype=dtype, device=device
     )
-    image_CTF = ensure_torch_array(image_CTF, dtype=dtype, device=device)
+
+    if not image_CTF is None:
+        image_CTF = ensure_torch_array(image_CTF, dtype=dtype, device=device)
     propagators = ensure_torch_array(propagators, dtype=dtype, device=device)
     probes = ensure_torch_array(probes, dtype=dtype, device=device)
 
@@ -566,196 +579,38 @@ def transition_potential_multislice(
         return output.cpu().numpy()
     return output
 
+def make_transition_potentials(gridshape,rsize,eV,Z,epsilon,boundQuantumNumbers,boundConfiguration,freeQuantumNumbers,freeConfiguration,qspace = False):
+    
+    boundOrbital = orbital(Z, boundConfiguration, *boundQuantumNumbers[:2])
 
-def Smatrix_STEM_EELS(
-    probe,
-    nslices,
-    subslices,
-    propagators,
-    transmission_functions,
-    ionization_potentials,
-    ionization_sites,
-    tiling=None,
-    device_type=None,
-    seed=None,
-    return_numpy=True,
-    qspace_in=False,
-    posn=None,
-    image_CTF=None,
-    threshhold=1e-4,
-    showProgress=True,
-):
-    from .py_multislice import scattering_matrix
+    nstates = len(freeQuantumNumbers)
+    Hn0 = np.zeros((nstates,*gridshape),dtype=np.complex)
 
-    # from .utils.torch_utils import amplitude,complex_mul,modulus_square,get_device,ensure_torch_array,fourier_shift,cx_to_numpy
-
-    # Number of subslices
-    nsubslices = len(subslices)
-
-    # Get grid shape
-    gridshape = np.asarray(transmission_functions.size()[-3:-1])
-
-    # Total number of slices in multislice
-    niterations = nslices * nsubslices
-
-    if device_type is None:
-        device = transmission_functions.device
-
-    # Ensure pytorch arrays
-    transmission_functions = ensure_torch_array(transmission_functions, device=device)
-    dtype = transmission_functions.dtype
-    ionization_potentials = ensure_torch_array(
-        ionization_potentials, dtype=dtype, device=device
-    )
-    image_CTF = ensure_torch_array(image_CTF, dtype=dtype, device=device)
-    propagators = ensure_torch_array(propagators, dtype=dtype, device=device)
-    probes = ensure_torch_array(probes, dtype=dtype, device=device)
-
-    if not threshhold is None:
-        trigger = np.zeros((ionization_potentials.size(0),))
-        for i, ionization_potential in enumerate(ionization_potentials):
-            trigger[i] = (
-                threshhold * modulus_square(ionization_potential) / np.prod(gridshape)
-            )
-
-    # Ionization potentials must be in reciprocal space
-    ionization_potentials = torch.fft(ionization_potentials, signal_ndim=2)
-
-    # Diffraction pattern
-    if image_CTF is None:
-        output = torch.zeros(*probes.size()[:-1], device=device_type, dtype=dtype)
-    else:
-        output = torch.zeros(*image_CTF.size()[:-1], device=device_type, dtype=dtype)
-
-    # If Fourier space probes are passed, inverse Fourier transform them
-    if qspace_in:
-        probes = torch.ifft(probes, signal_ndim=2)
-
-    # Loop over slices of specimens
-    for i in tqdm.tqdm(range(niterations), disable=not showProgress):
-
-        subslice = i % nsubslices
-
-        # Find inelastic transitions within this slice
-        zmin = 0 if subslice == 0 else subslices[subslice - 1]
-        atoms_in_slice = np.nonzero(
-            (ionization_sites[:, 2] % 1.0 >= zmin)
-            & (ionization_sites[:, 2] % 1.0 < subslices[subslice])
+    for istate,Qnumbers in enumerate(freeQuantumNumbers):
+        freeOrbital = orbital(Z, freeConfiguration, 0, Qnumbers[0], epsilon=epsilon)
+        
+        #Calculate transition on same grid as multislice
+        Hn0[istate] = transition_potential(
+            boundOrbital,
+            freeOrbital,
+            gridshape,
+            rsize,
+            boundQuantumNumbers[2],
+            Qnumbers[1],
+            eV,
+            bandwidth_limiting=None,
+            qspace=qspace,
         )
 
-        # Loop over inelastic transitions within the slice
-        for atom in tqdm.tqdm(atoms_in_slice[0], disable=not showProgress):
+    return Hn0
 
-            for j, ionization_potential in enumerate(ionization_potentials):
-
-                # Calculate inelastically scattered wave for ionization transition
-                # potential shifted to position of slice
-                posn = (
-                    torch.from_numpy(ionization_sites[atom, :2] * gridshape)
-                    .type(dtype)
-                    .to(device)
-                )
-                psi_n = complex_mul(
-                    fourier_shift_torch(ionization_potential, posn, qspace_in=True),
-                    probes,
-                )
-
-                # Only propagate this wave to the exit surface if it is deemed
-                # to contribute significantly (above a user-determined threshhold)
-                # to the image. Pass threshhold = None to disable this feature
-                if not threshhold is None:
-                    if modulus_square(psi_n) < trigger[j]:
-                        continue
-
-                # Propagate to exit surface
-                psi_n = multislice(
-                    psi_n,
-                    np.arange(i, niterations),
-                    propagators,
-                    transmission_functions,
-                    tiling=tiling,
-                    qspace_out=True,
-                    subslicing=True,
-                    return_numpy=False,
-                )
-
-                # Perform imaging if requested, otherwise just accumulate diffraction
-                # pattern
-                if image_CTF is None:
-                    output += amplitude(psi_n)
-                else:
-                    output += amplitude(
-                        torch.ifft(complex_mul(psi_n, image_CTF), signal_ndim=2)
-                    )
-
-        # Propagate probe one slice
-        probes = multislice(
-            probes, [i + 1], propagators, transmission_functions, return_numpy=False
-        )
-
-    if return_numpy:
-        return output.cpu().numpy()
-    return output
-
-
-def multislice_STEM_EELS(
-    rsize,
-    probe,
-    propagators,
-    transmission_functions,
-    ionization_potentials,
-    ionization_sites,
-    nslices,
-    eV,
-    alpha,
-    batch_size=1,
-    detectors=None,
-    FourD_STEM=False,
-    datacube=None,
-    scan_posn=None,
-    dtype=None,
-    device=None,
-    tiling=[1, 1],
-    seed=None,
-    showProgress=True,
-    threshhold=1e-4,
-):
-    """Perform a STEM simulation using only the multislice algorithm"""
-    if dtype is None:
-        dtype = transmission_functions.dtype
-    if device is None:
-        device = transmission_functions.device
-
-    method = transition_potential_multislice
-    args = (subslices, propagators, transmission_functions, tiling, device, seed)
-    kwargs = {
-        "return_numpy": False,
-        "qspace_in": True,
-        "qspace_out": True,
-        "threshhold": threshhold,
-        "showProgress": showProgress,
-    }
-
-    return STEM(
-        rsize,
-        probe,
-        method,
-        nslices,
-        eV,
-        alpha,
-        batch_size=batch_size,
-        detectors=detectors,
-        FourD_STEM=FourD_STEM,
-        datacube=datacube,
-        scan_posn=scan_posn,
-        device=device,
-        tiling=tiling,
-        seed=seed,
-        showProgress=showProgress,
-        method_args=args,
-        method_kwargs=kwargs,
-    )
-
+def tile_out_ionization_image(image,tiling):
+    """For an ionization based image """
+    tiled_image = np.zeros_like(image)
+    for y in range(tiling[0]):
+        for x in range(tiling[1]):
+            tiled_image += fourier_shift(image,[y/tiling[0],x/tiling[1]],pixel_units=False)
+    return tiled_image
 
 if __name__ == "__main__":
     pass
