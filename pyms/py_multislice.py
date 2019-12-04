@@ -665,8 +665,7 @@ class scattering_matrix:
             # If no seed passed to random number generator then make one to pass to
             # the multislice algorithm. This ensure that each column in the scattering
             # matrix sees the same frozen phonon configuration
-
-            self.seed = np.random.randint(0, 2 ** 32 - 1, size=len(slices))
+            self.seed = np.random.randint(0, 2 ** 32 - 1, size=len(slices),dtype=np.uint32)
 
         # This switch tells the propagate function to initialize the Smatrix
         # to plane waves

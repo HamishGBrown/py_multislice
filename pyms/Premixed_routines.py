@@ -1,3 +1,8 @@
+# The py_multislice library provides users with the ability to put their 
+# own simulations together using the "building blocks" of py_multislice.
+# For standard simulation types the premixed_routines.py functions 
+# allows users to set up simulations faster and easier.
+
 import numpy as np
 import torch
 import tqdm
@@ -147,10 +152,7 @@ def STEM_EELS_PRISM(
     # interest
     S1 = scattering_matrix(rsize, P, T, 0, eV, app, batch_size=5, subslicing=True,PRISM_factor=PRISM_factor)
 
-    
-
-
-    # Scattering matrix 2 propagates probe from slice of interest to exit surface
+    # Scattering matrix 2 propagates probe from slice of ionization to exit surface
     S2 = scattering_matrix(
         rsize,
         P,

@@ -689,7 +689,7 @@ def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
         % gridshape[i]
         for i in range(2)
     ]
-    ind = crop_window_to_flattened_indices(ind, gridshape)
+    ind = torch.tensor(crop_window_to_flattened_indices(ind, gridshape).astype('int32'),dtype=torch.long)
 
     # flatten final two dimensions of array
     flat_shape = tuple(array.size()[: -2 - int(complx)]) + (int(np.prod(gridshape)),)
@@ -744,9 +744,10 @@ def fourier_interpolate_2d_torch(ain, shapeout,correct_norm = True):
 
     # Get Fourier interpolation masks
     # PyTorch does not yet do element-wise logic operations, so we have to do
-    # this bit in numpy
+    # this bit in numpy. Additionally, in Windows pytorch does not support 
+    # bool types so we have to convert this to a unsigned 8-bit integer.
     from .numpy_utils import Fourier_interpolation_masks
-    maskin,maskout = [torch.from_numpy(x).flatten() for x in Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)]
+    maskin,maskout = [torch.from_numpy(x.astype(np.uint8)).flatten() for x in Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)]
 
     # Now transfer over Fourier coefficients from input to output array
     if inputComplex:
