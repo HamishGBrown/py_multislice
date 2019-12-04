@@ -747,7 +747,7 @@ def fourier_interpolate_2d_torch(ain, shapeout,correct_norm = True):
     # this bit in numpy. Additionally, in Windows pytorch does not support 
     # bool types so we have to convert this to a unsigned 8-bit integer.
     from .numpy_utils import Fourier_interpolation_masks
-    maskin,maskout = [torch.from_numpy(x.astype(np.uint8)).flatten() for x in Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)]
+    maskin,maskout = [torch.from_numpy(x).flatten() for x in Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)]
 
     # Now transfer over Fourier coefficients from input to output array
     if inputComplex:

@@ -32,6 +32,8 @@ def window_indices(center, windowsize, gridshape):
 
     return (window[0][:, None] * gridshape[0] + window[1][None, :]).ravel()
 
+
+
 def STEM_EELS_multislice(
     probe,
     crystal,
@@ -102,6 +104,52 @@ def STEM_EELS_multislice(
     )
 
     return tile_out_ionization_image(EELS_image,tiling)
+
+def CBED(
+    crystal,
+    gridshape,
+    eV,
+    app,
+    thicknesses,
+    subslices=[1.0],
+    device_type=None,
+    tiling=[1, 1],
+    nT=5,
+    nfph = 25):
+
+    # Choose GPU if available and CPU if not
+    device = get_device(device_type)
+    
+    nsubslices = len(subslices)
+
+    #Size of real space grid
+    rsize = np.zeros((3,))
+    rsize[:3]  = crystal.unitcell[:3]
+    rsize[:2] *= np.asarray(tiling)
+
+    #Initialize array to store transmission functions in
+    T = torch.zeros(nT,nsubslices,*gridshape,2,device=device)
+
+    #Make transmission functions
+    for i in range(nT):
+        T[i,:,:] = crystal.make_transmission_functions(gridshape,eV,subslices,tiling,fftout=True,device=device)
+    
+    # Make Fresnel free-space propagators for multislice algorithm
+    P = pyms.make_propagators(gridshape,rsize,eV,subslices)
+
+    nslices = np.asarray(np.ceil(thicknesses/crystal.unitcell[2]),dtype=np.int)
+
+    #Iteration over frozen phonon configurations
+    for ifph in tqdm(range(nfph)):
+        # Make probe
+        probe = pyms.focused_probe(gridshape,rsize,eV,app)
+
+        # Run multislice iterating over different thickness outputs
+        for it,t in enumerate(np.diff(nslices,prepend=0)):
+            probe = pyms.multislice(probe,nslices[it]-tt,propagators,T,tiling=tiling,output_to_bandwidth_limit= False)
+            output[it,...] += np.abs(np.fft.fftshift(np.fft.fft2(probe,norm='ortho')))**2
+
+    return output
 
 def STEM_EELS_PRISM(
     crystal,
@@ -174,9 +222,6 @@ def STEM_EELS_PRISM(
     Hn0 = make_transition_potentials(gridshape,rsize,eV,Ztarget,epsilon,boundQuantumNumbers,boundConfiguration,freeQuantumNumbers,freeConfiguration)
     print(gridshape,rsize,eV,Ztarget,epsilon,boundQuantumNumbers,boundConfiguration,freeQuantumNumbers,freeConfiguration)
     fig,ax = plt.subplots(nrows = Hn0.shape[0])
-    for i,iHn0 in enumerate(Hn0):
-        ax[i].imshow(np.abs(np.fft.ifft2(iHn0)))
-    plt.show(block=True)
 
     if Hn0_crop is None:
         Hn0_crop = [ S1.stored_gridshape[i] for i in range(2)]
@@ -184,10 +229,6 @@ def STEM_EELS_PRISM(
         Hn0_crop = [min(Hn0_crop[i], S1.stored_gridshape[i]) for i in range(2)]
         Hn0 = np.fft.fft2(np.fft.ifftshift(crop(np.fft.fftshift(Hn0,axes=[-2,-1]),Hn0_crop),axes=[-2,-1]))
 
-    fig,ax = plt.subplots(nrows = Hn0.shape[0])
-    for i,iHn0 in enumerate(Hn0):
-        ax[i].imshow(np.abs(np.fft.ifft2(iHn0)))
-    plt.show(block=True)
     # Make probe wavefunction vectors for scan
     # Get kspace grid in units of inverse pixels
     ky, kx = [
@@ -263,9 +304,6 @@ def STEM_EELS_PRISM(
                 Hn0_ = np.fft.fftshift(
                     fourier_shift(Hn0[i], destination, qspacein=True)
                 ).ravel()
-                fig,ax = plt.subplots(nrows=1)
-                ax.imshow(np.abs(Hn0_).reshape(Hn0_crop))
-                plt.show(block = True)
 
                 # Convert Hn0 to pytorch Tensor
                 Hn0_ = cx_from_numpy(Hn0_, dtype=S1.S.dtype, device=device)
@@ -276,11 +314,6 @@ def STEM_EELS_PRISM(
                     # potential
                     Hn0S1 = complex_mul(Hn0_, S1component.flatten(end_dim=-2)[windex, :])
 
-                    fig,ax = plt.subplots(nrows=3)
-                    ax[0].imshow(np.abs(cx_to_numpy(Hn0S1)).reshape(Hn0_crop))
-                    ax[1].imshow(np.abs(cx_to_numpy(Hn0_)).reshape(Hn0_crop))
-                    ax[2].imshow(np.abs(cx_to_numpy( S1component.flatten(end_dim=-2)[windex, :])).reshape(Hn0_crop))
-                    plt.show(block = True)
 
                     # Matrix multiplication with second scattering matrix (takes
                     # scattered electrons to EELS detector)
@@ -291,13 +324,12 @@ def STEM_EELS_PRISM(
                 scan_mask = np.logical_and((np.abs((atom[0] - scan[0]+0.5) % 1.0 -0.5)<=1/PRISM_factor[0]/2)[:,None],
                                            (np.abs((atom[1] - scan[1]+0.5) % 1.0 -0.5)<=1/PRISM_factor[1]/2)[None,:]).ravel()
                 
-                EELS_image += torch.sum(amplitude(complex_matmul(scan_array, SHn0)), axis=1)
+                EELS_image[scan_mask] += torch.sum(amplitude(complex_matmul(scan_array[scan_mask], SHn0)), axis=1)
 
         # Reshape scattering matrix S2 for propagation
         S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape, 2))
     
     # Move EELS_image to cpu and numpy and then reshape to rectangular grid
     EELS_image = EELS_image.cpu().numpy().reshape(len(scan[0]), len(scan[1]))
-
     return tile_out_ionization_image(EELS_image,tiling)
     
