@@ -34,7 +34,7 @@ from .utils.torch_utils import (
 def make_propagators(pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0]):
     """Make the Fresnel freespace propagators for a multislice simulation.
 
-    Keyword arguments:
+    Arguments:
     pixelsize -- Pixel dimensions of the 2D grid
     gridsize  -- Size of the grid in real space (first two dimensions) and
                  thickness of the object in multislice (third dimension)
@@ -151,6 +151,13 @@ def multislice(
         # Pick random phase grating
         it = r.randint(0, nT)
 
+        # To save memory in the case of equally sliced sample, there is the option
+        # of only using one propagator, this statement catches this case.
+        if P.dim()<3:
+            P_ = P
+        else:
+            P_ = P[subslice]
+
         # If the transmission function is from a tiled unit cell then
         # there is the option of randomly shifting it around to
         # generate "more" transmission functions
@@ -191,16 +198,14 @@ def multislice(
             # and conjugation operations
             psi = complex_mul(
                 torch.ifft(
-                    complex_mul(torch.fft(psi, signal_ndim=2), P[subslice], reverse),
+                    complex_mul(torch.fft(psi, signal_ndim=2), P_, reverse),
                     signal_ndim=2,
                 ),
                 T_,
                 reverse,
             )
         else:
-            psi = complex_mul(
-                torch.fft(complex_mul(psi, T_), signal_ndim=2), P[subslice]
-            )
+            psi = complex_mul(torch.fft(complex_mul(psi, T_), signal_ndim=2), P_)
 
         if i == len(slices) - 1 and output_to_bandwidth_limit:
             if transpose or reverse:
@@ -259,78 +264,41 @@ def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     return np.where(detector, 1, 0)
 
 
-def generate_STEM_raster(gridshape, FOV, eV, alpha, tiling=[1, 1]):
-    """For field of view FOV and a focused electron probe of energy eV in
-    electron volts and probe forming aperture alpha generate the STEM scan
-    raster positions in units of pixels. Option of scanning only a single unit
-    cell if tiling = 1 is passed"""
+def generate_STEM_raster(gridshape, rsize, eV, alpha, tiling=[1, 1],ROI = [0.0,0.0,1.0,1.0]):
+    """For a grid of pixel size given by gridshape and real space size rsize
+    return probe positions for nyquist sampled STEM raster
+    
+    Arguments:
+    gridshape -- Pixel dimensions of the 2D grid
+    rsize     -- Size of the grid in real space in units of Angstroms
+    eV        -- Probe energy in electron volts
+    alpha     -- Probe forming aperture semi-angle in mrad
+
+    Keyword arguements
+    tiling    -- Tiling of grid for a repeat unit cell, STEM raster will only
+                 scan a single unit cell
+    ROI       -- Fraction of the unit cell to be scanned this array should
+                 contain [y0,x0,y1,x1] where [x0,y0] and [x1,y1] are the bottom
+                 left and top right coordinates of the region of interest (ROI)
+                 expressed as a fraction of the total grid (or unit cell)
+                 
+    """
 
     # Calculate number of scan positions in STEM scan
     from .Probe import nyquist_sampling
 
+    # Field of view in Angstrom
+    FOV = np.asarray([rsize[0]*(ROI[2]-ROI[0]),rsize[1]*(ROI[3]-ROI[1])])
+
+    # Number of scan coordinates in each dimension
     nscan = nyquist_sampling(FOV / np.asarray(tiling), eV=eV, alpha=alpha)
 
     # Generate Y and X scan coordinates
     return [
-        np.arange(0, gridshape[i] / tiling[i], step=gridshape[i] / nscan[i] / tiling[i])
+        np.arange(ROI[0+i]*gridshape[i]/tiling[i], ROI[2+i]*gridshape[i] / tiling[i], step=np.diff(ROI[i::2])[0]*gridshape[i] / nscan[i] / tiling[i])
         / gridshape[i]
         for i in range(2)
     ]
-
-
-def multislice_STEM(
-    rsize,
-    probe,
-    propagators,
-    transmission_functions,
-    nslices,
-    eV,
-    alpha,
-    batch_size=1,
-    detectors=None,
-    FourD_STEM=False,
-    datacube=None,
-    scan_posn=None,
-    dtype=None,
-    device=None,
-    tiling=[1, 1],
-    seed=None,
-    showProgress=True,
-):
-    """Perform a STEM simulation using only the multislice algorithm"""
-    if dtype is None:
-        dtype = transmission_functions.dtype
-    if device is None:
-        device = transmission_functions.device
-
-    method = multislice
-    args = (propagators, transmission_functions, tiling, device, seed)
-    kwargs = {
-        "return_numpy": False,
-        "qspace_in": True,
-        "qspace_out": True,
-        "output_to_bandwidth_limit": False,
-    }
-
-    return STEM(
-        rsize,
-        probe,
-        method,
-        nslices,
-        eV,
-        alpha,
-        batch_size=batch_size,
-        detectors=detectors,
-        FourD_STEM=FourD_STEM,
-        datacube=datacube,
-        scan_posn=scan_posn,
-        device=device,
-        tiling=tiling,
-        seed=seed,
-        showProgress=showProgress,
-        method_args=args,
-        method_kwargs=kwargs,
-    )
 
 
 def STEM(
@@ -531,11 +499,11 @@ def STEM(
         datacube = datacube.reshape(nthick, *nscan, *gridout)
 
     if conventional_STEM and return_datacube:
-        return STEM_image.reshape(ndet, nthick, *nscan), datacube
+        return np.squeeze(STEM_image.reshape(ndet, nthick, *nscan)), np.squeeze(datacube)
     if return_datacube:
-        return datacube
+        return np.squeeze(datacube)
     if conventional_STEM:
-        return STEM_image.reshape(ndet, nthick, *nscan)
+        return np.squeeze(STEM_image.reshape(ndet, nthick, *nscan))
 
 
 def unit_cell_shift(array, axis, shift, tiles):

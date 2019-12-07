@@ -311,10 +311,11 @@ class crystal:
             self.atoms[:, :3] @ olduc @ np.diag(1 / self.unitcell), 1.0
         )
 
-    def quickplot(self, atomscale=0.01, cmap=plt.get_cmap("Dark2")):
+    def quickplot(self, atomscale=None, cmap=plt.get_cmap("Dark2")):
         """Makes a quick 3D scatter plot of the crystal"""
         from mpl_toolkits.mplot3d import Axes3D
 
+        if atomscale is None: atomscale = 1e-3*np.amax(self.unitcell)
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
         colors = cmap(self.atoms[:, 3] / np.amax(self.atoms[:, 3]))
@@ -552,7 +553,8 @@ class crystal:
         P = P.view(nelements, nsubslices, *pixels, 2)
 
         # FFT potential to reciprocal space
-        P = torch.fft(P, signal_ndim=2)
+        for i in range(P.shape[0]):
+            P[i] = torch.fft(P[i], signal_ndim=2)
 
         # Make sinc functions with appropriate singleton dimensions for pytorch
         # broadcasting /gridsize[0]*pixels[0] /gridsize[1]*pixels[1]

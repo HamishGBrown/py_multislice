@@ -165,12 +165,11 @@ def focused_probe(
     ---------
     pix_dim --- The pixel size of the grid
     real_dim --- The size of the grid in Angstrom
-    keV --- The energy of the probe electrons in keVnews
+    eV --- The energy of the probe electrons in electron volts
     app --- The apperture in units specified by app_units
     df --- Probe defocus in A, a negative value indicate overfocus
-    cs --- The 3rd order spherical aberration coefficient
-    c5 --- The 5rd order spherical aberration coefficient
-    app_units --- The units of the aperture size (A^-1 or mrad)
+    aberrations --- list of probe aberrations of class pyms.Probe.aberration
+    app_units --- The units of the aperture size ("A^-1" or "mrad")
     """
     probe = make_contrast_transfer_function(
         pix_dim,

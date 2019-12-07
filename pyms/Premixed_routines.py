@@ -6,7 +6,7 @@
 import numpy as np
 import torch
 import tqdm
-from .py_multislice import make_propagators, scattering_matrix, generate_STEM_raster
+from .py_multislice import make_propagators, scattering_matrix, generate_STEM_raster,make_detector,multislice,STEM
 from .utils.torch_utils import (
     cx_from_numpy,
     cx_to_numpy,
@@ -18,6 +18,7 @@ from .utils.torch_utils import (
 from .utils.numpy_utils import fourier_shift,crop
 import matplotlib.pyplot as plt
 from .Ionization import make_transition_potentials
+from .Probe import focused_probe,make_contrast_transfer_function
 
 
 def window_indices(center, windowsize, gridshape):
@@ -32,17 +33,113 @@ def window_indices(center, windowsize, gridshape):
 
     return (window[0][:, None] * gridshape[0] + window[1][None, :]).ravel()
 
+def STEM_multislice(
+    pix_dim,
+    sample,
+    thicknesses,
+    eV,
+    alpha,
+    subslices=[1.0],
+    df=0,
+    aberrations = [],
+    batch_size=5,
+    FourD_STEM=False,
+    datacube=None,
+    scan_posn=None,
+    dtype=torch.float32,
+    device_type=None,
+    tiling=[1, 1],
+    seed=None,
+    showProgress=True,
+    detector_ranges = None,
+    nT = 5,
+):
+    """Perform a STEM simulation using only the multislice algorithm"""
 
+    # Choose GPU if available and CPU if not
+    print(device_type)
+    device = get_device(device_type)
+    print(device)
+    real_dim = sample.unitcell[:2]*np.asarray(tiling)
+    probe = focused_probe(pix_dim,real_dim[:2],eV,alpha,df=df,aberrations=aberrations)
+
+    # Make propagators and transmission functions for multslice
+    P,T = multislice_precursor(sample,pix_dim,eV,subslices=subslices,tiling=tiling,nT=nT,device=device)
+
+    nslices = np.ceil(sample.unitcell[2]/thicknesses).astype(np.int)
+    print(nslices)
+    #Make STEM detectors
+    if (detector_ranges is None):
+        D = None
+    else:
+        D = np.zeros((len(detector_ranges),*pix_dim))
+        for i,drange in enumerate(detector_ranges):
+            D[i] = make_detector(pix_dim,real_dim,eV,drange[1],drange[0])
+
+    method = multislice
+    args = (P, T, tiling, device, seed)
+    kwargs = {
+        "return_numpy": False,
+        "qspace_in": True,
+        "qspace_out": True,
+        "output_to_bandwidth_limit": True,
+    }
+
+    return STEM(
+        real_dim,
+        probe,
+        method,
+        nslices,
+        eV,
+        alpha,
+        batch_size=batch_size,
+        detectors=D,
+        FourD_STEM=FourD_STEM,
+        scan_posn=scan_posn,
+        device=device,
+        tiling=tiling,
+        seed=seed,
+        showProgress=showProgress,
+        method_args=args,
+        method_kwargs=kwargs,
+    )
+
+def multislice_precursor(sample,gridshape,eV,subslices=[1.0],tiling=[1,1],nT=5,device=get_device(None),dtype=torch.float32,equal_Prop=False):
+    """Make transmission functions and propagators for multislice"""
+    # Calculate grid size in Angstrom
+    rsize = np.zeros(3)
+    rsize[:3] = sample.unitcell[:3]
+    rsize[:2] *= np.asarray(tiling)
+    
+    #If slices are basically equidistant, we can use the same propagator
+    if np.std(np.diff(subslices,prepend=0))< 1e-4 :
+        P = make_propagators(gridshape, rsize, eV, subslices[:1])[0]
+    else:
+        P = make_propagators(gridshape, rsize, eV, subslices)
+
+    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device,dtype=dtype)
+    print(T.element_size() * T.nelement())
+    for i in range(nT):
+        T[i] = sample.make_transmission_functions(
+        gridshape,
+        eV,
+        subslices=subslices,
+        tiling=tiling,
+        device=device,
+        dtype=dtype,
+        )
+
+    return P,T
 
 def STEM_EELS_multislice(
-    probe,
-    crystal,
+    gridshape,
+    sample,
     ionization_potentials,
     ionization_sites,
     thicknesses,
     eV,
     alpha,
-    subslices= [1.0],
+    subslices = [1.0],
     batch_size=1,
     detectors=None,
     FourD_STEM=False,
@@ -60,21 +157,12 @@ def STEM_EELS_multislice(
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
-    # Calculate grid size in Angstrom
-    rsize = np.zeros(3)
-    rsize[:3] = crystal.unitcell[:3]
-    rsize[:2] *= np.asarray(tiling)
-    
-    if dtype is None:
-        dtype = transmission_functions.dtype
-    
-    nslices = np.ceil(thicknesses / crystal.unitcell[2]).astype(np.int)
-    P = make_propagators(gridshape, rsize, eV, subslices)
-    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device)
+    # Make propagators and transmission functions for multslice
+    P,T = multislice_precursor(sample,gridshape,eV,subslices=subslices,tiling=tiling,nT=nT,device_type=device)
 
     from . import transition_potential_multislice
     method = transition_potential_multislice
-    args = (nslices,subslices, propagators, transmission_functions, ionization_potentials,ionization_sites,tiling, device, seed)
+    args = (nslices,subslices, P, T, ionization_potentials,ionization_sites,tiling, device, seed)
     kwargs = {
         "return_numpy": False,
         "qspace_in": True,
@@ -120,22 +208,8 @@ def CBED(
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
     
-    nsubslices = len(subslices)
-
-    #Size of real space grid
-    rsize = np.zeros((3,))
-    rsize[:3]  = crystal.unitcell[:3]
-    rsize[:2] *= np.asarray(tiling)
-
-    #Initialize array to store transmission functions in
-    T = torch.zeros(nT,nsubslices,*gridshape,2,device=device)
-
-    #Make transmission functions
-    for i in range(nT):
-        T[i,:,:] = crystal.make_transmission_functions(gridshape,eV,subslices,tiling,fftout=True,device=device)
-    
-    # Make Fresnel free-space propagators for multislice algorithm
-    P = pyms.make_propagators(gridshape,rsize,eV,subslices)
+    # Make propagators and transmission functions for multslice
+    P,T = multislice_precursor(sample,gridshape,eV,subslices=subslices,tiling=tiling,nT=nT,device_type=device)
 
     nslices = np.asarray(np.ceil(thicknesses/crystal.unitcell[2]),dtype=np.int)
 
@@ -146,7 +220,7 @@ def CBED(
 
         # Run multislice iterating over different thickness outputs
         for it,t in enumerate(np.diff(nslices,prepend=0)):
-            probe = pyms.multislice(probe,nslices[it]-tt,propagators,T,tiling=tiling,output_to_bandwidth_limit= False)
+            probe = pyms.multislice(probe,nslices[it]-tt,P,T,tiling=tiling,output_to_bandwidth_limit= False)
             output[it,...] += np.abs(np.fft.fftshift(np.fft.fft2(probe,norm='ortho')))**2
 
     return output
