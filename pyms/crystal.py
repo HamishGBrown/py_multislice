@@ -315,7 +315,8 @@ class crystal:
         """Makes a quick 3D scatter plot of the crystal"""
         from mpl_toolkits.mplot3d import Axes3D
 
-        if atomscale is None: atomscale = 1e-3*np.amax(self.unitcell)
+        if atomscale is None:
+            atomscale = 1e-3 * np.amax(self.unitcell)
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
         colors = cmap(self.atoms[:, 3] / np.amax(self.atoms[:, 3]))

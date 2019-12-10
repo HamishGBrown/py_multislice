@@ -153,7 +153,7 @@ def multislice(
 
         # To save memory in the case of equally sliced sample, there is the option
         # of only using one propagator, this statement catches this case.
-        if P.dim()<3:
+        if P.dim() < 4:
             P_ = P
         else:
             P_ = P[subslice]
@@ -264,7 +264,9 @@ def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     return np.where(detector, 1, 0)
 
 
-def generate_STEM_raster(gridshape, rsize, eV, alpha, tiling=[1, 1],ROI = [0.0,0.0,1.0,1.0]):
+def generate_STEM_raster(
+    gridshape, rsize, eV, alpha, tiling=[1, 1], ROI=[0.0, 0.0, 1.0, 1.0]
+):
     """For a grid of pixel size given by gridshape and real space size rsize
     return probe positions for nyquist sampled STEM raster
     
@@ -288,14 +290,18 @@ def generate_STEM_raster(gridshape, rsize, eV, alpha, tiling=[1, 1],ROI = [0.0,0
     from .Probe import nyquist_sampling
 
     # Field of view in Angstrom
-    FOV = np.asarray([rsize[0]*(ROI[2]-ROI[0]),rsize[1]*(ROI[3]-ROI[1])])
+    FOV = np.asarray([rsize[0] * (ROI[2] - ROI[0]), rsize[1] * (ROI[3] - ROI[1])])
 
     # Number of scan coordinates in each dimension
     nscan = nyquist_sampling(FOV / np.asarray(tiling), eV=eV, alpha=alpha)
 
     # Generate Y and X scan coordinates
     return [
-        np.arange(ROI[0+i]*gridshape[i]/tiling[i], ROI[2+i]*gridshape[i] / tiling[i], step=np.diff(ROI[i::2])[0]*gridshape[i] / nscan[i] / tiling[i])
+        np.arange(
+            ROI[0 + i] * gridshape[i] / tiling[i],
+            ROI[2 + i] * gridshape[i] / tiling[i],
+            step=np.diff(ROI[i::2])[0] * gridshape[i] / nscan[i] / tiling[i],
+        )
         / gridshape[i]
         for i in range(2)
     ]
@@ -499,7 +505,10 @@ def STEM(
         datacube = datacube.reshape(nthick, *nscan, *gridout)
 
     if conventional_STEM and return_datacube:
-        return np.squeeze(STEM_image.reshape(ndet, nthick, *nscan)), np.squeeze(datacube)
+        return (
+            np.squeeze(STEM_image.reshape(ndet, nthick, *nscan)),
+            np.squeeze(datacube),
+        )
     if return_datacube:
         return np.squeeze(datacube)
     if conventional_STEM:
@@ -633,7 +642,9 @@ class scattering_matrix:
             # If no seed passed to random number generator then make one to pass to
             # the multislice algorithm. This ensure that each column in the scattering
             # matrix sees the same frozen phonon configuration
-            self.seed = np.random.randint(0, 2 ** 32 - 1, size=len(slices),dtype=np.uint32)
+            self.seed = np.random.randint(
+                0, 2 ** 32 - 1, size=len(slices), dtype=np.uint32
+            )
 
         # This switch tells the propagate function to initialize the Smatrix
         # to plane waves

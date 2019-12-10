@@ -1,24 +1,32 @@
-# The py_multislice library provides users with the ability to put their 
+# The py_multislice library provides users with the ability to put their
 # own simulations together using the "building blocks" of py_multislice.
-# For standard simulation types the premixed_routines.py functions 
+# For standard simulation types the premixed_routines.py functions
 # allows users to set up simulations faster and easier.
 
 import numpy as np
 import torch
 import tqdm
-from .py_multislice import make_propagators, scattering_matrix, generate_STEM_raster,make_detector,multislice,STEM
+from .py_multislice import (
+    make_propagators,
+    scattering_matrix,
+    generate_STEM_raster,
+    make_detector,
+    multislice,
+    STEM,
+)
 from .utils.torch_utils import (
     cx_from_numpy,
     cx_to_numpy,
     amplitude,
     complex_matmul,
     complex_mul,
-    get_device
+    get_device,
 )
-from .utils.numpy_utils import fourier_shift,crop
+from .utils.numpy_utils import fourier_shift, crop
 import matplotlib.pyplot as plt
-from .Ionization import make_transition_potentials
-from .Probe import focused_probe,make_contrast_transfer_function
+
+# from .Ionization import make_transition_potentials
+from .Probe import focused_probe, make_contrast_transfer_function
 
 
 def window_indices(center, windowsize, gridshape):
@@ -33,6 +41,7 @@ def window_indices(center, windowsize, gridshape):
 
     return (window[0][:, None] * gridshape[0] + window[1][None, :]).ravel()
 
+
 def STEM_multislice(
     pix_dim,
     sample,
@@ -41,7 +50,7 @@ def STEM_multislice(
     alpha,
     subslices=[1.0],
     df=0,
-    aberrations = [],
+    aberrations=[],
     batch_size=5,
     FourD_STEM=False,
     datacube=None,
@@ -51,8 +60,8 @@ def STEM_multislice(
     tiling=[1, 1],
     seed=None,
     showProgress=True,
-    detector_ranges = None,
-    nT = 5,
+    detector_ranges=None,
+    nT=5,
 ):
     """Perform a STEM simulation using only the multislice algorithm"""
 
@@ -60,21 +69,25 @@ def STEM_multislice(
     print(device_type)
     device = get_device(device_type)
     print(device)
-    real_dim = sample.unitcell[:2]*np.asarray(tiling)
-    probe = focused_probe(pix_dim,real_dim[:2],eV,alpha,df=df,aberrations=aberrations)
+    real_dim = sample.unitcell[:2] * np.asarray(tiling)
+    probe = focused_probe(
+        pix_dim, real_dim[:2], eV, alpha, df=df, aberrations=aberrations
+    )
 
     # Make propagators and transmission functions for multslice
-    P,T = multislice_precursor(sample,pix_dim,eV,subslices=subslices,tiling=tiling,nT=nT,device=device)
+    P, T = multislice_precursor(
+        sample, pix_dim, eV, subslices=subslices, tiling=tiling, nT=nT, device=device
+    )
 
-    nslices = np.ceil(sample.unitcell[2]/thicknesses).astype(np.int)
+    nslices = np.ceil(sample.unitcell[2] / thicknesses).astype(np.int)
     print(nslices)
-    #Make STEM detectors
-    if (detector_ranges is None):
+    # Make STEM detectors
+    if detector_ranges is None:
         D = None
     else:
-        D = np.zeros((len(detector_ranges),*pix_dim))
-        for i,drange in enumerate(detector_ranges):
-            D[i] = make_detector(pix_dim,real_dim,eV,drange[1],drange[0])
+        D = np.zeros((len(detector_ranges), *pix_dim))
+        for i, drange in enumerate(detector_ranges):
+            D[i] = make_detector(pix_dim, real_dim, eV, drange[1], drange[0])
 
     method = multislice
     args = (P, T, tiling, device, seed)
@@ -104,32 +117,44 @@ def STEM_multislice(
         method_kwargs=kwargs,
     )
 
-def multislice_precursor(sample,gridshape,eV,subslices=[1.0],tiling=[1,1],nT=5,device=get_device(None),dtype=torch.float32,equal_Prop=False):
+
+def multislice_precursor(
+    sample,
+    gridshape,
+    eV,
+    subslices=[1.0],
+    tiling=[1, 1],
+    nT=5,
+    device=get_device(None),
+    dtype=torch.float32,
+    equal_Prop=False,
+):
     """Make transmission functions and propagators for multislice"""
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
     rsize[:3] = sample.unitcell[:3]
     rsize[:2] *= np.asarray(tiling)
-    
-    #If slices are basically equidistant, we can use the same propagator
-    if np.std(np.diff(subslices,prepend=0))< 1e-4 :
+
+    # If slices are basically equidistant, we can use the same propagator
+    if np.std(np.diff(subslices, prepend=0)) < 1e-4:
         P = make_propagators(gridshape, rsize, eV, subslices[:1])[0]
     else:
         P = make_propagators(gridshape, rsize, eV, subslices)
 
-    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device,dtype=dtype)
+    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
     print(T.element_size() * T.nelement())
     for i in range(nT):
         T[i] = sample.make_transmission_functions(
-        gridshape,
-        eV,
-        subslices=subslices,
-        tiling=tiling,
-        device=device,
-        dtype=dtype,
+            gridshape,
+            eV,
+            subslices=subslices,
+            tiling=tiling,
+            device=device,
+            dtype=dtype,
         )
 
-    return P,T
+    return P, T
+
 
 def STEM_EELS_multislice(
     gridshape,
@@ -139,7 +164,7 @@ def STEM_EELS_multislice(
     thicknesses,
     eV,
     alpha,
-    subslices = [1.0],
+    subslices=[1.0],
     batch_size=1,
     detectors=None,
     FourD_STEM=False,
@@ -151,18 +176,37 @@ def STEM_EELS_multislice(
     seed=None,
     showProgress=True,
     threshhold=1e-4,
-    nT=5
-):  
+    nT=5,
+):
     """Perform a STEM-EELS simulation using only the multislice algorithm"""
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
     # Make propagators and transmission functions for multslice
-    P,T = multislice_precursor(sample,gridshape,eV,subslices=subslices,tiling=tiling,nT=nT,device_type=device)
+    P, T = multislice_precursor(
+        sample,
+        gridshape,
+        eV,
+        subslices=subslices,
+        tiling=tiling,
+        nT=nT,
+        device_type=device,
+    )
 
     from . import transition_potential_multislice
+
     method = transition_potential_multislice
-    args = (nslices,subslices, P, T, ionization_potentials,ionization_sites,tiling, device, seed)
+    args = (
+        nslices,
+        subslices,
+        P,
+        T,
+        ionization_potentials,
+        ionization_sites,
+        tiling,
+        device,
+        seed,
+    )
     kwargs = {
         "return_numpy": False,
         "qspace_in": True,
@@ -191,7 +235,8 @@ def STEM_EELS_multislice(
         method_kwargs=kwargs,
     )
 
-    return tile_out_ionization_image(EELS_image,tiling)
+    return tile_out_ionization_image(EELS_image, tiling)
+
 
 def CBED(
     crystal,
@@ -203,27 +248,46 @@ def CBED(
     device_type=None,
     tiling=[1, 1],
     nT=5,
-    nfph = 25):
+    nfph=25,
+):
 
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
-    
+
     # Make propagators and transmission functions for multslice
-    P,T = multislice_precursor(sample,gridshape,eV,subslices=subslices,tiling=tiling,nT=nT,device_type=device)
+    P, T = multislice_precursor(
+        sample,
+        gridshape,
+        eV,
+        subslices=subslices,
+        tiling=tiling,
+        nT=nT,
+        device_type=device,
+    )
 
-    nslices = np.asarray(np.ceil(thicknesses/crystal.unitcell[2]),dtype=np.int)
+    nslices = np.asarray(np.ceil(thicknesses / crystal.unitcell[2]), dtype=np.int)
 
-    #Iteration over frozen phonon configurations
+    # Iteration over frozen phonon configurations
     for ifph in tqdm(range(nfph)):
         # Make probe
-        probe = pyms.focused_probe(gridshape,rsize,eV,app)
+        probe = pyms.focused_probe(gridshape, rsize, eV, app)
 
         # Run multislice iterating over different thickness outputs
-        for it,t in enumerate(np.diff(nslices,prepend=0)):
-            probe = pyms.multislice(probe,nslices[it]-tt,P,T,tiling=tiling,output_to_bandwidth_limit= False)
-            output[it,...] += np.abs(np.fft.fftshift(np.fft.fft2(probe,norm='ortho')))**2
+        for it, t in enumerate(np.diff(nslices, prepend=0)):
+            probe = pyms.multislice(
+                probe,
+                nslices[it] - tt,
+                P,
+                T,
+                tiling=tiling,
+                output_to_bandwidth_limit=False,
+            )
+            output[it, ...] += (
+                np.abs(np.fft.fftshift(np.fft.fft2(probe, norm="ortho"))) ** 2
+            )
 
     return output
+
 
 def STEM_EELS_PRISM(
     crystal,
@@ -238,12 +302,12 @@ def STEM_EELS_PRISM(
     freeConfiguration,
     freeQuantumNumbers,
     epsilon,
-    Hn0_crop = None,
+    Hn0_crop=None,
     subslices=[1.0],
     device_type=None,
     tiling=[1, 1],
     nT=5,
-    PRISM_factor = [1,1]
+    PRISM_factor=[1, 1],
 ):
 
     # Choose GPU if available and CPU if not
@@ -272,7 +336,17 @@ def STEM_EELS_PRISM(
 
     # Scattering matrix 1 propagates probe from surface of specimen to slice of
     # interest
-    S1 = scattering_matrix(rsize, P, T, 0, eV, app, batch_size=5, subslicing=True,PRISM_factor=PRISM_factor)
+    S1 = scattering_matrix(
+        rsize,
+        P,
+        T,
+        0,
+        eV,
+        app,
+        batch_size=5,
+        subslicing=True,
+        PRISM_factor=PRISM_factor,
+    )
 
     # Scattering matrix 2 propagates probe from slice of ionization to exit surface
     S2 = scattering_matrix(
@@ -285,23 +359,47 @@ def STEM_EELS_PRISM(
         batch_size=5,
         subslicing=True,
         transposed=True,
-        PRISM_factor = PRISM_factor,
+        PRISM_factor=PRISM_factor,
     )
     # Link the slices and seeds of both scattering matrices
     S1.seed = S2.seed
 
     from .Ionization import orbital, transition_potential, tile_out_ionization_image
-    
+
     nstates = len(freeQuantumNumbers)
-    Hn0 = make_transition_potentials(gridshape,rsize,eV,Ztarget,epsilon,boundQuantumNumbers,boundConfiguration,freeQuantumNumbers,freeConfiguration)
-    print(gridshape,rsize,eV,Ztarget,epsilon,boundQuantumNumbers,boundConfiguration,freeQuantumNumbers,freeConfiguration)
-    fig,ax = plt.subplots(nrows = Hn0.shape[0])
+    Hn0 = make_transition_potentials(
+        gridshape,
+        rsize,
+        eV,
+        Ztarget,
+        epsilon,
+        boundQuantumNumbers,
+        boundConfiguration,
+        freeQuantumNumbers,
+        freeConfiguration,
+    )
+    print(
+        gridshape,
+        rsize,
+        eV,
+        Ztarget,
+        epsilon,
+        boundQuantumNumbers,
+        boundConfiguration,
+        freeQuantumNumbers,
+        freeConfiguration,
+    )
+    fig, ax = plt.subplots(nrows=Hn0.shape[0])
 
     if Hn0_crop is None:
-        Hn0_crop = [ S1.stored_gridshape[i] for i in range(2)]
+        Hn0_crop = [S1.stored_gridshape[i] for i in range(2)]
     else:
         Hn0_crop = [min(Hn0_crop[i], S1.stored_gridshape[i]) for i in range(2)]
-        Hn0 = np.fft.fft2(np.fft.ifftshift(crop(np.fft.fftshift(Hn0,axes=[-2,-1]),Hn0_crop),axes=[-2,-1]))
+        Hn0 = np.fft.fft2(
+            np.fft.ifftshift(
+                crop(np.fft.fftshift(Hn0, axes=[-2, -1]), Hn0_crop), axes=[-2, -1]
+            )
+        )
 
     # Make probe wavefunction vectors for scan
     # Get kspace grid in units of inverse pixels
@@ -344,12 +442,11 @@ def STEM_EELS_PRISM(
                 showProgress=False,
             )
 
-
         S2.S = S2.S.reshape(S2.S.shape[0], np.product(S2.stored_gridshape), 2)
-        
-        #Work out which subslice of the crystal unit cell we are in
+
+        # Work out which subslice of the crystal unit cell we are in
         subslice = islice % S1.nsubslices
-        
+
         # Get list of atoms within this slice
         atomsinslice = coords[
             np.logical_and(
@@ -384,26 +481,36 @@ def STEM_EELS_PRISM(
 
                 for i, S1component in enumerate(S1.S):
                     # Multiplication of component of first scattering matrix
-                    # (takes probe it depth of ionization) with the transition 
+                    # (takes probe it depth of ionization) with the transition
                     # potential
-                    Hn0S1 = complex_mul(Hn0_, S1component.flatten(end_dim=-2)[windex, :])
-
+                    Hn0S1 = complex_mul(
+                        Hn0_, S1component.flatten(end_dim=-2)[windex, :]
+                    )
 
                     # Matrix multiplication with second scattering matrix (takes
                     # scattered electrons to EELS detector)
                     SHn0[i] = complex_matmul(S2.S[:, windex], Hn0S1)
 
-                # Build a mask such that only probe positions within a PRISM 
+                # Build a mask such that only probe positions within a PRISM
                 # cropping region about the probe are evaluated
-                scan_mask = np.logical_and((np.abs((atom[0] - scan[0]+0.5) % 1.0 -0.5)<=1/PRISM_factor[0]/2)[:,None],
-                                           (np.abs((atom[1] - scan[1]+0.5) % 1.0 -0.5)<=1/PRISM_factor[1]/2)[None,:]).ravel()
-                
-                EELS_image[scan_mask] += torch.sum(amplitude(complex_matmul(scan_array[scan_mask], SHn0)), axis=1)
+                scan_mask = np.logical_and(
+                    (
+                        np.abs((atom[0] - scan[0] + 0.5) % 1.0 - 0.5)
+                        <= 1 / PRISM_factor[0] / 2
+                    )[:, None],
+                    (
+                        np.abs((atom[1] - scan[1] + 0.5) % 1.0 - 0.5)
+                        <= 1 / PRISM_factor[1] / 2
+                    )[None, :],
+                ).ravel()
+
+                EELS_image[scan_mask] += torch.sum(
+                    amplitude(complex_matmul(scan_array[scan_mask], SHn0)), axis=1
+                )
 
         # Reshape scattering matrix S2 for propagation
         S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape, 2))
-    
+
     # Move EELS_image to cpu and numpy and then reshape to rectangular grid
     EELS_image = EELS_image.cpu().numpy().reshape(len(scan[0]), len(scan[1]))
-    return tile_out_ionization_image(EELS_image,tiling)
-    
+    return tile_out_ionization_image(EELS_image, tiling)

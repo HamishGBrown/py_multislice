@@ -71,6 +71,7 @@ def bandwidth_limit_array(arrayin, limit=2 / 3):
 
     return array
 
+
 def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
 
     # Construct input and output fft grids
@@ -104,7 +105,8 @@ def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
         np.logical_and(qqyout <= maxqy, qqyout >= minqy),
     )
 
-    return maskin,maskout
+    return maskin, maskout
+
 
 def fourier_interpolate_2d(ain, shapeout):
     """Perfoms a fourier interpolation on array ain so that its shape matches
@@ -124,8 +126,8 @@ def fourier_interpolate_2d(ain, shapeout):
     npiyin, npixin = np.shape(ain)[-2:]
     npiyout, npixout = shapeout
 
-    #Get Fourier interpolation masks
-    maskin,maskout = Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)
+    # Get Fourier interpolation masks
+    maskin, maskout = Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)
 
     # Now transfer over Fourier coefficients from input to output array
     aout[..., maskout] = fft2(np.asarray(ain, dtype=np.complex))[..., maskin]
@@ -144,7 +146,18 @@ def fourier_interpolate_2d(ain, shapeout):
 
 def oned_shift(N, shift, pixel_units=True):
     """Constructs a one dimensional shift array of array size 
-    len that shifts an array number of pixels given by shift."""
+    len that shifts an array number of pixels given by shift.
+    
+    Parameters
+    ----------
+    N     -- Number of pixels in the shift array
+    shift -- Amount of shift to be achieved (default units of pixels)
+    
+    Keyword arguments
+    ----------
+    pixel_units -- Pass True if shift is to be units of pixels, False for
+                   fraction of the array
+    """
 
     # Create the Fourier space pixel coordinates of the shift array
     shiftarray = (np.arange(N) + N // 2) % N - N // 2
@@ -159,18 +172,30 @@ def oned_shift(N, shift, pixel_units=True):
     return np.exp(-2 * np.pi * 1j * shiftarray * shift)
 
 
-def fourier_shift(arrayin, shift,qspacein=False, qspaceout=False, pixel_units=True):
-    """Shifts a 2d array by an amount given in the tuple shift 
-    using the Fourier shift theorem."""
+def fourier_shift(arrayin, shift, qspacein=False, qspaceout=False, pixel_units=True):
+    """Shifts a 2d array by an amount given in the tuple shift in units
+     of pixels using the Fourier shift theorem.
+     
+    Parameters
+    ----------
+    arrayin -- Array to be Fourier shifted
+    shift   -- Shift in units of pixels (pass pixel_units = False for shift
+               to be in units of fraction of the array size)
+    
+    Keyword arguments
+    ----------
+    qspacein    -- Pass True if arrayin is in Fourier space
+    qspaceout   -- Pass True for Fourier space output, False (default) for
+                   real space output
+    pixel_units -- Pass True if shift is to be units of pixels, False for
+                   fraction of the array
 
-    # Get shift amounts and array dimensions from input
-    shifty, shiftx = shift
-    y, x = np.shape(arrayin)[-2:]
+           """
 
     # Construct shift array
-    shifty = oned_shift(y, shifty, pixel_units)
-    shiftx = oned_shift(x, shiftx, pixel_units)
-    shiftarray = shiftx[np.newaxis, :] * shifty[:, np.newaxis]
+    shifty, shiftx = [
+        oned_shift(arrayin.shape[-2 + i], shift[i], pixel_units) for i in range(2)
+    ]
 
     # Now Fourier transform array and apply shift
     real = not np.iscomplexobj(arrayin)
@@ -183,7 +208,7 @@ def fourier_shift(arrayin, shift,qspacein=False, qspaceout=False, pixel_units=Tr
     if not qspacein:
         array = np.fft.fft2(array)
 
-    array = shiftarray * array
+    array = shiftx[np.newaxis, :] * shifty[:, np.newaxis] * array
 
     if not qspaceout:
         array = np.fft.ifft2(array)

@@ -579,17 +579,29 @@ def transition_potential_multislice(
         return output.cpu().numpy()
     return output
 
-def make_transition_potentials(gridshape,rsize,eV,Z,epsilon,boundQuantumNumbers,boundConfiguration,freeQuantumNumbers,freeConfiguration,qspace = False):
-    
+
+def make_transition_potentials(
+    gridshape,
+    rsize,
+    eV,
+    Z,
+    epsilon,
+    boundQuantumNumbers,
+    boundConfiguration,
+    freeQuantumNumbers,
+    freeConfiguration,
+    qspace=False,
+):
+
     boundOrbital = orbital(Z, boundConfiguration, *boundQuantumNumbers[:2])
 
     nstates = len(freeQuantumNumbers)
-    Hn0 = np.zeros((nstates,*gridshape),dtype=np.complex)
+    Hn0 = np.zeros((nstates, *gridshape), dtype=np.complex)
 
-    for istate,Qnumbers in enumerate(freeQuantumNumbers):
+    for istate, Qnumbers in enumerate(freeQuantumNumbers):
         freeOrbital = orbital(Z, freeConfiguration, 0, Qnumbers[0], epsilon=epsilon)
-        
-        #Calculate transition on same grid as multislice
+
+        # Calculate transition on same grid as multislice
         Hn0[istate] = transition_potential(
             boundOrbital,
             freeOrbital,
@@ -604,13 +616,17 @@ def make_transition_potentials(gridshape,rsize,eV,Z,epsilon,boundQuantumNumbers,
 
     return Hn0
 
-def tile_out_ionization_image(image,tiling):
+
+def tile_out_ionization_image(image, tiling):
     """For an ionization based image """
     tiled_image = np.zeros_like(image)
     for y in range(tiling[0]):
         for x in range(tiling[1]):
-            tiled_image += fourier_shift(image,[y/tiling[0],x/tiling[1]],pixel_units=False)
+            tiled_image += fourier_shift(
+                image, [y / tiling[0], x / tiling[1]], pixel_units=False
+            )
     return tiled_image
+
 
 if __name__ == "__main__":
     pass
