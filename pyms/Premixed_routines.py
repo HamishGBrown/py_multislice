@@ -42,6 +42,118 @@ def window_indices(center, windowsize, gridshape):
     return (window[0][:, None] * gridshape[0] + window[1][None, :]).ravel()
 
 
+def STEM_PRISM(
+    pix_dim,
+    sample,
+    thicknesses,
+    eV,
+    alpha,
+    subslices=[1.0],
+    df=0,
+    aberrations=[],
+    batch_size=5,
+    FourD_STEM=False,
+    datacube=None,
+    scan_posn=None,
+    dtype=torch.float32,
+    device_type=None,
+    tiling=[1, 1],
+    PRISM_factor=[1, 1],
+    seed=None,
+    showProgress=True,
+    detector_ranges=None,
+    stored_gridshape=None,
+    S = None,
+    nT=5,
+):
+    """Perform a STEM simulation using only the PRISM algorithm"""
+
+    # Choose GPU if available and CPU if not
+    device = get_device(device_type)
+
+    # Calculate real space grid size
+    real_dim = sample.unitcell[:2] * np.asarray(tiling)
+    
+    # Make the STEM probe
+    probe = focused_probe(
+        pix_dim, real_dim[:2], eV, alpha, df=df, aberrations=aberrations
+    )
+
+    Fourier_space_output = np.all([x==1 for x in PRISM_factor])
+
+    # Option to provide a precomputed scattering matrix (S), however if
+    # none is given then we make our own
+    if S is None:
+        # Make propagators and transmission functions for multslice
+        P, T = multislice_precursor(
+            sample, pix_dim, eV, subslices=subslices, tiling=tiling, nT=nT, device=device,showProgress=showProgress
+        )
+
+        # Convert thicknesses into number of slices for multislice
+        nslices = np.ceil(thicknesses/sample.unitcell[2]).astype(np.int)
+        
+        S = scattering_matrix(
+            real_dim[:2],
+            P,
+            T,
+            nslices,
+            eV,
+            alpha,
+            tiling=tiling,
+            batch_size=batch_size,
+            device=device,
+            stored_gridshape=stored_gridshape,
+            Fourier_space_output=Fourier_space_output
+        )
+
+    # Make STEM detectors
+    if detector_ranges is None:
+        D = None
+    else:
+        D = np.stack(
+            [
+                make_detector(pix_dim, real_dim, eV, drange[1], drange[0])
+                for drange in detector_ranges
+            ]
+        )
+
+    
+
+    # The method used to propagate an electron wave to the exit surface
+    # is the __call__ method for the scattering matrix object
+    method = S
+
+    # If no instructions are passed regarding size of the 4D-STEM
+    # datacube size then we will have to base this on the output size
+    # of the scattering matrix
+    if not isinstance(FourD_STEM, (list, tuple)):
+        # Generate scan positions in units of fractions of the grid if not supplied
+        if scan_posn is None:
+            scan_posn = generate_STEM_raster(pix_dim, real_dim[:2], eV, alpha, tiling)
+
+        # Number of scan positions
+        nscan = [x.size for x in scan_posn]
+
+        datacube = np.zeros([*nscan, *S.stored_gridshape], dtype=np.float32)
+
+    return STEM(
+        S.rsize,
+        probe,
+        method,
+        [1],
+        S.eV,
+        alpha,
+        batch_size=batch_size,
+        detectors=D,
+        FourD_STEM=FourD_STEM,
+        datacube=datacube,
+        scan_posn=scan_posn,
+        device=S.device,
+        tiling=S.tiling,
+        showProgress=showProgress,
+    )
+
+
 def STEM_multislice(
     pix_dim,
     sample,
@@ -66,9 +178,7 @@ def STEM_multislice(
     """Perform a STEM simulation using only the multislice algorithm"""
 
     # Choose GPU if available and CPU if not
-    print(device_type)
     device = get_device(device_type)
-    print(device)
     real_dim = sample.unitcell[:2] * np.asarray(tiling)
     probe = focused_probe(
         pix_dim, real_dim[:2], eV, alpha, df=df, aberrations=aberrations
@@ -76,18 +186,22 @@ def STEM_multislice(
 
     # Make propagators and transmission functions for multslice
     P, T = multislice_precursor(
-        sample, pix_dim, eV, subslices=subslices, tiling=tiling, nT=nT, device=device
+        sample, pix_dim, eV, subslices=subslices, tiling=tiling, nT=nT, device=device,showProgress=showProgress
     )
 
-    nslices = np.ceil(sample.unitcell[2] / thicknesses).astype(np.int)
-    print(nslices)
+    # Convert thicknesses into number of slices for multislice
+    nslices = np.ceil(thicknesses/sample.unitcell[2]).astype(np.int)
+
     # Make STEM detectors
     if detector_ranges is None:
         D = None
     else:
-        D = np.zeros((len(detector_ranges), *pix_dim))
-        for i, drange in enumerate(detector_ranges):
-            D[i] = make_detector(pix_dim, real_dim, eV, drange[1], drange[0])
+        D = np.stack(
+            [
+                make_detector(pix_dim, real_dim, eV, drange[1], drange[0])
+                for drange in detector_ranges
+            ]
+        )
 
     method = multislice
     args = (P, T, tiling, device, seed)
@@ -127,7 +241,7 @@ def multislice_precursor(
     nT=5,
     device=get_device(None),
     dtype=torch.float32,
-    equal_Prop=False,
+    showProgress=True,
 ):
     """Make transmission functions and propagators for multislice"""
     # Calculate grid size in Angstrom
@@ -142,8 +256,8 @@ def multislice_precursor(
         P = make_propagators(gridshape, rsize, eV, subslices)
 
     T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
-    print(T.element_size() * T.nelement())
-    for i in range(nT):
+    
+    for i in tqdm.tqdm(range(nT),desc="Making projected potentials",disable = not showProgress):
         T[i] = sample.make_transmission_functions(
             gridshape,
             eV,
@@ -151,6 +265,7 @@ def multislice_precursor(
             tiling=tiling,
             device=device,
             dtype=dtype,
+            displacements=False,
         )
 
     return P, T
@@ -191,6 +306,7 @@ def STEM_EELS_multislice(
         tiling=tiling,
         nT=nT,
         device_type=device,
+        showProgress=showProgress,
     )
 
     from . import transition_potential_multislice
@@ -249,6 +365,7 @@ def CBED(
     tiling=[1, 1],
     nT=5,
     nfph=25,
+    showProgress=True,
 ):
 
     # Choose GPU if available and CPU if not
@@ -263,12 +380,13 @@ def CBED(
         tiling=tiling,
         nT=nT,
         device_type=device,
+        showProgress=showProgress,
     )
 
     nslices = np.asarray(np.ceil(thicknesses / crystal.unitcell[2]), dtype=np.int)
 
     # Iteration over frozen phonon configurations
-    for ifph in tqdm(range(nfph)):
+    for ifph in tqdm(range(nfph),desc="Frozen phonon iteration",disable = not showProgress):
         # Make probe
         probe = pyms.focused_probe(gridshape, rsize, eV, app)
 

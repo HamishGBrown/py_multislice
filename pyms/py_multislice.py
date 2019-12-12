@@ -132,10 +132,9 @@ def multislice(
 
     nT, nsubslices, nopiy, nopix = T.size()[:4]
 
-    # Probe needs to start multislice algorithm in real space (warning
-    # this is not a normalized fft)
+    # Probe needs to start multislice algorithm in real space
     if qspace_in:
-        psi = torch.ifft(psi, signal_ndim=2)  # ,normalized=True)
+        psi = torch.ifft(psi, signal_ndim=2)
 
     slices = generate_slice_indices(nslices, nsubslices, subslicing)
 
@@ -307,6 +306,21 @@ def generate_STEM_raster(
     ]
 
 
+def convert_real_size_to_pixels(size, gridsize, gridshape, qspace=False):
+    """Convert from real or reciprocal space size given gridsize, a 
+    particular grid size in real space, and gridshape, the size of the 
+    grid in pixels. Pass qspace = True if size is in reciprocal (Fourier)
+     space units and qspace=False if size is in real space units."""
+    if qspace:
+        return np.ceil(size * np.asarray(gridsize)).astype(np.int).tolist()
+    else:
+        return (
+            np.ceil(size / np.asarray(gridsize) * np.asarray(gridshape))
+            .astype(np.int)
+            .tolist()
+        )
+
+
 def STEM(
     rsize,
     probe,
@@ -314,7 +328,6 @@ def STEM(
     nslices,
     eV,
     alpha,
-    S=None,
     batch_size=1,
     detectors=None,
     FourD_STEM=False,
@@ -398,24 +411,27 @@ def STEM(
         D = ensure_torch_array(detectors, device=device, dtype=dtype)
 
     # Initialize array in which to store resulting 4D-STEM datacube if required
-    return_datacube = False
     if FourD_STEM:
 
         # Check whether a resampling directive has been given
         if isinstance(FourD_STEM, (list, tuple)):
-            # Get output grid and diffraction space size of that grid from tuple
             gridout = FourD_STEM[0]
-            sizeout = FourD_STEM[1]
 
-            #
-            diff_pat_crop = np.round(
-                np.asarray(sizeout) * np.asarray(rsize[:2])
-            ).astype(np.int)
+            if len(FourD_STEM)>1 :
+                # Get output grid and diffraction space size of that grid from tuple
+                sizeout = FourD_STEM[1]
 
-            # Define resampling function
-            resize = lambda array: fourier_interpolate_2d(
-                crop(array, diff_pat_crop), gridout
-            )
+                #
+                diff_pat_crop = np.round(
+                    np.asarray(sizeout) * np.asarray(rsize[:2])
+                ).astype(np.int)
+
+                # Define resampling function
+                resize = lambda array: fourier_interpolate_2d(
+                    crop(array, diff_pat_crop), gridout
+                )
+            else:
+                resize = lambda array: crop(array,gridout)
         else:
             # If no resampling then the output size is just the simulation
             # grid size
@@ -426,12 +442,11 @@ def STEM(
         # Check whether a datacube is already provided or not
         if datacube is None:
             datacube = np.zeros((nthick, nscantot, *gridout))
-            return_datacube = True
         else:
             # If datacube is provided, flatten the scan dimensions of the array
             # the reshape function `should` provide a new view of the object,
             # not a copy of the whole array
-            datacube = datacube.reshape((nthick, nscantot, *gridout))
+            datacube = datacube.reshape((nthick, nscantot, *datacube.shape[-2:]))
 
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
@@ -477,7 +492,7 @@ def STEM(
         # Apply shift to original probe
         probes = complex_mul(probe_.view(1, *probe_.size()), probes)
 
-        # Thickness series6
+        # Thickness series
         #  - need to take the difference between sequential thickness variations
         for it, t in enumerate(np.diff(nslices, prepend=0)):
 
@@ -486,6 +501,9 @@ def STEM(
 
             # Calculate amplitude of probes
             amp = amplitude(probes)
+
+            # Correct normalization in Fourier space
+            amp /= np.prod(probes.size()[-3:-1])
 
             # Calculate STEM images
             if conventional_STEM:
@@ -502,14 +520,14 @@ def STEM(
 
     # Unflatten 4D-STEM datacube scan dimensions
     if FourD_STEM:
-        datacube = datacube.reshape(nthick, *nscan, *gridout)
+        datacube = datacube.reshape(nthick, *nscan, *datacube.shape[-2:])
 
-    if conventional_STEM and return_datacube:
+    if conventional_STEM and FourD_STEM:
         return (
             np.squeeze(STEM_image.reshape(ndet, nthick, *nscan)),
             np.squeeze(datacube),
         )
-    if return_datacube:
+    if FourD_STEM:
         return np.squeeze(datacube)
     if conventional_STEM:
         return np.squeeze(STEM_image.reshape(ndet, nthick, *nscan))
@@ -562,6 +580,7 @@ class scattering_matrix:
         Fourier_space_output=False,
         subslicing=False,
         transposed=False,
+        stored_gridshape=None,
     ):
         """Make a scattering matrix for dynamical scattering calculations using 
         the PRISM algorithm"""
@@ -569,7 +588,7 @@ class scattering_matrix:
         from .Probe import wavev
 
         # Get size of grid
-        gridshape = np.shape(propagators)[1:3]
+        gridshape = transmission_functions.size()[-3:-1]
 
         # Datatype (precision) is inferred from transmission functions
         self.dtype = transmission_functions.dtype
@@ -611,29 +630,52 @@ class scattering_matrix:
 
         self.nbeams = self.beams.shape[0]
 
-        # We will only store output of the scattering matrix up to the band
-        # width limit of the calculation, since this is a circular band-width
-        # limit on a square grid we have to get somewhat fancy and store a mapping
-        # of the pixels within the bandwidth limit to a one-dimensional vector
-        self.bw_mapping = np.argwhere(
-            (np.fft.fftfreq(gridshape[0]) ** 2)[:, np.newaxis]
-            + (np.fft.fftfreq(gridshape[1]) ** 2)[np.newaxis, :]
-            < (bandwidth_limit / 2) ** 2
-        )
+        # For a scattering matrix stored in real space there is the option
+        # of storing it on a much smaller pixel grid than the grid used for
+        # multislice. This is handy when, for example, a large grid
+        # is required for a converged multislice calculation but only
+        # the bright-field region of diffraction (small angle region)
+        # is of interest. Be careful using this in conjunction with
+        # multiple calls of the propagation method for the scattering matrix,
+        # as information outside the angular range of the stored grid is lost.
+        self.crop_output = not (stored_gridshape is None)
+        if self.crop_output:
+            self.stored_gridshape = stored_gridshape
 
+            # We will only store output of the scattering matrix up to the band
+            # width limit of the calculation, since this is a circular band-width
+            # limit on a square grid we have to get somewhat fancy and store a mapping
+            # of the pixels within the bandwidth limit to a one-dimensional vector
+            self.bw_mapping = np.argwhere(np.logical_and(
+                (np.abs(np.fft.fftfreq(gridshape[0],d=1/gridshape[0])) <self.stored_gridshape[0]//2)[:, np.newaxis],
+                (np.abs(np.fft.fftfreq(gridshape[1],d=1/gridshape[1])) <self.stored_gridshape[1]//2)[np.newaxis, :]
+            ))
+            
+        else:
+            self.stored_gridshape = size_of_bandwidth_limited_array(
+                transmission_functions.size()[-3:-1]
+            )
+
+            # We will only store output of the scattering matrix up to the band
+            # width limit of the calculation, since this is a circular band-width
+            # limit on a square grid we have to get somewhat fancy and store a mapping
+            # of the pixels within the bandwidth limit to a one-dimensional vector
+            self.bw_mapping = np.argwhere(
+                (np.fft.fftfreq(gridshape[0]) ** 2)[:, np.newaxis]
+                + (np.fft.fftfreq(gridshape[1]) ** 2)[np.newaxis, :]
+                < (bandwidth_limit / 2) ** 2
+            )
+        
+        
         self.nbout = self.bw_mapping.shape[0]
 
-        self.gridshape = gridshape
-        self.PRISM_factor = PRISM_factor
+        self.gridshape,self.rsize,self.eV = [np.asarray(gridshape),rsize,eV]
+        self.bw_mapping = (self.bw_mapping + self.gridshape//2)%self.gridshape - self.gridshape//2
+        self.PRISM_factor,self.tiling = [PRISM_factor,tiling]
         self.doPRISM = np.any([self.PRISM_factor[i] > 1 for i in [0, 1]])
-        self.rsize = rsize
-        self.eV = eV
         self.Fourier_space_output = Fourier_space_output
-        self.tiling = tiling
-        self.nsubslices = propagators.shape[0]
-        slices = generate_slice_indices(
-            nslice, propagators.shape[0], subslicing=subslicing
-        )
+        self.nsubslices = transmission_functions.size()[1]
+        slices = generate_slice_indices(nslice, self.nsubslices, subslicing=subslicing)
         self.GPU_streaming = GPU_streaming
         self.transposed = transposed
 
@@ -704,11 +746,6 @@ class scattering_matrix:
                     self.nbeams, self.nbout, 2, dtype=self.dtype, device=self.device
                 )
             else:
-
-                self.stored_gridshape = size_of_bandwidth_limited_array(
-                    transmission_functions.size()[-3:-1]
-                )
-
                 self.S = torch.zeros(
                     self.nbeams,
                     *self.stored_gridshape,
@@ -736,13 +773,11 @@ class scattering_matrix:
                 psi *= torch.prod(torch.tensor(self.PRISM_factor, dtype=self.dtype))
 
                 if self.Fourier_space_output:
-                    self.S[ibeam, ...] = psi[
-                        self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
-                    ]
+                    self.S[ibeam] = psi[self.bw_mapping[:, 0], self.bw_mapping[:, 1], :]
                 else:
-                    self.S[ibeam, ...] = crop_to_bandwidth_limit_torch(psi)
-            if not self.Fourier_space_output:
-                self.S = torch.ifft(self.S, signal_ndim=2, normalized=True)
+                    self.S[ibeam] = fourier_interpolate_2d_torch(
+                        psi, self.stored_gridshape, qspace_in=True, correct_norm= False
+                    )
             self.initialized = True
 
         # Make nslice_ which always accounts of subslices of the cyrstal structure
@@ -804,7 +839,7 @@ class scattering_matrix:
 
             if self.Fourier_space_output:
                 # Expand S-matrix input to full grid for multislice propagation
-                psi[:, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :] = self.S[beams]
+                psi[:beams.shape[0], self.bw_mapping[:, 0], self.bw_mapping[:, 1], :] = self.S[beams]
             else:
                 # Fourier interpolate stored real space S-matrix column onto
                 # multislice grid
@@ -822,8 +857,10 @@ class scattering_matrix:
                 self.device,
                 self.seed,
                 return_numpy=False,
+                qspace_in=self.Fourier_space_output,
                 qspace_out=self.Fourier_space_output,
                 transpose=self.transposed,
+                output_to_bandwidth_limit= False,
                 reverse=direction < 0,
             )
 
@@ -833,14 +870,16 @@ class scattering_matrix:
             if self.Fourier_space_output:
                 # Take into account the sqrt(# of pixels) that would otherwise have been
                 # applied by the inverse Fourier transform in the multislice routine
-                output /= torch.sqrt(
-                    torch.prod(torch.tensor(self.gridshape, dtype=self.dtype))
-                )
+                # output /= torch.sqrt(
+                #     torch.prod(torch.tensor(self.gridshape, dtype=self.dtype))
+                # )
 
                 self.S[beams, ...] = output[
                     :, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
-                ]
+                ]*np.sqrt(np.prod(self.stored_gridshape)/np.prod(self.gridshape))
             else:
+                if self.crop_output:
+                    output = fourier_interpolate_2d_torch(output, self.stored_gridshape,correct_norm=False)
                 self.S[beams, ...] = output
 
     def __call__(self, probes, nslices, posn=None):
@@ -854,14 +893,16 @@ class scattering_matrix:
         # Distance function to calculate windows about scan positions
         dist = lambda x, X: np.abs((np.arange(X) - x + X // 2) % X - X // 2)
 
-        if self.doPRISM:
-            crop_ = [
-                torch.arange(
-                    -self.gridshape[i] // (2 * self.PRISM_factor[i]),
-                    self.gridshape[i] // (2 * self.PRISM_factor[i]),
-                )
-                for i in range(2)
-            ]
+        crop_ = [
+            torch.arange(
+                -self.stored_gridshape[i] // (2 * self.PRISM_factor[i]),
+                self.stored_gridshape[i] // (2 * self.PRISM_factor[i]),
+            )
+            for i in range(2)
+        ]
+
+        # Get number of probes
+        nprobes = probes.size(0)
 
         if self.Fourier_space_output:
             # A note on normalization: an individual probe enters the STEM routine
@@ -873,7 +914,7 @@ class scattering_matrix:
             ) / np.sqrt(np.prod(self.gridshape))
 
             # Now reshape output from vectors to square arrays
-            probes[...] = 0
+            probes = torch.zeros(nprobes,*self.stored_gridshape,2,dtype=self.dtype,device=self.device)
             probes[:, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :] = probe_vec
 
             # Apply PRISM cropping in real space if appropriate
@@ -881,16 +922,16 @@ class scattering_matrix:
                 shape = probes.size()
 
                 probes = torch.ifft(probes, signal_ndim=2).flatten(-3, -2)
-                for k in range(probes.size(0)):
+                for k in range(nprobes):
 
                     # Calculate windows in vertical and horizontal directions
                     window = crop_window_to_flattened_indices_torch(
                         [
-                            (crop_[i] + posn[k, i] * self.gridshape[i])
-                            % self.gridshape[i]
+                            (crop_[i] + posn[k, i] * self.stored_gridshape[i])
+                            % self.stored_gridshape[i]
                             for i in range(2)
                         ],
-                        self.gridshape,
+                        self.stored_gridshape,
                     )
                     probe = deepcopy(probes[k])
                     probes[k] = 0
@@ -900,6 +941,8 @@ class scattering_matrix:
 
                 # Transform probe back to Fourier space
                 return torch.fft(probes, signal_ndim=2)
+
+            return probes
         else:
             # Flatten the array dimensions
             flattened_shape = [self.S.size(-3) * self.S.size(-2), 2]
@@ -919,51 +962,13 @@ class scattering_matrix:
                     self.stored_gridshape,
                 )
 
-                output[k, window] = torch.sum(
-                    complex_mul(
-                        probes[k, self.beams[:, 0], self.beams[:, 1]].view(
-                            self.nbeams, 1, 2
-                        ),
-                        self.S.view(self.nbeams, *flattened_shape)[:, window],
-                    ),
-                    dim=0,
-                ) / np.sqrt(np.prod(self.gridshape))
+                output[k, window] = complex_matmul(
+                    probes[k, self.beams[:, 0], self.beams[:, 1]],
+                    self.S.view(self.nbeams, *flattened_shape)[:, window],
+                ) / np.sqrt(np.prod(probes.size()[-3:-1]))
             output = output.reshape(probes.size(0), *self.S.size()[-3:])
 
-            return torch.fft(output, signal_ndim=2, normalized=True)
-
-    def Smatrix_STEM(
-        self,
-        probe,
-        alpha,
-        batch_size=1,
-        detectors=None,
-        datacube=None,
-        showProgress=True,
-        FourD_STEM=False,
-        scan_posn=None,
-    ):
-        """Using the scattering matrix simulate a STEM experiment"""
-        # The method used to propagate an electron wave to the exit surface
-        # is the __call__ method for the scattering matrix object
-        method = self
-
-        return STEM(
-            self.rsize,
-            probe,
-            method,
-            [1],
-            self.eV,
-            alpha,
-            batch_size=batch_size,
-            detectors=detectors,
-            FourD_STEM=FourD_STEM,
-            datacube=datacube,
-            scan_posn=scan_posn,
-            device=self.device,
-            tiling=self.tiling,
-            showProgress=showProgress,
-        )
+            return torch.fft(output, signal_ndim=2)
 
     def plot(self, show=True):
         """Make a montage plot of the scattering matrix"""
