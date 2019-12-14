@@ -270,6 +270,8 @@ class crystal:
         # If temperature factors are given as B then convert to urms
         if temperature_factor_units == "B":
             self.atoms[:, 5] /= 8 * np.pi ** 2
+        elif temperature_factor_units == 'sqrturms':
+            self.atoms[:, 5] = self.atoms[:,5] ** 2
 
         # If necessary, Convert atomic positions to fractional coordinates
         if atomic_coordinates == "cartesian":
@@ -440,7 +442,8 @@ class crystal:
         nelements = len(elements)
         nsubslices = len(subslices)
         # Build list of equivalent sites
-        equivalent_sites = find_equivalent_sites(self.atoms[:, :3], EPS=1e-3)
+        if fractional_occupancy: 
+            equivalent_sites = find_equivalent_sites(self.atoms[:, :3], EPS=1e-3)
 
         # FDES method
         # Intialize potential array

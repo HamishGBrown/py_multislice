@@ -719,9 +719,8 @@ def detect(detector, diffraction_pattern):
     the zeroth coordinate in reciprocal space is in the top-left hand corner
     of the array."""
     minsize = min(detector.size()[-2:], diffraction_pattern.size()[-2:])
-    wind = [
-        torch.arange(-minsize[i] // 2, minsize[i] // 2) + minsize[i] % 2 for i in [0, 1]
-    ]
+    
+    wind = [fftfreq(minsize[i], torch.long, detector.device) for i in [0, 1]]
     Dwind = crop_window_to_flattened_indices_torch(wind, detector.size())
     DPwind = crop_window_to_flattened_indices_torch(wind, diffraction_pattern.size())
     return torch.sum(
@@ -731,7 +730,7 @@ def detect(detector, diffraction_pattern):
     )
 
 
-def fourier_interpolate_2d_torch(ain, shapeout, correct_norm=True):
+def fourier_interpolate_2d_torch(ain, shapeout, correct_norm=True,qspace_in = False,qspace_out= False):
     """Perfoms a fourier interpolation on array ain so that its shape matches
     that given by shapeout.
 
@@ -740,6 +739,9 @@ def fourier_interpolate_2d_torch(ain, shapeout, correct_norm=True):
     shapeout -- Shape of output array
     correct_norm -- If True normalization such that values are conserved, if false
                     normalization such that sum square is conserved
+    qspace_in   -- If True expect a Fourier space input
+    qspace_out  -- If True return a Fourier space output, otherwise return
+                   in real space
     """
     dtype = ain.dtype
     inputComplex = iscomplex(ain)
@@ -767,18 +769,21 @@ def fourier_interpolate_2d_torch(ain, shapeout, correct_norm=True):
 
     # Now transfer over Fourier coefficients from input to output array
     if inputComplex:
-        ain_ = torch.fft(ain, signal_ndim=2).flatten(-3, -2)
+        ain_ = ain
     else:
-        ain_ = torch.fft(to_complex(ain), signal_ndim=2).flatten(-3, -2)
+        ain_ = to_complex(ain).flatten(-3, -2)
 
-    aout[..., maskout, :] = ain_[..., maskin, :]
-    # fig,ax = plt.subplots(nrows=2)
-    # ax[0].imshow(aout.view(ain.shape[:-2 - int(inputComplex)] + tuple(shapeout)+(2,))[0,:,:,0].numpy())
-    # ax[1].imshow(ain_[0,:,:,0].numpy())
-    # plt.show(block=True)
+    if not qspace_in:
+        ain_ = torch.fft(ain_, signal_ndim=2)
+
+
+    aout[..., maskout, :] = ain_.flatten(-3, -2)[..., maskin, :]
+    
     # Fourier transform result with appropriate normalization
     aout = aout.reshape(ain.shape[: -2 - int(inputComplex)] + tuple(shapeout) + (2,))
-    aout = torch.ifft(aout, signal_ndim=2)
+    
+    if  not qspace_out:
+        aout = torch.ifft(aout, signal_ndim=2)
     if correct_norm:
         aout *= np.prod(shapeout) / np.prod([npiyin, npixin])
     else:

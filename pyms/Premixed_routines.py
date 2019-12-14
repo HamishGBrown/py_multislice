@@ -173,6 +173,7 @@ def STEM_multislice(
     seed=None,
     showProgress=True,
     detector_ranges=None,
+    fractional_occupancy=True,
     nT=5,
 ):
     """Perform a STEM simulation using only the multislice algorithm"""
@@ -186,7 +187,7 @@ def STEM_multislice(
 
     # Make propagators and transmission functions for multslice
     P, T = multislice_precursor(
-        sample, pix_dim, eV, subslices=subslices, tiling=tiling, nT=nT, device=device,showProgress=showProgress
+        sample, pix_dim, eV, subslices=subslices, tiling=tiling, nT=nT, device=device,showProgress=showProgress,fractional_occupancy=fractional_occupancy
     )
 
     # Convert thicknesses into number of slices for multislice
@@ -242,6 +243,8 @@ def multislice_precursor(
     device=get_device(None),
     dtype=torch.float32,
     showProgress=True,
+    displacements=True,
+    fractional_occupancy=True,
 ):
     """Make transmission functions and propagators for multislice"""
     # Calculate grid size in Angstrom
@@ -265,7 +268,8 @@ def multislice_precursor(
             tiling=tiling,
             device=device,
             dtype=dtype,
-            displacements=False,
+            displacements=displacements,
+            fractional_occupancy=fractional_occupancy,
         )
 
     return P, T

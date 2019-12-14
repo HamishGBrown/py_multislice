@@ -30,6 +30,11 @@ from .utils.torch_utils import (
     fourier_interpolate_2d_torch,
 )
 
+def propagate(array,gridsize,z):
+    
+    return
+
+
 
 def make_propagators(pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0]):
     """Make the Fresnel freespace propagators for a multislice simulation.
@@ -878,13 +883,12 @@ class scattering_matrix:
                     :, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
                 ]*np.sqrt(np.prod(self.stored_gridshape)/np.prod(self.gridshape))
             else:
-                if self.crop_output:
-                    output = fourier_interpolate_2d_torch(output, self.stored_gridshape,correct_norm=False)
+                output = fourier_interpolate_2d_torch(output, self.stored_gridshape,correct_norm=False)
                 self.S[beams, ...] = output
 
     def __call__(self, probes, nslices, posn=None):
         """Evaluate the the Smatrix probe matrix multiplication for a number
-        of probes in windows centred about window_posn. The variable nslices 
+        of probes in windows centred about posn. The variable nslices 
         does nothing and is only included to match the function call signature 
         for the STEM routine"""
         from .utils.torch_utils import crop_window_to_flattened_indices_torch
@@ -970,7 +974,7 @@ class scattering_matrix:
 
             return torch.fft(output, signal_ndim=2)
 
-    def plot(self, show=True):
+    def plot(self,nn=[1,1], show=True):
         """Make a montage plot of the scattering matrix"""
         from .utils import colorize
 
