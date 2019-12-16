@@ -474,13 +474,12 @@ class crystal:
         ielement = (
             torch.tensor(
                 [
-                    elements.index(int(self.atoms[iatom, 3]))
+                    element_stride*elements.index(int(self.atoms[iatom, 3]))
                     for iatom in range(self.atoms.shape[0])
                 ],
                 dtype=torch.long,
                 device=device,
             )
-            * element_stride
         )
 
         if displacements:

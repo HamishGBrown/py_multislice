@@ -21,8 +21,9 @@ from .utils.torch_utils import (
     complex_matmul,
     complex_mul,
     get_device,
+    size_of_bandwidth_limited_array
 )
-from .utils.numpy_utils import fourier_shift, crop
+from .utils.numpy_utils import fourier_shift, crop,crop_to_bandwidth_limit
 import matplotlib.pyplot as plt
 
 # from .Ionization import make_transition_potentials
@@ -377,38 +378,43 @@ def CBED(
 
     # Make propagators and transmission functions for multslice
     P, T = multislice_precursor(
-        sample,
+        crystal,
         gridshape,
         eV,
         subslices=subslices,
         tiling=tiling,
         nT=nT,
-        device_type=device,
+        device=device,
         showProgress=showProgress,
     )
+
+    output = np.zeros((thicknesses.shape[0],*size_of_bandwidth_limited_array(gridshape)))
 
     nslices = np.asarray(np.ceil(thicknesses / crystal.unitcell[2]), dtype=np.int)
 
     # Iteration over frozen phonon configurations
-    for ifph in tqdm(range(nfph),desc="Frozen phonon iteration",disable = not showProgress):
+    for ifph in tqdm.tqdm(range(nfph),desc="Frozen phonon iteration",disable = not showProgress):
         # Make probe
-        probe = pyms.focused_probe(gridshape, rsize, eV, app)
+        probe = focused_probe(gridshape, crystal.unitcell[:2]*np.asarray(tiling), eV, app,qspace=True)
 
         # Run multislice iterating over different thickness outputs
         for it, t in enumerate(np.diff(nslices, prepend=0)):
-            probe = pyms.multislice(
+            probe = multislice(
                 probe,
-                nslices[it] - tt,
+                t,
                 P,
                 T,
                 tiling=tiling,
                 output_to_bandwidth_limit=False,
+                qspace_in=True,
+                qspace_out=True,
             )
             output[it, ...] += (
-                np.abs(np.fft.fftshift(np.fft.fft2(probe, norm="ortho"))) ** 2
+                np.abs(np.fft.fftshift(crop_to_bandwidth_limit(probe))) ** 2
             )
 
-    return output
+    #Divide output by # of pixels to compensate for Fourier transform
+    return output/np.prod(gridshape)
 
 
 def STEM_EELS_PRISM(
