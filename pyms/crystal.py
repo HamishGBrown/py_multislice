@@ -261,8 +261,11 @@ class crystal:
             # Rearrange columns of numpy array to match standard
             totnatoms = atoms.shape[0]
             self.atoms = np.zeros((totnatoms, 6))
+            # Atomic coordinates
             self.atoms[:, :3] = atoms[:, 1:4]
+            # Atomic numbers (Z)
             self.atoms[:, 3] = atoms[:, 0]
+            # Fractional occupancy and Debye-Waller (temperature) factor
             self.atoms[:, 4:6] = atoms[:, 4:6]
         else:
             print("File extension: {0} not recognized".format(ext))
@@ -270,8 +273,12 @@ class crystal:
         # If temperature factors are given as B then convert to urms
         if temperature_factor_units == "B":
             self.atoms[:, 5] /= 8 * np.pi ** 2
-        elif temperature_factor_units == 'sqrturms':
-            self.atoms[:, 5] = self.atoms[:,5] ** 2
+        elif temperature_factor_units == "sqrturms":
+            self.atoms[:, 5] = self.atoms[:, 5] ** 2
+
+        # Check if there is any fractional occupancy of atom sites in
+        # the sample
+        self.fractional_occupancy = np.any(np.abs(self.atoms[:, 4] - 1.0) > 1e-3)
 
         # If necessary, Convert atomic positions to fractional coordinates
         if atomic_coordinates == "cartesian":
@@ -441,8 +448,9 @@ class crystal:
         # Get number of unique atomic elements
         nelements = len(elements)
         nsubslices = len(subslices)
-        # Build list of equivalent sites
-        if fractional_occupancy: 
+        # Build list of equivalent sites if Fractional occupancy is to be
+        # taken into account
+        if fractional_occupancy and self.fractional_occupancy:
             equivalent_sites = find_equivalent_sites(self.atoms[:, :3], EPS=1e-3)
 
         # FDES method
@@ -471,15 +479,13 @@ class crystal:
 
         # Construct a map of which atom corresponds to which element
         element_stride = nsubslices * slice_stride
-        ielement = (
-            torch.tensor(
-                [
-                    element_stride*elements.index(int(self.atoms[iatom, 3]))
-                    for iatom in range(self.atoms.shape[0])
-                ],
-                dtype=torch.long,
-                device=device,
-            )
+        ielement = torch.tensor(
+            [
+                element_stride * elements.index(int(self.atoms[iatom, 3]))
+                for iatom in range(self.atoms.shape[0])
+            ],
+            dtype=torch.long,
+            device=device,
         )
 
         if displacements:
@@ -516,7 +522,7 @@ class crystal:
 
                 # If using fractional occupancy force atoms occupying equivalent
                 # sites to have the same displacement
-                if fractional_occupancy:
+                if fractional_occupancy and self.fractional_occupancy:
                     disp = disp[equivalent_sites, :]
 
                 posn[:, :2] += disp
@@ -542,7 +548,7 @@ class crystal:
             xl = 1.0 - xh
 
             # Account for fractional occupancy of atomic sites if requested
-            if fractional_occupancy:
+            if fractional_occupancy and self.fractional_occupancy:
                 xh *= torch.from_numpy(self.atoms[:, 4]).type(P.dtype).to(device)
                 xl *= torch.from_numpy(self.atoms[:, 4]).type(P.dtype).to(device)
 
