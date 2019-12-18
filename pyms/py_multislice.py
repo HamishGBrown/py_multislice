@@ -30,8 +30,10 @@ from .utils.torch_utils import (
     fourier_interpolate_2d_torch,
 )
 
+
 def datacube_to_py4DSTEM_viewable(datacube, filename):
-    import h5py,os
+    import h5py, os
+
     f = h5py.File(os.path.splitext(filename)[0] + ".h5", "w")
     f.attrs["version_major"] = 0
     f.attrs["version_minor"] = 3
@@ -53,6 +55,7 @@ def datacube_to_py4DSTEM_viewable(datacube, filename):
     f.create_group("4D-STEM_data/metadata/calibration")
     f.create_group("4D-STEM_data/metadata/comments")
     f.close()
+
 
 def make_propagators(pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0]):
     """Make the Fresnel freespace propagators for a multislice simulation.
@@ -363,6 +366,7 @@ def STEM(
     showProgress=True,
     method_args=(),
     method_kwargs={},
+    STEM_image=None,
 ):
     """Perform a STEM image simulation.
 
@@ -428,7 +432,10 @@ def STEM(
         ndet = detectors.shape[0]
 
         # Initialize array in which to store resulting STEM images
-        STEM_image = np.zeros((ndet, nthick, nscantot))
+        if STEM_image is None:
+            STEM_image = np.zeros((ndet, nthick, nscantot))
+        else:
+            STEM_image = STEM_image.reshape((ndet, nthick, nscantot))
 
         # Also move detectors to pytorch if necessary
         D = ensure_torch_array(detectors, device=device, dtype=dtype)
@@ -482,7 +489,11 @@ def STEM(
         # calculations
         seed = np.random.randint(0, 2 ** 31 - 1)
 
-    for i in tqdm(range(int(np.ceil(nscantot / batch_size))), disable=not showProgress,desc='Probe positions:'):
+    for i in tqdm(
+        range(int(np.ceil(nscantot / batch_size))),
+        disable=not showProgress,
+        desc="Probe positions",
+    ):
 
         # Make shifted probes
         scan_index = np.arange(
@@ -533,7 +544,7 @@ def STEM(
                 # broadcast detector and probe arrays to
                 # ndet x batch_size x Y x X and reduce final two dimensions
 
-                STEM_image[:ndet, it, scan_index] = detect(D, amp).cpu().numpy()
+                STEM_image[:ndet, it, scan_index] += detect(D, amp).cpu().numpy()
 
             # Store datacube
             if FourD_STEM:
@@ -541,7 +552,8 @@ def STEM(
                     np.fft.fftshift(amp.cpu().numpy(), axes=(-1, -2))
                 )
 
-    # Unflatten 4D-STEM datacube scan dimensions
+    # Unflatten 4D-STEM datacube scan dimensions, use numpy squeeze to
+    # remove superfluous dimensions (ones with length 1)
     if FourD_STEM:
         datacube = datacube.reshape(nthick, *nscan, *datacube.shape[-2:])
 
@@ -862,7 +874,9 @@ class scattering_matrix:
         # Loop over the different plane wave components (or columns) of the
         # scattering matrix
         for i in tqdm(
-            range(int(np.ceil(self.nbeams / batch_size))), disable=not showProgress, desc = 'Calculating S-matrix'
+            range(int(np.ceil(self.nbeams / batch_size))),
+            disable=not showProgress,
+            desc="Calculating S-matrix",
         ):
             psi[...] = 0.0
             beams = np.arange(

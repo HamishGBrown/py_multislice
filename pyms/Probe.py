@@ -16,16 +16,16 @@ class aberration:
             self.angle = 0
 
 
-def nyquist_sampling(size, resolution_limit=None, eV=None, alpha=None):
+def nyquist_sampling(rsize, resolution_limit=None, eV=None, alpha=None):
     """For resolution limit in units of inverse length and array size in
     units of length calculate how many probe positions are required for
-    nyquist sampling. Alternatively pass probe accelerating voltage and
-    probe forming aperture and the resolution limit in inverse length
-    will be calculated for you."""
+    nyquist sampling. Alternatively pass probe accelerating voltage (eV)
+    in kV and probe forming aperture (alpha) in mrad and the resolution
+    limit in inverse length will be calculated for you."""
     if eV is None and alpha is None:
-        return np.ceil(4 * np.asarray(size) * resolution_limit).astype(np.int)
+        return np.ceil(4 * np.asarray(rsize) * resolution_limit).astype(np.int)
     elif resolution_limit is None:
-        return np.ceil(4 * np.asarray(size) * wavev(eV) * alpha * 1e-3).astype(np.int)
+        return np.ceil(4 * np.asarray(rsize) * wavev(eV) * alpha * 1e-3).astype(np.int)
     else:
         return None
 

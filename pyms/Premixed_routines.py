@@ -22,7 +22,7 @@ from .utils.torch_utils import (
     complex_mul,
     get_device,
     size_of_bandwidth_limited_array,
-    crop_to_bandwidth_limit_torch
+    crop_to_bandwidth_limit_torch,
 )
 from .utils.numpy_utils import fourier_shift, crop, crop_to_bandwidth_limit
 import matplotlib.pyplot as plt
@@ -166,10 +166,10 @@ def STEM_multislice(
     alpha,
     subslices=[1.0],
     df=0,
+    nfph=25,
     aberrations=[],
     batch_size=5,
     FourD_STEM=False,
-    datacube=None,
     scan_posn=None,
     dtype=torch.float32,
     device_type=None,
@@ -184,22 +184,11 @@ def STEM_multislice(
 
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
+
+    # Make the STEM probe
     real_dim = sample.unitcell[:2] * np.asarray(tiling)
     probe = focused_probe(
         pix_dim, real_dim[:2], eV, alpha, df=df, aberrations=aberrations
-    )
-
-    # Make propagators and transmission functions for multslice
-    P, T = multislice_precursor(
-        sample,
-        pix_dim,
-        eV,
-        subslices=subslices,
-        tiling=tiling,
-        nT=nT,
-        device=device,
-        showProgress=showProgress,
-        fractional_occupancy=fractional_occupancy,
     )
 
     # Convert thicknesses into number of slices for multislice
@@ -217,7 +206,7 @@ def STEM_multislice(
         )
 
     method = multislice
-    args = (P, T, tiling, device, seed)
+
     kwargs = {
         "return_numpy": False,
         "qspace_in": True,
@@ -225,24 +214,62 @@ def STEM_multislice(
         "output_to_bandwidth_limit": True,
     }
 
-    return STEM(
-        real_dim,
-        probe,
-        method,
-        nslices,
-        eV,
-        alpha,
-        batch_size=batch_size,
-        detectors=D,
-        FourD_STEM=FourD_STEM,
-        scan_posn=scan_posn,
-        device=device,
-        tiling=tiling,
-        seed=seed,
-        showProgress=showProgress,
-        method_args=args,
-        method_kwargs=kwargs,
-    )
+    STEM_images = None
+    datacube = None
+
+    for i in tqdm.tqdm(
+        range(nfph),
+        desc="Frozen phonon iteration",
+        position=0,
+        disable=not showProgress,
+    ):
+
+        # Make propagators and transmission functions for multslice
+        P, T = multislice_precursor(
+            sample,
+            pix_dim,
+            eV,
+            subslices=subslices,
+            tiling=tiling,
+            nT=nT,
+            device=device,
+            showProgress=showProgress,
+            fractional_occupancy=fractional_occupancy,
+        )
+
+        # Put new transmission functions and propagators into arguments
+        args = (P, T, tiling, device, seed)
+
+        result = STEM(
+            real_dim,
+            probe,
+            method,
+            nslices,
+            eV,
+            alpha,
+            batch_size=batch_size,
+            detectors=D,
+            FourD_STEM=FourD_STEM,
+            scan_posn=scan_posn,
+            device=device,
+            tiling=tiling,
+            seed=seed,
+            showProgress=showProgress,
+            method_args=args,
+            method_kwargs=kwargs,
+            datacube=datacube,
+            STEM_image=STEM_images,
+        )
+
+        # Retreive results from STEM routine
+        if not (detector_ranges is None) and FourD_STEM:
+            STEM_images, datacube = result
+        elif not (detector_ranges is None):
+            STEM_images = result[0]
+        elif FourD_STEM:
+            datacube = result[0]
+
+    return [i for i in [STEM_images, datacube] if not i is None]
 
 
 def multislice_precursor(
@@ -384,7 +411,7 @@ def CBED(
     nT=5,
     nfph=25,
     showProgress=True,
-    probe_posn=None
+    probe_posn=None,
 ):
 
     # Choose GPU if available and CPU if not
@@ -418,7 +445,13 @@ def CBED(
         )
 
         if not (probe_posn is None):
-            probe = fourier_shift(probe,np.asarray(probe_posn)/np.asarray(tiling),pixel_units=False,qspacein=True,qspaceout=True)
+            probe = fourier_shift(
+                probe,
+                np.asarray(probe_posn) / np.asarray(tiling),
+                pixel_units=False,
+                qspacein=True,
+                qspaceout=True,
+            )
 
         # Run multislice iterating over different thickness outputs
         for it, t in enumerate(np.diff(nslices, prepend=0)):
@@ -431,7 +464,7 @@ def CBED(
                 output_to_bandwidth_limit=False,
                 qspace_in=True,
                 qspace_out=True,
-                device_type=device
+                device_type=device,
             )
             output[it, ...] += (
                 np.abs(np.fft.fftshift(crop_to_bandwidth_limit(probe))) ** 2
@@ -487,16 +520,28 @@ def HRTEM(
     # Option for focal series, just pass an array of defocii, this bit of
     # code will set up the lens transfer functions for each case
     if np.isscalar(df):
-        ctf = crop_to_bandwidth_limit_torch(cx_from_numpy(make_contrast_transfer_function(
-            gridshape, rsize, eV, app, df=df, aberrations=aberrations
-        ),dtype=dtype,device=device))
-        output = np.zeros((1,len(nslices), *bw_limit_size))
+        ctf = crop_to_bandwidth_limit_torch(
+            cx_from_numpy(
+                make_contrast_transfer_function(
+                    gridshape, rsize, eV, app, df=df, aberrations=aberrations
+                ),
+                dtype=dtype,
+                device=device,
+            )
+        )
+        output = np.zeros((1, len(nslices), *bw_limit_size))
     else:
-        ctf = torch.zeros(len(df), *bw_limit_size, 2, dtype=dtype,device=device)
+        ctf = torch.zeros(len(df), *bw_limit_size, 2, dtype=dtype, device=device)
         for idf, df_ in enumerate(df):
-            ctf[idf] = crop_to_bandwidth_limit_torch(cx_from_numpy(make_contrast_transfer_function(
-                gridshape, rsize, eV, app, df=df_, aberrations=aberrations
-            ),dtype=dtype,device=device))
+            ctf[idf] = crop_to_bandwidth_limit_torch(
+                cx_from_numpy(
+                    make_contrast_transfer_function(
+                        gridshape, rsize, eV, app, df=df_, aberrations=aberrations
+                    ),
+                    dtype=dtype,
+                    device=device,
+                )
+            )
         output = np.zeros((len(df), len(nslices), *bw_limit_size))
 
     # Iteration over frozen phonon configurations
@@ -520,7 +565,16 @@ def HRTEM(
                 return_numpy=False,
                 device_type=device,
             )
-            output[:,it, ...] += amplitude(torch.ifft(complex_mul(ctf, crop_to_bandwidth_limit_torch(probe)),signal_ndim=2)).cpu().numpy()
+            output[:, it, ...] += (
+                amplitude(
+                    torch.ifft(
+                        complex_mul(ctf, crop_to_bandwidth_limit_torch(probe)),
+                        signal_ndim=2,
+                    )
+                )
+                .cpu()
+                .numpy()
+            )
 
     # Divide output by # of pixels to compensate for Fourier transform
     return np.squeeze(output)
@@ -601,7 +655,12 @@ def STEM_EELS_PRISM(
     # Link the slices and seeds of both scattering matrices
     S1.seed = S2.seed
 
-    from .Ionization import orbital, transition_potential, tile_out_ionization_image
+    from .Ionization import (
+        make_transition_potentials,
+        orbital,
+        transition_potential,
+        tile_out_ionization_image,
+    )
 
     nstates = len(freeQuantumNumbers)
     Hn0 = make_transition_potentials(
@@ -615,18 +674,6 @@ def STEM_EELS_PRISM(
         freeQuantumNumbers,
         freeConfiguration,
     )
-    print(
-        gridshape,
-        rsize,
-        eV,
-        Ztarget,
-        epsilon,
-        boundQuantumNumbers,
-        boundConfiguration,
-        freeQuantumNumbers,
-        freeConfiguration,
-    )
-    fig, ax = plt.subplots(nrows=Hn0.shape[0])
 
     if Hn0_crop is None:
         Hn0_crop = [S1.stored_gridshape[i] for i in range(2)]
@@ -663,7 +710,7 @@ def STEM_EELS_PRISM(
     EELS_image = torch.zeros(len(scan[0]) * len(scan[1]), dtype=S1.dtype, device=device)
 
     total_slices = nslices * len(subslices)
-    for islice in tqdm.tqdm(range(total_slices), desc="Slice"):
+    for islice in tqdm.tqdm(range(total_slices), desc="Slice", position=0):
 
         # Propagate scattering matrices to this slice
         if islice > 0:
@@ -679,6 +726,8 @@ def STEM_EELS_PRISM(
                 showProgress=False,
             )
 
+        # Flatten indices of second scattering matrix in preparation for
+        # indexing
         S2.S = S2.S.reshape(S2.S.shape[0], np.product(S2.stored_gridshape), 2)
 
         # Work out which subslice of the crystal unit cell we are in
@@ -694,7 +743,7 @@ def STEM_EELS_PRISM(
         ]
 
         # Iterate over atoms in this slice
-        for atom in tqdm.tqdm(atomsinslice, "Transitions in slice"):
+        for atom in tqdm.tqdm(atomsinslice, "Transitions in slice", position=1):
 
             windex = torch.from_numpy(
                 window_indices(atom, Hn0_crop, S1.stored_gridshape)
