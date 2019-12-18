@@ -206,12 +206,17 @@ def STEM_multislice(
         )
 
     method = multislice
+    
+    # Output only to multislice bandwidth limit if only one thickness is
+    # considered, otherwise the full array must be kept for subsequent
+    # iterations of the multislice algorithm
+    output_to_bandwidth_limit = len(nslices)<1
 
     kwargs = {
         "return_numpy": False,
         "qspace_in": True,
         "qspace_out": True,
-        "output_to_bandwidth_limit": True,
+        "output_to_bandwidth_limit": output_to_bandwidth_limit,
     }
 
     STEM_images = None
@@ -261,7 +266,7 @@ def STEM_multislice(
             STEM_image=STEM_images,
         )
 
-        # Retreive results from STEM routine
+        # Retrieve results from STEM routine
         if not (detector_ranges is None) and FourD_STEM:
             STEM_images, datacube = result
         elif not (detector_ranges is None):
