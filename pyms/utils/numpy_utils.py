@@ -3,6 +3,22 @@ import torch
 import copy
 
 
+def tiff_stack_out(array, tag):
+    from PIL import Image
+    import os.path
+
+    direc = os.path.dirname(tag)
+    if not os.path.exists(direc):
+        os.mkdir(direc)
+
+    shape = array.shape
+    ntiffs = np.prod(shape[:-2])
+    array_ = array.reshape((ntiffs, *shape[-2:]))
+
+    for i, img in enumerate(array_):
+        Image.fromarray(img).save(os.path.splitext(tag.format(i))[0] + ".tif")
+
+
 def q_space_array(pixels, gridsize):
     """Returns the appropriately scaled 2D reciprocal space array for pixel size
     given by pixels (#y pixels, #x pixels) and real space size given by gridsize

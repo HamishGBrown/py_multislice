@@ -206,11 +206,11 @@ def STEM_multislice(
         )
 
     method = multislice
-    
+
     # Output only to multislice bandwidth limit if only one thickness is
     # considered, otherwise the full array must be kept for subsequent
     # iterations of the multislice algorithm
-    output_to_bandwidth_limit = len(nslices)<1
+    output_to_bandwidth_limit = len(nslices) < 1
 
     kwargs = {
         "return_numpy": False,

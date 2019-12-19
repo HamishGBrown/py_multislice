@@ -719,7 +719,7 @@ def detect(detector, diffraction_pattern):
     the zeroth coordinate in reciprocal space is in the top-left hand corner
     of the array."""
     minsize = min(detector.size()[-2:], diffraction_pattern.size()[-2:])
-    
+
     wind = [fftfreq(minsize[i], torch.long, detector.device) for i in [0, 1]]
     Dwind = crop_window_to_flattened_indices_torch(wind, detector.size())
     DPwind = crop_window_to_flattened_indices_torch(wind, diffraction_pattern.size())
@@ -730,7 +730,9 @@ def detect(detector, diffraction_pattern):
     )
 
 
-def fourier_interpolate_2d_torch(ain, shapeout, correct_norm=True,qspace_in = False,qspace_out= False):
+def fourier_interpolate_2d_torch(
+    ain, shapeout, correct_norm=True, qspace_in=False, qspace_out=False
+):
     """Perfoms a fourier interpolation on array ain so that its shape matches
     that given by shapeout.
 
@@ -776,13 +778,12 @@ def fourier_interpolate_2d_torch(ain, shapeout, correct_norm=True,qspace_in = Fa
     if not qspace_in:
         ain_ = torch.fft(ain_, signal_ndim=2)
 
-
     aout[..., maskout, :] = ain_.flatten(-3, -2)[..., maskin, :]
-    
+
     # Fourier transform result with appropriate normalization
     aout = aout.reshape(ain.shape[: -2 - int(inputComplex)] + tuple(shapeout) + (2,))
-    
-    if  not qspace_out:
+
+    if not qspace_out:
         aout = torch.ifft(aout, signal_ndim=2)
     if correct_norm:
         aout *= np.prod(shapeout) / np.prod([npiyin, npixin])

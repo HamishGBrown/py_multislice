@@ -563,9 +563,9 @@ def STEM(
             np.squeeze(datacube),
         )
     if FourD_STEM:
-        return np.squeeze(datacube)
+        return [np.squeeze(datacube)]
     if conventional_STEM:
-        return np.squeeze(STEM_image.reshape(ndet, nthick, *nscan))
+        return [np.squeeze(STEM_image.reshape(ndet, nthick, *nscan))]
 
 
 def unit_cell_shift(array, axis, shift, tiles):

@@ -12,7 +12,7 @@ setup(
         'ipython >= 4.0',
         'scipy >= 1.1',
         'matplotlib >= 3.0',
-        'numpy >= 1.15',
+        'numpy >= 1.17',
         'Pillow >= 6.0',
         'torch >= 1.2',
         'tqdm >= 4.0'
