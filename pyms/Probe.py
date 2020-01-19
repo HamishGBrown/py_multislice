@@ -3,9 +3,9 @@ from .utils.numpy_utils import q_space_array
 
 
 class aberration:
-    def __init__(self, Haider, Krivanek, Description, amplitude, angle, n, m):
-        self.Haider = Haider
+    def __init__(self, Krivanek, Haider, Description, amplitude, angle, n, m):
         self.Krivanek = Krivanek
+        self.Haider = Haider
         self.Description = Description
         self.amplitude = amplitude
         self.m = m
@@ -14,7 +14,12 @@ class aberration:
             self.angle = angle
         else:
             self.angle = 0
-
+            
+    def __str__(self):
+        if self.m > 0:
+            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u212B \u03B8 = {4:4d}\u00B0".format(self.Description,self.Haider,self.Krivanek,self.amplitude,int(np.rad2deg(self.angle)))
+        else:
+            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u212B".format(self.Description,self.Haider,self.Krivanek,self.amplitude)
 
 def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
     """For resolution limit in units of inverse length calculate 
@@ -43,22 +48,18 @@ def aberration_starter_pack():
     aberrations = []
     aberrations.append(aberration("C10", "C1", "Defocus          ", 0.0, 0.0, 1, 0))
     aberrations.append(aberration("C12", "A1", "2-Fold astig.    ", 0.0, 0.0, 1, 2))
-    aberrations.append(aberration("C21", "B2", "Axial coma       ", 0.0, 0.0, 2, 1))
     aberrations.append(aberration("C23", "A2", "3-Fold astig.    ", 0.0, 0.0, 2, 3))
-    aberrations.append(
-        aberration("C30 = CS", "C3", "3rd order spher. ", 0.0, 0.0, 3, 0)
-    )
-    aberrations.append(aberration("C32", "S3", "Axial star aber. ", 0.0, 0.0, 3, 2))
+    aberrations.append(aberration("C21", "B2", "Axial coma       ", 0.0, 0.0, 2, 1))
+    aberrations.append(aberration("C30", "C3", "3rd order spher. ", 0.0, 0.0, 3, 0))
     aberrations.append(aberration("C34", "A3", "4-Fold astig.    ", 0.0, 0.0, 3, 4))
-    aberrations.append(aberration("C41", "B4", "4th order coma   ", 0.0, 0.0, 4, 1))
-    aberrations.append(aberration("C43", "D4", "3-Lobe aberr.    ", 0.0, 0.0, 4, 3))
+    aberrations.append(aberration("C32", "S3", "Axial star aber. ", 0.0, 0.0, 3, 2))
     aberrations.append(aberration("C45", "A4", "5-Fold astig     ", 0.0, 0.0, 4, 5))
-    aberrations.append(
-        aberration("C50 = CS5", "C5", "5th order spher. ", 0.0, 0.0, 5, 0)
-    )
+    aberrations.append(aberration("C43", "D4", "3-Lobe aberr.    ", 0.0, 0.0, 4, 3))
+    aberrations.append(aberration("C41", "B4", "4th order coma   ", 0.0, 0.0, 4, 1))
+    aberrations.append(aberration("C50", "C5", "5th order spher. ", 0.0, 0.0, 5, 0))
+    aberrations.append(aberration("C56", "A5", "6-Fold astig.    ", 0.0, 0.0, 5, 6))
     aberrations.append(aberration("C52", "S5", "5th order star   ", 0.0, 0.0, 5, 2))
     aberrations.append(aberration("C54", "R5", "5th order rosette", 0.0, 0.0, 5, 4))
-    aberrations.append(aberration("C56", "A5", "6-Fold astig.    ", 0.0, 0.0, 5, 6))
     return aberrations
 
 
@@ -78,9 +79,9 @@ def chi(q, qphi, lam, df=0.0, aberrations=[]):
     for ab in aberrations:
         chi_ += (
             (q * lam) ** (ab.n + 1)
-            * float(ab.amplitude.get())
+            * float(ab.amplitude)
             / (ab.n + 1)
-            * np.cos(ab.m * (qphi - float(ab.angle.get())))
+            * np.cos(ab.m * (qphi - float(ab.angle)))
         )
     return 2 * np.pi * chi_ / lam
 
