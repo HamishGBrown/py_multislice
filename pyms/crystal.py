@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-import sys
 import copy
 from re import split, match
 from os.path import splitext
@@ -10,9 +9,6 @@ from .Probe import wavev, relativistic_mass_correction
 from .utils.numpy_utils import bandwidth_limit_array, q_space_array
 from .utils.torch_utils import (
     sinc,
-    roll_n,
-    cx_from_numpy,
-    cx_to_numpy,
     complex_mul,
     torch_c_exp,
     fourier_shift_array,
@@ -55,7 +51,7 @@ def electron_scattering_factor(Z, gsq, units="VA"):
 
 def calculate_scattering_factors(gridshape, gridsize, elements):
     """Calculates the electron scattering factors on a reciprocal space
-        grid of pixel size pixels assuming a unit cell tiling given by 
+        grid of pixel size pixels assuming a unit cell tiling given by
         tiling"""
 
     # Get reciprocal space array
@@ -73,7 +69,7 @@ def calculate_scattering_factors(gridshape, gridsize, elements):
 
 
 def find_equivalent_sites(positions, EPS=1e-3):
-    """Finds equivalent atomic sites, ie two atoms sharing the same 
+    """Finds equivalent atomic sites, ie two atoms sharing the same
     postions with fractional occupancy, and return an index of these equivalent
     sites"""
     from scipy.spatial.distance import pdist
@@ -124,7 +120,7 @@ def interaction_constant(E, units="rad/VA"):
 
 
 def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
-    """Generates the 3D rotational matrix for a rotation of angle theta in 
+    """Generates the 3D rotational matrix for a rotation of angle theta in
     radians around axis given by vector u."""
     from numpy import sin, cos, pi
 
@@ -422,14 +418,14 @@ class crystal:
         device=None,
         dtype=torch.float32,
     ):
-        """Calculates the projected electrostatic potential for a 
-            crystal on a pixel grid with dimensions specified by array 
-            pixels. Subslicing the unit cell is achieved by passing an 
-            array subslices that contains as its entries the depths at 
-            which each subslice should be terminated in units of 
+        """Calculates the projected electrostatic potential for a
+            crystal on a pixel grid with dimensions specified by array
+            pixels. Subslicing the unit cell is achieved by passing an
+            array subslices that contains as its entries the depths at
+            which each subslice should be terminated in units of
             fractional coordinates. Tiling of the unit cell (often
-            necessary to make a sufficiently large simulation grid to 
-            fit the probe) is achieved by passing the tiling factors in 
+            necessary to make a sufficiently large simulation grid to
+            fit the probe) is achieved by passing the tiling factors in
             the array tiling.
             """
 

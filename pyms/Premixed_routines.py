@@ -16,7 +16,6 @@ from .py_multislice import (
 )
 from .utils.torch_utils import (
     cx_from_numpy,
-    cx_to_numpy,
     amplitude,
     complex_matmul,
     complex_mul,
@@ -25,7 +24,6 @@ from .utils.torch_utils import (
     crop_to_bandwidth_limit_torch,
 )
 from .utils.numpy_utils import fourier_shift, crop, crop_to_bandwidth_limit
-import matplotlib.pyplot as plt
 
 # from .Ionization import make_transition_potentials
 from .Probe import focused_probe, make_contrast_transfer_function
@@ -225,7 +223,6 @@ def STEM_multislice(
     for i in tqdm.tqdm(
         range(nfph),
         desc="Frozen phonon iteration",
-        position=0,
         disable=not showProgress,
     ):
 
@@ -274,7 +271,7 @@ def STEM_multislice(
         elif FourD_STEM:
             datacube = result[0]
 
-    return [i for i in [STEM_images, datacube] if not i is None]
+    return [i for i in [STEM_images, datacube] if i is not None]
 
 
 def multislice_precursor(
@@ -359,7 +356,17 @@ def STEM_EELS_multislice(
         showProgress=showProgress,
     )
 
-    from . import transition_potential_multislice
+    from . import transition_potential_multislice, tile_out_ionization_image
+
+    rsize = sample.unitcell[:2] * np.asarray(tiling)
+
+    # Make probe
+    probe = focused_probe(
+        gridshape, sample.unitcell[:2] * np.asarray(tiling), eV, alpha, qspace=True
+    )
+
+    # Convert thicknesses to multislice slices
+    nslices = np.asarray(np.ceil(thicknesses / sample.unitcell[2]), dtype=np.int)
 
     method = transition_potential_multislice
     args = (
@@ -625,7 +632,6 @@ def STEM_EELS_PRISM(
 
     # Get the coordinates of the target atoms in a unit cell
     mask = crystal.atoms[:, 3] == Ztarget
-    natoms = np.sum(mask)
 
     # Adjust fractional coordinates for tiling of unit cell
     coords = crystal.atoms[mask][:, :3] / np.asarray(tiling + [1])
@@ -660,12 +666,7 @@ def STEM_EELS_PRISM(
     # Link the slices and seeds of both scattering matrices
     S1.seed = S2.seed
 
-    from .Ionization import (
-        make_transition_potentials,
-        orbital,
-        transition_potential,
-        tile_out_ionization_image,
-    )
+    from .Ionization import make_transition_potentials, tile_out_ionization_image
 
     nstates = len(freeQuantumNumbers)
     Hn0 = make_transition_potentials(
@@ -715,7 +716,7 @@ def STEM_EELS_PRISM(
     EELS_image = torch.zeros(len(scan[0]) * len(scan[1]), dtype=S1.dtype, device=device)
 
     total_slices = nslices * len(subslices)
-    for islice in tqdm.tqdm(range(total_slices), desc="Slice", position=0):
+    for islice in tqdm.tqdm(range(total_slices), desc="Slice"):
 
         # Propagate scattering matrices to this slice
         if islice > 0:
@@ -748,7 +749,7 @@ def STEM_EELS_PRISM(
         ]
 
         # Iterate over atoms in this slice
-        for atom in tqdm.tqdm(atomsinslice, "Transitions in slice", position=1):
+        for atom in tqdm.tqdm(atomsinslice, "Transitions in slice"):
 
             windex = torch.from_numpy(
                 window_indices(atom, Hn0_crop, S1.stored_gridshape)

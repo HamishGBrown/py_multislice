@@ -1,12 +1,7 @@
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-import sys
 from tqdm import tqdm
-from re import split, match
-from os.path import splitext
-from .atomic_scattering_params import e_scattering_factors, atomic_symbol
-from .crystal import crystal
 from .utils.numpy_utils import (
     bandwidth_limit_array,
     q_space_array,
@@ -14,13 +9,11 @@ from .utils.numpy_utils import (
     crop,
 )
 from .utils.torch_utils import (
-    sinc,
     roll_n,
     cx_from_numpy,
     cx_to_numpy,
     complex_matmul,
     complex_mul,
-    torch_c_exp,
     fourier_shift_array,
     amplitude,
     get_device,
@@ -29,32 +22,6 @@ from .utils.torch_utils import (
     size_of_bandwidth_limited_array,
     fourier_interpolate_2d_torch,
 )
-
-
-def datacube_to_py4DSTEM_viewable(datacube, filename):
-    import h5py, os
-
-    f = h5py.File(os.path.splitext(filename)[0] + ".h5", "w")
-    f.attrs["version_major"] = 0
-    f.attrs["version_minor"] = 3
-    grp = f.create_group("/4DSTEM_experiment/data/diffractionslices")
-    grp = f.create_group("/4DSTEM_experiment/data/realslices")
-    grp = f.create_group("/4DSTEM_experiment/data/pointlists")
-    grp = f.create_group("/4DSTEM_experiment/data/pointlistarrays")
-    grp = f.create_group("/4DSTEM_experiment/data/datacubes")
-    grp.attrs["emd_group_type"] = 1
-    grp.create_dataset(
-        "datacube_0/datacube", shape=datacube.shape, data=datacube, dtype=datacube.dtype
-    )
-    f.create_group("4D-STEM_data/metadata/original/shortlist")
-    f.create_group("4D-STEM_data/metadata/original/all")
-    f.create_group("4D-STEM_data/metadata/microscope")
-    f.create_group("4D-STEM_data/metadata/sample")
-    f.create_group("4D-STEM_data/metadata/user")
-    f.create_group("4D-STEM_data/metadata/processing")
-    f.create_group("4D-STEM_data/metadata/calibration")
-    f.create_group("4D-STEM_data/metadata/comments")
-    f.close()
 
 
 def make_propagators(pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0]):
@@ -75,9 +42,10 @@ def make_propagators(pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0]):
     """
     from .Probe import make_contrast_transfer_function, wavev
 
-    # We will use the make_contrast_transfer_function function to generate the propagator, the
-    # aperture of this propagator will supply the bandwidth limit of our simulation
-    # it must be 2/3rds of our pixel gridsize
+    # We will use the make_contrast_transfer_function function to generate
+    # the propagator, the aperture of this propagator will supply the
+    # bandwidth limit of our simulation it must be 2/3rds of our pixel
+    # gridsize
     app = np.amax(np.asarray(pixelsize) / np.asarray(gridsize[:2]) / 2)
 
     # Shift of optic axis to take
@@ -137,7 +105,7 @@ def multislice(
     reverse=False,
     transpose=False,
 ):
-    """For a given probe or set of probes, propagators, and transmission 
+    """For a given probe or set of probes, propagators, and transmission
         functions perform the multislice algorithm for nslices iterations."""
 
     # If a single integer is passed to the routine then Seed random number generator,
@@ -218,9 +186,9 @@ def multislice(
 
         # Perform multislice iteration
         if transpose or reverse:
-            # Reverse multislice complex conjugates the transmission and propagation
-            # Both reverse and transpose multislice reverse the order of the transmission
-            # and conjugation operations
+            # Reverse multislice complex conjugates the transmission and
+            # propagation. Both reverse and transpose multislice reverse
+            # the order of the transmission and conjugation operations
             psi = complex_mul(
                 torch.ifft(
                     complex_mul(torch.fft(psi, signal_ndim=2), P_, reverse),
@@ -294,7 +262,7 @@ def generate_STEM_raster(
 ):
     """For a grid of pixel size given by gridshape and real space size rsize
     return probe positions for nyquist sampled STEM raster
-    
+
     Arguments:
     gridshape -- Pixel dimensions of the 2D grid
     rsize     -- Size of the grid in real space in units of Angstroms
@@ -308,7 +276,7 @@ def generate_STEM_raster(
                  contain [y0,x0,y1,x1] where [x0,y0] and [x1,y1] are the bottom
                  left and top right coordinates of the region of interest (ROI)
                  expressed as a fraction of the total grid (or unit cell)
-                 
+
     """
 
     # Calculate number of scan positions in STEM scan
@@ -333,8 +301,8 @@ def generate_STEM_raster(
 
 
 def convert_real_size_to_pixels(size, gridsize, gridshape, qspace=False):
-    """Convert from real or reciprocal space size given gridsize, a 
-    particular grid size in real space, and gridshape, the size of the 
+    """Convert from real or reciprocal space size given gridsize, a
+    particular grid size in real space, and gridshape, the size of the
     grid in pixels. Pass qspace = True if size is in reciprocal (Fourier)
      space units and qspace=False if size is in real space units."""
     if qspace:
@@ -378,9 +346,9 @@ def STEM(
     nslices     -- The number of slices to perform multislice over
     eV          -- Accelerating voltage of the probe, needed to work out probe
                    sampling requirements
-    alpha       -- The convergence angle of the probe in mrad, needed to work 
+    alpha       -- The convergence angle of the probe in mrad, needed to work
                    out probe sampling requirements
-    
+
     Keyword arguments
     S           -- A scattering matrix object to perform STEM simulations with
                    using the PRISM algorithm (optional)
@@ -388,9 +356,9 @@ def STEM(
     detectors   -- Diffraction plane detectors to perform conventional STEM
                     imaging with
     fourD_STEM  -- Pass fourD_STEM = True to perform 4D-STEM simulations. To
-                    save disk space a tuple containing pixel size and 
+                    save disk space a tuple containing pixel size and
                     diffraction space extent of the datacube can be passed in.
-                    For example ([64,64],[1.2,1.2]) will output diffraction 
+                    For example ([64,64],[1.2,1.2]) will output diffraction
                     patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
                     Angstroms.
     scan_posn   -- Tuple containing arrays of y and x scan positions, overrides
@@ -398,7 +366,7 @@ def STEM(
     device      -- torch.device object which will determine which device (CPU
                     or GPU) the calculations will run on
     tiling      -- Tiling of the simulation object on the grid
-    seed        -- Seed for the random number generator for frozen phonon 
+    seed        -- Seed for the random number generator for frozen phonon
                     configurations
     showProgress-- Pass showProgress=False to disable progress bar.
     """
@@ -425,7 +393,7 @@ def STEM(
     )
 
     # Work out whether to perform conventional STEM or not
-    conventional_STEM = not detectors is None
+    conventional_STEM = detectors is not None
 
     if conventional_STEM:
         # Get number of detectors
@@ -456,18 +424,26 @@ def STEM(
                     np.asarray(sizeout) * np.asarray(rsize[:2])
                 ).astype(np.int)
 
-                # Define resampling function
-                resize = lambda array: fourier_interpolate_2d(
-                    crop(array, diff_pat_crop), gridout
-                )
+                # Define resampling function to crop and interpolate 
+                # diffraction patterns
+                def resize(array):
+                    cropped = crop(array, diff_pat_crop)
+                    return fourier_interpolate_2d(cropped, gridout)
+
             else:
-                resize = lambda array: crop(array, gridout)
+                # Define resampling function to just crop diffraction
+                # patterns
+                def resize(array):
+                    return crop(array, gridout)
+
         else:
             # If no resampling then the output size is just the simulation
             # grid size
             gridout = size_of_bandwidth_limited_array(gridshape)
-            # Define a do nothing function
-            resize = lambda array: array
+
+            # Define a resampling function that does nothing
+            def resize(array):
+                return array
 
         # Check whether a datacube is already provided or not
         if datacube is None:
@@ -572,8 +548,6 @@ def unit_cell_shift(array, axis, shift, tiles):
     """For an array consisting of a number of repeat units given by tiles
        shift than array an integer number of unit cells"""
 
-    intshift = array.size(axis) // tiles
-
     indices = torch.remainder(torch.arange(array.shape[-3 + axis]) - shift)
     if axis == 0:
         return array[indices, :, :]
@@ -583,9 +557,9 @@ def unit_cell_shift(array, axis, shift, tiles):
 
 def max_grid_resolution(gridshape, rsize, bandwidthlimit=2 / 3, eV=None):
     """For a given grid pixel size and real space size return maximum resolution permitted
-       by the multislice grid. If the probe accelerating voltage is passed in as eV 
-       resolution will be given in units of mrad, otherwise resolution will be given in units
-       of inverse Angstrom."""
+       by the multislice grid. If the probe accelerating voltage is passed in as eV
+       resolution will be given in units of mrad, otherwise resolution will be given in
+       units of inverse Angstrom."""
     max_res = min([gridshape[x] / rsize[x] / 2 * bandwidthlimit for x in range(2)])
     if eV is None:
         return max_res
@@ -617,7 +591,7 @@ class scattering_matrix:
         transposed=False,
         stored_gridshape=None,
     ):
-        """Make a scattering matrix for dynamical scattering calculations using 
+        """Make a scattering matrix for dynamical scattering calculations using
         the PRISM algorithm"""
 
         from .Probe import wavev
@@ -758,29 +732,24 @@ class scattering_matrix:
         propagators -- Fresnel free space operators required for the multislice
                        algorithm used to propagate the scattering matrix
         transmission_functions -- The transmission functions describing the
-                        electron's interaction with the specimen for the 
+                        electron's interaction with the specimen for the
                         multislice algorithm
-        
+
         Keyword arguments
         batch_size  -- The multislice algorithm can be performed on multiple
-                       scattering matrix columns at once to parrallelize 
+                       scattering matrix columns at once to parrallelize
                        computation
         subslicing  -- Pass subslicing=True to access propagation to sub-slices
                        of the unit cell, in this case nslices is taken to be
                        in units of subslices to propagate rather than unit-cells
-                       (i.e. nslices = 3 will propagate 1.5 unit cells for 
+                       (i.e. nslices = 3 will propagate 1.5 unit cells for
                        a subslicing of 2 subslices per unit cell)
-        showProgress -- Pass showProgress = False to disable live progress 
+        showProgress -- Pass showProgress = False to disable live progress
                         readout
         transpose   -- Make a "transposed" scattering matrix - see Brown et al.
                        (2019) Physical Review Research paper for a discussion
-                       of this 
+                       of this and its applications
         """
-        from .utils.torch_utils import (
-            cx_from_numpy,
-            crop_to_bandwidth_limit_torch,
-            size_of_bandwidth_limited_array,
-        )
         from .Probe import plane_wave_illumination
 
         # Initialize scattering matrix if necessary
@@ -933,14 +902,11 @@ class scattering_matrix:
 
     def __call__(self, probes, nslices, posn=None):
         """Evaluate the the Smatrix probe matrix multiplication for a number
-        of probes in windows centred about posn. The variable nslices 
-        does nothing and is only included to match the function call signature 
+        of probes in windows centred about posn. The variable nslices
+        does nothing and is only included to match the function call signature
         for the STEM routine"""
         from .utils.torch_utils import crop_window_to_flattened_indices_torch
         from copy import deepcopy
-
-        # Distance function to calculate windows about scan positions
-        dist = lambda x, X: np.abs((np.arange(X) - x + X // 2) % X - X // 2)
 
         crop_ = [
             torch.arange(

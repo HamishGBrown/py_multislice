@@ -16,18 +16,26 @@ class aberration:
             self.angle = 0
 
 
-def nyquist_sampling(rsize, resolution_limit=None, eV=None, alpha=None):
-    """For resolution limit in units of inverse length and array size in
-    units of length calculate how many probe positions are required for
-    nyquist sampling. Alternatively pass probe accelerating voltage (eV)
-    in kV and probe forming aperture (alpha) in mrad and the resolution
-    limit in inverse length will be calculated for you."""
+def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
+    """For resolution limit in units of inverse length calculate 
+    sampling required to meet the Nyquist criterion. If array size in
+    units of length is passed then return how many probe positions are 
+    required otherwise just return the sampling. Alternatively pass 
+    probe accelerating voltage (eV) in kV and probe forming aperture 
+    (alpha) in mrad and the resolution limit in inverse length will be 
+    calculated for you."""
+    
     if eV is None and alpha is None:
-        return np.ceil(4 * np.asarray(rsize) * resolution_limit).astype(np.int)
+        step_size = 1 / ( 4  * resolution_limit)
     elif resolution_limit is None:
-        return np.ceil(4 * np.asarray(rsize) * wavev(eV) * alpha * 1e-3).astype(np.int)
+        step_size = 1 / (4 * wavev(eV) * alpha * 1e-3)
     else:
         return None
+
+    if rsize is None:
+        return step_size
+    else:
+        return np.ceil(rsize/step_size).astype(np.int)
 
 
 def aberration_starter_pack():
@@ -55,7 +63,7 @@ def aberration_starter_pack():
 
 
 def chi(q, qphi, lam, df=0.0, aberrations=[]):
-    """calculates the aberration function chi as a function of 
+    """calculates the aberration function chi as a function of
     reciprocal space extent q for an electron with wavelength lam.
 
     Parameters
@@ -109,7 +117,7 @@ def make_contrast_transfer_function(
     """
 
     # Make reciprocal space array
-    if q == None:
+    if q is None:
         q = q_space_array(pix_dim, real_dim[:2])
 
     # Get  electron wave number (inverse of wavelength)
@@ -198,7 +206,7 @@ def plane_wave_illumination(
     gridshape, gridsize, tilt=[0, 0], eV=None, tilt_units="mrad", qspace=False
 ):
     """Create plane wave illumination with transverse momentum given by vector
-       tilt in units of inverse Angstrom or mrad. To maintain periodicitiy of 
+       tilt in units of inverse Angstrom or mrad. To maintain periodicitiy of
        the wave function at the boundaries this tilt is rounded to the nearest
        pixel value. The wave function will be normalized such that sum of
        intensity is unity."""

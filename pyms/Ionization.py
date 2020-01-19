@@ -257,9 +257,6 @@ def transition_potential(
        electron from orbital 1 to orbital 2 on grid with shape gridshape
        and real space dimensions in Angstrom given by gridsize"""
 
-    # Import the python flexible atomic code
-    import pfac
-
     # Bohr radius in Angstrom
     a0 = 5.29177210903e-1
 
@@ -293,7 +290,7 @@ def transition_potential(
     qphi = np.arctan2(qgrid[1][np.newaxis, :], qgrid[0][:, np.newaxis])
 
     # Maximum coordinate at which transition potential will be evaluated
-    if not bandwidth_limiting is None:
+    if bandwidth_limiting is not None:
         qmax = np.amax(qabs) * bandwidth_limiting
     else:
         qmax = np.amax(qabs)
@@ -412,12 +409,12 @@ def transition_potential(
     qe = 1.60217662e-19
 
     # Relativistic electron mass correction
-    gamma = relativistic_mass_correction(eV)
+    # gamma = relativistic_mass_correction(eV)
 
     sigma = interaction_constant(eV + deltaE, units="rad/VA")
 
     # Need to multiply by area of k-space pixel (1/gridsize) and multiply by
-    # #pixels to get correct units from inverse Fourier transform
+    # pixels to get correct units from inverse Fourier transform
     Hn0 *= np.prod(gridshape) ** 1.5 / np.prod(gridsize)
 
     # Apply constants
@@ -456,10 +453,8 @@ def transition_potential_multislice(
         amplitude,
         complex_mul,
         modulus_square,
-        get_device,
         ensure_torch_array,
         fourier_shift_torch,
-        cx_to_numpy,
     )
 
     # Number of subslices
@@ -481,12 +476,12 @@ def transition_potential_multislice(
         ionization_potentials, dtype=dtype, device=device
     )
 
-    if not image_CTF is None:
+    if image_CTF is not None:
         image_CTF = ensure_torch_array(image_CTF, dtype=dtype, device=device)
     propagators = ensure_torch_array(propagators, dtype=dtype, device=device)
     probes = ensure_torch_array(probes, dtype=dtype, device=device)
 
-    if not threshhold is None:
+    if threshhold is not None:
         trigger = np.zeros((ionization_potentials.size(0),))
         for i, ionization_potential in enumerate(ionization_potentials):
             trigger[i] = (
@@ -540,7 +535,7 @@ def transition_potential_multislice(
                 # Only propagate this wave to the exit surface if it is deemed
                 # to contribute significantly (above a user-determined threshhold)
                 # to the image. Pass threshhold = None to disable this feature
-                if not threshhold is None:
+                if threshhold is not None:
                     if modulus_square(psi_n) < trigger[j]:
                         continue
 
