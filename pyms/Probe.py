@@ -17,9 +17,9 @@ class aberration:
             
     def __str__(self):
         if self.m > 0:
-            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u212B \u03B8 = {4:4d}\u00B0".format(self.Description,self.Haider,self.Krivanek,self.amplitude,int(np.rad2deg(self.angle)))
+            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5 \u03B8 = {4:4d}\u00B0".format(self.Description,self.Haider,self.Krivanek,self.amplitude,int(np.rad2deg(self.angle)))
         else:
-            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u212B".format(self.Description,self.Haider,self.Krivanek,self.amplitude)
+            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5".format(self.Description,self.Haider,self.Krivanek,self.amplitude)
 
 def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
     """For resolution limit in units of inverse length calculate 
