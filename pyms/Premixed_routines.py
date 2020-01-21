@@ -263,9 +263,9 @@ def STEM_multislice(
         )
 
         # Retrieve results from STEM routine
-        if not (detector_ranges is None) and FourD_STEM:
+        if (D is not None) and FourD_STEM:
             STEM_images, datacube = result
-        elif not (detector_ranges is None):
+        elif D is not None:
             STEM_images = result[0]
         elif FourD_STEM:
             datacube = result[0]
