@@ -596,6 +596,38 @@ class crystal:
         # Only return real part
         return torch.ifft(P, signal_ndim=2)[..., 0]
 
+    def generate_slicing_figure(self,slices,show=True):
+        """"Generates a slicing figure that to aid in setting up the slicing
+        of the sample for multislice algorithm. This will show where each of the 
+        slices end for a chosen slicing relative to the atoms. To minimize
+        errors, the atoms should sit as close to the top of the slice as possible.
+        
+        
+        Parameters
+        __________
+        slices: An array-like object containing the depths at which each slice ends
+                as a fraction of the simulation unit-cell"""
+        fig,ax = plt.subplots(ncols=2,figsize=(8,4))
+        
+        #Projection down the x-axis
+        for i in range(2):
+            ax[i].plot(self.atoms[:,i],self.atoms[:,2],'bo',label='Atoms')
+            for j,slice_ in enumerate(slices):
+                if j==0:
+                    label = 'Slices'
+                else:
+                    label = '_'
+                ax[i].plot([0,1.0],[slice_,slice_],'r--',label=label)
+            ax[i].set_xlim([0,1])
+            ax[i].set_xlabel(['y','x'][i])
+            ax[i].set_ylim([1,0])
+            ax[i].set_ylabel('z')
+            ax[i].set_title('View down {0} axis'.format(['x','y'][i]))
+        ax[0].legend()
+        if show: plt.show(block=True)
+        return fig
+
+
     def rotate(self, theta, axis, origin=[0.5, 0.5, 0.5]):
         """Returns a copy of the crystal rotated an angle theta in radians about an axis and
         """

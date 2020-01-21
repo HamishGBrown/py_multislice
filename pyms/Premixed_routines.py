@@ -175,6 +175,7 @@ def STEM_multislice(
     seed=None,
     showProgress=True,
     detector_ranges=None,
+    D = None,
     fractional_occupancy=True,
     nT=5,
 ):
@@ -193,9 +194,7 @@ def STEM_multislice(
     nslices = np.ceil(thicknesses / sample.unitcell[2]).astype(np.int)
 
     # Make STEM detectors
-    if detector_ranges is None:
-        D = None
-    else:
+    if detector_ranges is not None:
         D = np.stack(
             [
                 make_detector(pix_dim, real_dim, eV, drange[1], drange[0])
