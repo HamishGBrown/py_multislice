@@ -263,10 +263,18 @@ def STEM_multislice(
         )
 
         # Retrieve results from STEM routine
+        
         if (D is not None) and FourD_STEM:
-            STEM_images, datacube = result
+            if i>0:
+                STEM_images += result[0]/nfph
+            else:
+                STEM_images = result[0]/nfph
+            datacube = result[1]
         elif D is not None:
-            STEM_images = result[0]
+            if i>0:
+                STEM_images += result[0]/nfph
+            else:
+                STEM_images = result[0]/nfph
         elif FourD_STEM:
             datacube = result[0]
 
