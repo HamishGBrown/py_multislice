@@ -42,6 +42,10 @@ def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
     else:
         return np.ceil(rsize/step_size).astype(np.int)
 
+def depth_of_field(eV,alpha):
+    """Calculates the probe depth of field (z-resolution) for a probe 
+    accelerating voltage of eV and a probe forming semiangle of alpha in mrad"""
+    return 1.77/wavev(eV)/alpha/alpha*1e6
 
 def aberration_starter_pack():
     """Creates the set of aberrations up to fifth order"""

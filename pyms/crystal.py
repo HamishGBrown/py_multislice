@@ -280,28 +280,30 @@ class crystal:
         if atomic_coordinates == "cartesian":
             self.atoms[:, :3] /= self.unitcell[:3][np.newaxis, :]
 
-    def orthorhombic_supercell(self, EPS):
-        # If not orthorhombic attempt psuedo rational tiling
-        # (only implemented for hexagonal structures)
-        tiley = int(np.round(np.abs(self.unitcell[1, 0] / self.unitcell[0, 0]) / EPS))
-        tilex = int(np.round(1 / EPS))
+    def orthorhombic_supercell(self, EPS = 1e-2):
+        """ If not orthorhombic attempt psuedo rational tiling of general 
+        monoclinic structure. Assumes that the self.unitcell matrix is lower
+        triangular."""
 
-        # Remove common denominators
-        from math import gcd
+        def remove_common_factors(nums):
+            nums = np.asarray(nums)
+            g_ = np.gcd.reduce(nums)
+            while g_ > 1:
+                nums //= g_
+                g_ = np.gcd.reduce(nums)
+            return nums
 
-        g_ = gcd(tiley, tilex)
-        while g_ > 1:
-            tiley = tiley // g_
-            tilex = tilex // g_
-            g_ = gcd(tiley, tilex)
+        def psuedo_rational_tiling(dim1,dim2,EPS):
+            tile1 = int(np.round(np.abs(dim2 / dim1) / EPS))
+            tile2 = int(np.round(1 / EPS))
+            return remove_common_factors([tile1,tile2])
+
+        tiley,tilex = psuedo_rational_tiling(*self.unitcell[0:2,0],EPS)
 
         # Make deepcopy of old unit cell
         import copy
 
         olduc = copy.deepcopy(self.unitcell)
-
-        # Calculate length of unit cell sides
-        self.unitcell = np.sqrt(np.sum(np.square(self.unitcell), axis=1))
 
         # Tile out atoms
         self.tile(tiley, tilex, 1)
@@ -309,12 +311,40 @@ class crystal:
         # Calculate size of old unit cell under tiling
         olduc = np.asarray([tiley, tilex, 1])[:, np.newaxis] * olduc
 
-        self.unitcell = np.diag(olduc)
+        self.unitcell = copy.deepcopy(olduc)
+        self.unitcell[1,0] = 0.0
 
         # Now calculate fractional coordinates in new orthorhombic cell
         self.atoms[:, :3] = np.mod(
-            self.atoms[:, :3] @ olduc @ np.diag(1 / self.unitcell), 1.0
+            self.atoms[:, :3] @ olduc @ np.linalg.inv(self.unitcell), 1.0
         )
+
+        #Now tile crystal in x and y
+        tilez1,tiley = psuedo_rational_tiling(*self.unitcell[::-2,0],EPS)
+        tilez2,tilex = psuedo_rational_tiling(*self.unitcell[3:0:-1,1],EPS)
+        tilez = remove_common_factors([tilez1,tilez2,tilez1*tilez2])[-1]
+        tiley *= tilez//tilez1
+        tilex *= tilez//tilez2
+        
+        olduc = copy.deepcopy(self.unitcell)
+
+        # Tile out atoms
+        self.tile(tiley, tilex, tilez)
+
+        # Calculate size of old unit cell under tiling
+        
+        olduc = np.asarray([tiley, tilex, tilez])[:, np.newaxis] * olduc
+
+        self.unitcell = copy.deepcopy(olduc)
+        self.unitcell[2,0:2] = 0.0
+
+        # Now calculate fractional coordinates in new orthorhombic cell
+        self.atoms[:, :3] = np.mod(
+            self.atoms[:, :3] @ olduc @ np.linalg.inv(self.unitcell), 1.0
+        )
+        self.unitcell = np.diag(self.unitcell)
+
+
 
     def quickplot(self, atomscale=None, cmap=plt.get_cmap("Dark2")):
         """Makes a quick 3D scatter plot of the crystal"""
