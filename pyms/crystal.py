@@ -16,6 +16,19 @@ from .utils.torch_utils import (
     get_device,
 )
 
+def remove_common_factors(nums):
+    nums = np.asarray(nums,dtype=np.int)
+    g_ = np.gcd.reduce(nums)
+    while g_ > 1:
+        nums //= g_
+        g_ = np.gcd.reduce(nums)
+    return nums
+
+def psuedo_rational_tiling(dim1,dim2,EPS):
+    if np.any([dim1==0,dim2==0]): return 1,1
+    tile1 = int(np.round(np.abs(dim2 / dim1) / EPS))
+    tile2 = int(np.round(1 / EPS))
+    return remove_common_factors([tile1,tile2])
 
 def Xray_scattering_factor(Z, gsq, units="A"):
     # Bohr radius in Angstrom
@@ -164,6 +177,7 @@ class crystal:
         atomic_coordinates="fractional",
         EPS=1e-2,
         psuedo_rational_tiling=1e-2,
+        matrix_transform = None
     ):
         """Initializes a crystal object by reading in a *.p1 file, which is
         outputted by the vesta software:
@@ -224,6 +238,15 @@ class crystal:
                 # Final entries are the fractional occupancy and the temperature (Debye-Waller)
                 # factor
                 self.atoms[i, 4:6] = np.asarray(atominfo[4:6], dtype=np.float)
+            
+            if matrix_transform is not None:
+                newuc = np.asarray(matrix_transform) @ self.unitcell
+                # Now calculate fractional coordinates in transformed unit-cell
+                self.atoms[:, :3] = np.mod(
+                    self.atoms[:, :3] @ self.unitcell @ np.linalg.inv(newuc), 1.0
+                )
+                self.unitcell = newuc
+
 
             if ortho:
                 # If unit cell is orthorhombic then extract unit cell
@@ -285,39 +308,32 @@ class crystal:
         monoclinic structure. Assumes that the self.unitcell matrix is lower
         triangular."""
 
-        def remove_common_factors(nums):
-            nums = np.asarray(nums)
-            g_ = np.gcd.reduce(nums)
-            while g_ > 1:
-                nums //= g_
-                g_ = np.gcd.reduce(nums)
-            return nums
+        
 
-        def psuedo_rational_tiling(dim1,dim2,EPS):
-            tile1 = int(np.round(np.abs(dim2 / dim1) / EPS))
-            tile2 = int(np.round(1 / EPS))
-            return remove_common_factors([tile1,tile2])
+        if not np.dot(self.unitcell[0],self.unitcell[1])<EPS:
+            tiley,tilex = psuedo_rational_tiling(*self.unitcell[0:2,0],EPS)
 
-        tiley,tilex = psuedo_rational_tiling(*self.unitcell[0:2,0],EPS)
+            # Make deepcopy of old unit cell
+            
 
-        # Make deepcopy of old unit cell
-        import copy
+            olduc = copy.deepcopy(self.unitcell)
 
-        olduc = copy.deepcopy(self.unitcell)
+            # Tile out atoms
+            self.tile(tiley, tilex, 1)
 
-        # Tile out atoms
-        self.tile(tiley, tilex, 1)
+            # Calculate size of old unit cell under tiling
+            olduc = np.asarray([tiley, tilex, 1])[:, np.newaxis] * olduc
 
-        # Calculate size of old unit cell under tiling
-        olduc = np.asarray([tiley, tilex, 1])[:, np.newaxis] * olduc
+            self.unitcell = copy.deepcopy(olduc)
+            self.unitcell[1,0] = 0.0
 
-        self.unitcell = copy.deepcopy(olduc)
-        self.unitcell[1,0] = 0.0
-
-        # Now calculate fractional coordinates in new orthorhombic cell
-        self.atoms[:, :3] = np.mod(
-            self.atoms[:, :3] @ olduc @ np.linalg.inv(self.unitcell), 1.0
-        )
+            # Now calculate fractional coordinates in new orthorhombic cell
+            self.atoms[:, :3] = np.mod(
+                self.atoms[:, :3] @ olduc @ np.linalg.inv(self.unitcell), 1.0
+            )
+        else:
+            self.unitcell[0,1:] = 0.0
+            self.unitcell[1,::2] =0.0
 
         #Now tile crystal in x and y
         tilez1,tiley = psuedo_rational_tiling(*self.unitcell[::-2,0],EPS)
@@ -726,6 +742,8 @@ class crystal:
             # k == 3
             self.transpose(axes_list)
             self.reflect([axes[1]])
+        
+        return self
 
     def transpose(self, axes):
         self.atoms[:, :3] = self.atoms[:, axes]
@@ -736,7 +754,7 @@ class crystal:
         # Make copy of original crystal
         # new = copy.deepcopy(self)
 
-        tiling = np.asarray([x, y, z])
+        tiling = np.asarray([x, y, z],dtype=np.int)
 
         # Get atoms in unit cell
         natoms = self.atoms.shape[0]
@@ -768,8 +786,9 @@ class crystal:
                         :, 3:
                     ]
         self.atoms = newatoms
+        return self
 
-    def concatenate_crystals(self, other, axis=2, side=1, eps=1e-3):
+    def concatenate_crystals(self, other, axis=2, side=1, eps=1e-2):
         """adds other crystal to the crystal object slice is added to the bottom (top being z =0)
         only works if slices are the same size or their x and y dimensions are integer multiples of
         each other """
@@ -779,6 +798,8 @@ class crystal:
         new = copy.deepcopy(self)
         other_ = copy.deepcopy(other)
 
+        tile1,tile2 = [np.ones(3,dtype=np.int) for i in range(2)]
+
         # Check if the two slices are the same size and
         # tile accordingly
         for ax in range(3):
@@ -787,28 +808,31 @@ class crystal:
             if ax == axis:
                 continue
 
-            factor = self.unitcell[ax] / other.unitcell[ax]
-            tile = [0, 0, 0]
+            # factor = self.unitcell[ax] / other.unitcell[ax]
+            # tile = [0, 0, 0]
 
-            if factor > 1:
-                tile[ax] = int(factor)
-                other_ = other_.tile(*tile)
-            elif factor < 1:
-                tile[ax] = int(1 / factor)
-                new = new.tile(*tile)
+            tile1[ax],tile2[ax] = psuedo_rational_tiling(self.unitcell[ax],other.unitcell[ax],eps)
+            # if factor > 1:
+            #     tile[ax] = int(factor)
+            #     other_ = other_.tile(*tile)
+            # elif factor < 1:
+            #     tile[ax] = int(1 / factor)
+            #     new = new.tile(*tile)
+        new = self.tile(*tile1)
+        other_ = other.tile(*tile2)
 
         axes = np.arange(3) != axis
-        assert np.all(
-            np.abs(new.unitcell[axes] - other_.unitcell[axes]) < eps
-        ), "Crystal axes mismatch"
+        # assert np.all(
+        #     np.abs(new.unitcell[axes] - other_.unitcell[axes]) < eps
+        # ), "Crystal axes mismatch"
 
         # Update the thickness of the resulting
         # crystal object.
         new.unitcell[axis] = self.unitcell[axis] + other_.unitcell[axis]
 
         # Adjust fractional coordinates of atoms
-        new.atoms[:, axis] /= new.unitcell[axis] / self.unitcell[axis]
-        other_.atoms[:, axis] /= new.unitcell[axis] / other_.unitcell[axis]
+        new.atoms[:, axis] *= self.unitcell[axis] / new.unitcell[axis]
+        other_.atoms[:, axis] *= other_.unitcell[axis] / new.unitcell[axis]
 
         if side == 0:
             new.atoms[:, axis] += self.unitcell[axis] / new.unitcell[axis]
