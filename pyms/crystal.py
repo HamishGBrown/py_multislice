@@ -828,13 +828,10 @@ class crystal:
                     other.unitcell[ax], self.unitcell[ax], eps
                 )
 
-        # Apply tiling
+            tile1[ax],tile2[ax] = psuedo_rational_tiling(self.unitcell[ax],other.unitcell[ax],eps)
+        
         new = new.tile(*tile1)
         other_ = other_.tile(*tile2)
-
-        # Save the dimensions of the new crystal to apply to the atomic
-        # coordinates later
-        tiled_zdim = new.unitcell[axis]
 
         # Update the thickness of the resulting
         # crystal object.
