@@ -14,12 +14,21 @@ class aberration:
             self.angle = angle
         else:
             self.angle = 0
-            
+
     def __str__(self):
         if self.m > 0:
-            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5 \u03B8 = {4:4d}\u00B0".format(self.Description,self.Haider,self.Krivanek,self.amplitude,int(np.rad2deg(self.angle)))
+            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5 \u03B8 = {4:4d}\u00B0".format(
+                self.Description,
+                self.Haider,
+                self.Krivanek,
+                self.amplitude,
+                int(np.rad2deg(self.angle)),
+            )
         else:
-            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5".format(self.Description,self.Haider,self.Krivanek,self.amplitude)
+            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5".format(
+                self.Description, self.Haider, self.Krivanek, self.amplitude
+            )
+
 
 def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
     """For resolution limit in units of inverse length calculate 
@@ -29,9 +38,9 @@ def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
     probe accelerating voltage (eV) in kV and probe forming aperture 
     (alpha) in mrad and the resolution limit in inverse length will be 
     calculated for you."""
-    
+
     if eV is None and alpha is None:
-        step_size = 1 / ( 4  * resolution_limit)
+        step_size = 1 / (4 * resolution_limit)
     elif resolution_limit is None:
         step_size = 1 / (4 * wavev(eV) * alpha * 1e-3)
     else:
@@ -40,12 +49,14 @@ def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
     if rsize is None:
         return step_size
     else:
-        return np.ceil(rsize/step_size).astype(np.int)
+        return np.ceil(rsize / step_size).astype(np.int)
 
-def depth_of_field(eV,alpha):
+
+def depth_of_field(eV, alpha):
     """Calculates the probe depth of field (z-resolution) for a probe 
     accelerating voltage of eV and a probe forming semiangle of alpha in mrad"""
-    return 1.77/wavev(eV)/alpha/alpha*1e6
+    return 1.77 / wavev(eV) / alpha / alpha * 1e6
+
 
 def aberration_starter_pack():
     """Creates the set of aberrations up to fifth order"""
