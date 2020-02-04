@@ -818,10 +818,10 @@ class crystal:
             # elif factor < 1:
             #     tile[ax] = int(1 / factor)
             #     new = new.tile(*tile)
-        new = self.tile(*tile1)
-        other_ = other.tile(*tile2)
+        new = new.tile(*tile1)
+        other_ = other_.tile(*tile2)
 
-        axes = np.arange(3) != axis
+        # axes = np.arange(3) != axis
         # assert np.all(
         #     np.abs(new.unitcell[axes] - other_.unitcell[axes]) < eps
         # ), "Crystal axes mismatch"
