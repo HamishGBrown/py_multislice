@@ -12,49 +12,89 @@ from .utils.numpy_utils import fourier_shift
 
 # from py_multislice import wavev, relativistic_mass_correction, interaction_constant
 
+# def _v(m1, m2, hue):
+#     hue = hue % 1.0
+#     if hue < ONE_SIXTH:
+#         return m1 + (m2-m1)*hue*6.0
+#     if hue < 0.5:
+#         return m2
+#     if hue < TWO_THIRD:
+#         return m1 + (m2-m1)*(TWO_THIRD-hue)*6.0
+#     return m1
 
-def colorize(z, ccc=None, max=None, min=None, gamma=1):
+# def hls_to_rgb(h, l, s):
+#     """Modified version of the function provided by colorsys
+#     https://github.com/python/cpython/blob/2.7/Lib/colorsys.py
+#     to be explicity array oriented"""
+#     result = np.zeros((*h.shape,3),dtype=np.float32)
+#     mask = s == 0.0
+#     result[mask,:] = l[mask]
+
+#     mask = np.logical_not(mask)
+
+#     if l <= 0.5:
+#         m2 = l * (1.0+s)
+#     else:
+#         m2 = l+s-(l*s)
+#     m1 = 2.0*l - m2
+#     return (_v(m1, m2, h+ONE_THIRD), _v(m1, m2, h), _v(m1, m2, h-ONE_THIRD))
+
+def colorize(z):
     from colorsys import hls_to_rgb
+    r = np.abs(z)
+    arg = np.angle(z) 
 
-    # Get shape of array
-    n, m = z.shape
-    # Create RGB array
-    c = np.zeros((n, m, 3))
-    # Set infinite values to be constant color
-    c[np.isinf(z)] = (1.0, 1.0, 1.0)
-    c[np.isnan(z)] = (0.5, 0.5, 0.5)
+    h = (arg + np.pi)  / (2 * np.pi) + 0.5
+    l = 1.0 - 1.0/(1.0 + r**0.3)
+    s = 0.8
 
-    idx = ~(np.isinf(z) + np.isnan(z))
-
-    # A is the color (Hue)
-    A = (np.angle(z[idx])) / (2 * np.pi)
-    A = (A) % 1.0
-
-    # B is the lightness
-    B = np.ones_like(A) * 0.5
-
-    # Calculate min and max of array or take user provided values
-    if min is None:
-        min_ = (np.abs(z) ** gamma).min()
-    else:
-        min_ = min
-    if max is None:
-        max_ = (np.abs(z) ** gamma).max()
-    else:
-        max_ = np.abs(max) ** gamma
-    if ccc is None:
-        range = max_ - min_
-        if range < 1e-10:
-            C = np.ones(z.shape)[idx] * 0.49
-        else:
-            C = ((np.abs(z[idx]) - min_) / range) ** gamma * 0.5
-
-    else:
-        C = ccc
-    # C = np.ones_like(B)*0.5
-
-    c[idx] = [hls_to_rgb(a, cc, b) for a, b, cc in zip(A, B, C)]
+    c = np.vectorize(hls_to_rgb) (h,l,s) # --> tuple
+    c = np.array(c)  # -->  array of (3,n,m) shape, but need (n,m,3)
+    c = c.swapaxes(0,2) 
     return c
+
+# def colorize(z, ccc=None, max=None, min=None, gamma=1):
+#     from colorsys import hls_to_rgb
+
+#     # Get shape of array
+#     n, m = z.shape
+#     # Create RGB array
+#     c = np.zeros((n, m, 3))
+#     # Set infinite values to be constant color
+#     c[np.isinf(z)] = (1.0, 1.0, 1.0)
+#     c[np.isnan(z)] = (0.5, 0.5, 0.5)
+
+#     idx = ~(np.isinf(z) + np.isnan(z))
+
+#     # A is the color (Hue)
+#     A = (np.angle(z[idx])) / (2 * np.pi)
+#     A = (A) % 1.0
+
+#     # B is the lightness
+#     B = np.ones_like(A) * 0.5
+
+#     # Calculate min and max of array or take user provided values
+#     if min is None:
+#         min_ = (np.abs(z) ** gamma).min()
+#     else:
+#         min_ = min
+#     if max is None:
+#         max_ = (np.abs(z) ** gamma).max()
+#     else:
+#         max_ = np.abs(max) ** gamma
+#     if ccc is None:
+#         range = max_ - min_
+#         if range < 1e-10:
+#             C = np.ones(z.shape)[idx] * 0.49
+#         else:
+#             C = ((np.abs(z[idx]) - min_) / range) ** gamma * 0.5
+
+#     else:
+#         C = ccc
+#     # C = np.ones_like(B)*0.5
+
+#     c[idx] = [hls_to_rgb(a, cc, b) for a, b, cc in zip(A, B, C)]
+#     return c`
 
 
 class orbital:
