@@ -831,6 +831,7 @@ class crystal:
             tile1[ax],tile2[ax] = psuedo_rational_tiling(self.unitcell[ax],other.unitcell[ax],eps)
         
         new = new.tile(*tile1)
+        tiled_zdim = new.unitcell[2]
         other_ = other_.tile(*tile2)
 
         # Update the thickness of the resulting
