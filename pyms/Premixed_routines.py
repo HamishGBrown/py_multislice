@@ -176,7 +176,7 @@ def STEM_multislice(
     seed=None,
     showProgress=True,
     detector_ranges=None,
-    D = None,
+    D=None,
     fractional_occupancy=True,
     nT=5,
 ):
@@ -221,9 +221,7 @@ def STEM_multislice(
     datacube = None
 
     for i in tqdm.tqdm(
-        range(nfph),
-        desc="Frozen phonon iteration",
-        disable=not showProgress,
+        range(nfph), desc="Frozen phonon iteration", disable=not showProgress
     ):
 
         # Make propagators and transmission functions for multslice
@@ -271,7 +269,7 @@ def STEM_multislice(
         elif FourD_STEM:
             datacube = result[0]
 
-    return [i/nfph for i in [STEM_images, datacube] if i is not None]
+    return [i / nfph for i in [STEM_images, datacube] if i is not None]
 
 
 def multislice_precursor(

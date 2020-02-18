@@ -424,7 +424,7 @@ def STEM(
                     np.asarray(sizeout) * np.asarray(rsize[:2])
                 ).astype(np.int)
 
-                # Define resampling function to crop and interpolate 
+                # Define resampling function to crop and interpolate
                 # diffraction patterns
                 def resize(array):
                     cropped = crop(array, diff_pat_crop)
