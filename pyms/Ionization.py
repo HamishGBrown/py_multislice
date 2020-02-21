@@ -10,91 +10,39 @@ from .Probe import wavev, relativistic_mass_correction
 from .crystal import interaction_constant
 from .utils.numpy_utils import fourier_shift
 
-# from py_multislice import wavev, relativistic_mass_correction, interaction_constant
+def get_q_numbers_for_transition(l,order = 2):
+    """For ionization from bound quantum number l, calculate all excited
+    state quantum numbers ml, lprime, and mlprime needed to calculate all
+    atomic transitions."""
+    #Get projection quantum numbers
+    mls = np.arange(-l,l+1)
+    qnumbers = []
+    minlprime = max(l-order,0)
+    for lprime in np.arange(minlprime,l+order+1):
+        for mlprime in np.arange(-lprime,lprime+1):
+            for ml in mls:
+                qnumbers.append([lprime,mlprime,ml])
+    return qnumbers
 
-# def _v(m1, m2, hue):
-#     hue = hue % 1.0
-#     if hue < ONE_SIXTH:
-#         return m1 + (m2-m1)*hue*6.0
-#     if hue < 0.5:
-#         return m2
-#     if hue < TWO_THIRD:
-#         return m1 + (m2-m1)*(TWO_THIRD-hue)*6.0
-#     return m1
+def get_transitions(orbital,excited_configuration,epsilon,eV,gridshape,gridsize,order = 2,contr=0.99):
+    """"For ionization from bound quantum number l, get all possible transitions
+    up to contr (a fraction) of the contribution to the total ionization cross-section.
+    The orbital configuration (excited_configuration), energy (epsilon) of the 
+    excited state, beam energy (eV) in electron-volts, gridshape in pixels must also be passed to this function"""
 
-# def hls_to_rgb(h, l, s):
-#     """Modified version of the function provided by colorsys
-#     https://github.com/python/cpython/blob/2.7/Lib/colorsys.py
-#     to be explicity array oriented"""
-#     result = np.zeros((*h.shape,3),dtype=np.float32)
-#     mask = s == 0.0
-#     result[mask,:] = l[mask]
+    qnumberset = get_q_numbers_for_transition(orbital.l,order)
 
-#     mask = np.logical_not(mask)
+    transition_potentials = []
 
-#     if l <= 0.5:
-#         m2 = l * (1.0+s)
-#     else:
-#         m2 = l+s-(l*s)
-#     m1 = 2.0*l - m2
-#     return (_v(m1, m2, h+ONE_THIRD), _v(m1, m2, h), _v(m1, m2, h-ONE_THIRD))
+    for qnumbers in qnumberset:
+        lprime,mlprime,ml = qnumbers
+        
+        excited_state =  orbital(orbital.Z,excited_configuration,0,lprime,epsilon)
 
-def colorize(z):
-    from colorsys import hls_to_rgb
-    r = np.abs(z)
-    arg = np.angle(z) 
+        Hn0  = transition_potential(orbital,excited_state,gridshape,gridsize,ml,mlprime,eV)
 
-    h = (arg + np.pi)  / (2 * np.pi) + 0.5
-    l = 1.0 - 1.0/(1.0 + r**0.3)
-    s = 0.8
+        transition_potentials.append()
 
-    c = np.vectorize(hls_to_rgb) (h,l,s) # --> tuple
-    c = np.array(c)  # -->  array of (3,n,m) shape, but need (n,m,3)
-    c = c.swapaxes(0,2) 
-    return c
-
-# def colorize(z, ccc=None, max=None, min=None, gamma=1):
-#     from colorsys import hls_to_rgb
-
-#     # Get shape of array
-#     n, m = z.shape
-#     # Create RGB array
-#     c = np.zeros((n, m, 3))
-#     # Set infinite values to be constant color
-#     c[np.isinf(z)] = (1.0, 1.0, 1.0)
-#     c[np.isnan(z)] = (0.5, 0.5, 0.5)
-
-#     idx = ~(np.isinf(z) + np.isnan(z))
-
-#     # A is the color (Hue)
-#     A = (np.angle(z[idx])) / (2 * np.pi)
-#     A = (A) % 1.0
-
-#     # B is the lightness
-#     B = np.ones_like(A) * 0.5
-
-#     # Calculate min and max of array or take user provided values
-#     if min is None:
-#         min_ = (np.abs(z) ** gamma).min()
-#     else:
-#         min_ = min
-#     if max is None:
-#         max_ = (np.abs(z) ** gamma).max()
-#     else:
-#         max_ = np.abs(max) ** gamma
-#     if ccc is None:
-#         range = max_ - min_
-#         if range < 1e-10:
-#             C = np.ones(z.shape)[idx] * 0.49
-#         else:
-#             C = ((np.abs(z[idx]) - min_) / range) ** gamma * 0.5
-
-#     else:
-#         C = ccc
-#     # C = np.ones_like(B)*0.5
-
-#     c[idx] = [hls_to_rgb(a, cc, b) for a, b, cc in zip(A, B, C)]
-#     return c`
 
 
 class orbital:
@@ -209,7 +157,7 @@ class orbital:
             table[: self.ilast, 1], table[: self.ilast, 4], kind="cubic", fill_value=0
         )
 
-    def wfn(self, r):
+    def __call__(self, r):
         """Evaluate radial wavefunction on grid r from tabulated values"""
 
         is_arr = isinstance(r, np.ndarray)
@@ -266,7 +214,7 @@ class orbital:
         """Plot wavefunction at positions given by grid r"""
 
         fig, ax = plt.subplots(figsize=(4, 4))
-        wavefunction = self.wfn(grid)
+        wavefunction = self(grid)
         ax.plot(grid, wavefunction)
         ax.set_title(self.title)
         if ylim is None:
@@ -350,7 +298,8 @@ def transition_potential(
     lprime = int(orb2.l)
 
     # Check that ml and mlprime, the projection quantum numbers for the bound
-    # and free states, are sensible
+    # and free states, are sensible (obey selection rules,
+    #  see http://mathworld.wolfram.com/Wigner3j-Symbol.html)
     if np.abs(ml) > l:
         return Hn0
     if np.abs(mlprime) > lprime:
@@ -383,11 +332,8 @@ def transition_potential(
         for iQ, Q in enumerate(np.ravel(q_)):
             # Redefine kernel for this value of q, factor of a0 converts q from
             # units of inverse Angstrom to inverse Bohr radii,
-            overlap_kernel = (
-                lambda x: orb1.wfn(x)
-                * spherical_jn(lprimeprime, 2 * np.pi * Q * a0 * x)
-                * orb2.wfn(x)
-            )
+            grid = 2 * np.pi * Q * a0 * x
+            overlap_kernel = lambda x: orb1(x) * spherical_jn(lprimeprime, grid)* orb2(x)
             jq[iQ] = integrate.quad(overlap_kernel, 0, rmax)[0]
 
         return jq
@@ -420,6 +366,7 @@ def transition_potential(
             * np.sqrt((2 * lprime + 1) * (2 * lprimeprime + 1) * (2 * l + 1))
         )
         for mlprimeprime in mlprimeprimes:
+            # Check second selection rule (http://mathworld.wolfram.com/Wigner3j-Symbol.html)
             if ml - mlprime - mlprimeprime != 0:
                 continue
             # Evaluate Eq (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
