@@ -422,7 +422,7 @@ def CBED(
     showProgress=True,
     probe_posn=None,
     df=0,
-    aberrations = [],
+    aberrations=[],
 ):
 
     # Choose GPU if available and CPU if not
@@ -452,7 +452,13 @@ def CBED(
     ):
         # Make probe
         probe = focused_probe(
-            gridshape, crystal.unitcell[:2] * np.asarray(tiling), eV, app, qspace=True,df=df,aberrations=aberrations
+            gridshape,
+            crystal.unitcell[:2] * np.asarray(tiling),
+            eV,
+            app,
+            qspace=True,
+            df=df,
+            aberrations=aberrations,
         )
 
         if not (probe_posn is None):

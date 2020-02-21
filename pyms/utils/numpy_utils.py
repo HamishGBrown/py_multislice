@@ -19,7 +19,9 @@ def crop_window_to_flattened_indices(indices, shape):
 
 
 def crop_to_bandwidth_limit(array, limit=2 / 3):
-    """Crop an array to its bandwidth limit (ie remove superfluous array entries)"""
+    """Crop an array to its bandwidth limit (ie remove superfluous array entries),
+    assumes that input array is in Fourier space with zeroth Fourier component
+    in upper-left corner"""
     # Get array shape
     gridshape = array.shape[-2:]
 
@@ -112,12 +114,12 @@ def fourier_interpolate_2d(ain, shapeout):
     """Perfoms a fourier interpolation on array ain so that its shape matches
     that given by shapeout.
 
-    Arguments:   
+    Arguments:
     ain      -- Input numpy array
     shapeout -- Shape of output array
     """
     # Import required FFT functions
-    from numpy.fft import fftshift, fft2, ifft2
+    from numpy.fft import fft2, ifft2
 
     # Make input complex
     aout = np.zeros(np.shape(ain)[:-2] + tuple(shapeout), dtype=np.complex)
@@ -145,14 +147,14 @@ def fourier_interpolate_2d(ain, shapeout):
 
 
 def oned_shift(N, shift, pixel_units=True):
-    """Constructs a one dimensional shift array of array size 
+    """Constructs a one dimensional shift array of array size
     len that shifts an array number of pixels given by shift.
-    
+
     Parameters
     ----------
     N     -- Number of pixels in the shift array
     shift -- Amount of shift to be achieved (default units of pixels)
-    
+
     Keyword arguments
     ----------
     pixel_units -- Pass True if shift is to be units of pixels, False for
@@ -175,13 +177,13 @@ def oned_shift(N, shift, pixel_units=True):
 def fourier_shift(arrayin, shift, qspacein=False, qspaceout=False, pixel_units=True):
     """Shifts a 2d array by an amount given in the tuple shift in units
      of pixels using the Fourier shift theorem.
-     
+
     Parameters
     ----------
     arrayin -- Array to be Fourier shifted
     shift   -- Shift in units of pixels (pass pixel_units = False for shift
                to be in units of fraction of the array size)
-    
+
     Keyword arguments
     ----------
     qspacein    -- Pass True if arrayin is in Fourier space
@@ -220,7 +222,7 @@ def fourier_shift(arrayin, shift, qspacein=False, qspaceout=False, pixel_units=T
 
 
 def crop(arrayin, shapeout):
-    """Crop the last two dimensions of arrayin to grid size shapeout. For 
+    """Crop the last two dimensions of arrayin to grid size shapeout. For
     entries of shapeout which are larger than the shape of the input array,
     perform zero-padding"""
     # Number of dimensions in input array

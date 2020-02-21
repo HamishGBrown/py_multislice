@@ -7,6 +7,7 @@ from .utils.numpy_utils import (
     q_space_array,
     fourier_interpolate_2d,
     crop,
+    crop_to_bandwidth_limit,
 )
 from .utils.torch_utils import (
     roll_n,
@@ -427,14 +428,14 @@ def STEM(
                 # Define resampling function to crop and interpolate
                 # diffraction patterns
                 def resize(array):
-                    cropped = crop(array, diff_pat_crop)
+                    cropped = crop(np.fft.fftshift(array, axes=(-1, -2)), diff_pat_crop)
                     return fourier_interpolate_2d(cropped, gridout)
 
             else:
                 # Define resampling function to just crop diffraction
                 # patterns
                 def resize(array):
-                    return crop(array, gridout)
+                    return crop(np.fft.fftshift(array, axes=(-1, -2)), gridout)
 
         else:
             # If no resampling then the output size is just the simulation
@@ -443,7 +444,7 @@ def STEM(
 
             # Define a resampling function that does nothing
             def resize(array):
-                return array
+                return np.fft.fftshift(crop_to_bandwidth_limit(array), axes=(-1, -2))
 
         # Check whether a datacube is already provided or not
         if datacube is None:
@@ -524,9 +525,7 @@ def STEM(
 
             # Store datacube
             if FourD_STEM:
-                datacube[it, scan_index] += resize(
-                    np.fft.fftshift(amp.cpu().numpy(), axes=(-1, -2))
-                )
+                datacube[it, scan_index] += resize(amp.cpu().numpy())
 
     # Unflatten 4D-STEM datacube scan dimensions, use numpy squeeze to
     # remove superfluous dimensions (ones with length 1)
@@ -772,7 +771,7 @@ class scattering_matrix:
                     plane_wave_illumination(
                         self.gridshape,
                         self.rsize[:2],
-                        tilt=self.beams[ibeam, :],
+                        tilt=self.beams[ibeam],
                         tilt_units="pixels",
                         qspace=True,
                     )

@@ -17,7 +17,8 @@ class aberration:
 
     def __str__(self):
         if self.m > 0:
-            return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5 \u03B8 = {4:4d}\u00B0".format(
+            return """ {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5 \u03B8 =
+                {4:4d}\u00B0""".format(
                 self.Description,
                 self.Haider,
                 self.Krivanek,
@@ -31,12 +32,12 @@ class aberration:
 
 
 def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
-    """For resolution limit in units of inverse length calculate 
+    """For resolution limit in units of inverse length calculate
     sampling required to meet the Nyquist criterion. If array size in
-    units of length is passed then return how many probe positions are 
-    required otherwise just return the sampling. Alternatively pass 
-    probe accelerating voltage (eV) in kV and probe forming aperture 
-    (alpha) in mrad and the resolution limit in inverse length will be 
+    units of length is passed then return how many probe positions are
+    required otherwise just return the sampling. Alternatively pass
+    probe accelerating voltage (eV) in kV and probe forming aperture
+    (alpha) in mrad and the resolution limit in inverse length will be
     calculated for you."""
 
     if eV is None and alpha is None:
@@ -53,7 +54,7 @@ def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
 
 
 def depth_of_field(eV, alpha):
-    """Calculates the probe depth of field (z-resolution) for a probe 
+    """Calculates the probe depth of field (z-resolution) for a probe
     accelerating voltage of eV and a probe forming semiangle of alpha in mrad"""
     return 1.77 / wavev(eV) / alpha / alpha * 1e6
 

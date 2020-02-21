@@ -1,16 +1,12 @@
-import sys
-
 import numpy as np
 import matplotlib.pyplot as plt
 import re
 import scipy.integrate as integrate
 import torch
 import tqdm
-from .Probe import wavev, relativistic_mass_correction
+from .Probe import wavev
 from .crystal import interaction_constant
 from .utils.numpy_utils import fourier_shift
-
-# from py_multislice import wavev, relativistic_mass_correction, interaction_constant
 
 
 def colorize(z, ccc=None, max=None, min=None, gamma=1):
@@ -41,7 +37,7 @@ def colorize(z, ccc=None, max=None, min=None, gamma=1):
     if max is None:
         max_ = (np.abs(z) ** gamma).max()
     else:
-        max_ = np.abs(max) ** gamma
+        max_ = np.abs(max)
     if ccc is None:
         range = max_ - min_
         if range < 1e-10:
@@ -58,16 +54,16 @@ def colorize(z, ccc=None, max=None, min=None, gamma=1):
 
 
 class orbital:
-    def __init__(self, Z: int, config: str, n: int, l: int, epsilon=1):
-        """Initialize the orbital class and return an orbital 
+    def __init__(self, Z: int, config: str, n: int, ell: int, epsilon=1):
+        """Initialize the orbital class and return an orbital
            object.
            Parameters:
            Z:       Atomic number
            config:  String describing configuration of atom ie:
-                    carbon (C): config = '1s2 2s2 2p2' 
-           n:       Principal quantum number of orbital, for 
+                    carbon (C): config = '1s2 2s2 2p2'
+           n:       Principal quantum number of orbital, for
                     continuum wavefunctions n=0
-           l:       Orbital angular momentum quantum number of 
+           ell:       Orbital angular momentum quantum number of
                     orbital
            epsilon: Optional, energy of continuum wavefunction"""
 
@@ -75,7 +71,7 @@ class orbital:
         self.Z = Z
         self.config = config
         self.n = n
-        self.l = l
+        self.ell = ell
         if self.n == 0:
             assert epsilon > 0, "Energy of continuum electron must be > 0"
             self.epsilon = epsilon
@@ -102,19 +98,19 @@ class orbital:
         # Orbital title
         if n > 0:
             # Bound wave function case
-            angmom = ["s", "p", "d", "f"][l]
+            angmom = ["s", "p", "d", "f"][ell]
             # Title in the format "Ag 1s", "O 2s" etc..
             self.title = "{0} {1}{2}".format(pfac.fac.ATOMICSYMBOL[Z], n, angmom)
         else:
             # Continuum wave function case
             # Title in the format "Ag e = 10 eV l'=2" etc..
             self.title = "{0} \\varepsilon = {1} l' = {2}".format(
-                pfac.fac.ATOMICSYMBOL[Z], epsilon, l
+                pfac.fac.ATOMICSYMBOL[Z], epsilon, ell
             )
 
         # Calculate relativstic quantum number from
         # non-relativistic input
-        kappa = -1 - l
+        kappa = -1 - ell
 
         # Output desired wave function from table
         pfac.fac.WaveFuncTable("orbital.txt", n, kappa, epsilon)
@@ -125,7 +121,6 @@ class orbital:
 
         with open("orbital.txt", "r") as content_file:
             content = content_file.read()
-        import re
 
         self.ilast = int(re.search("ilast\\s+=\\s+([0-9]+)", content).group(1))
         self.energy = float(re.search("energy\\s+=\\s+([^\\n]+)\\n", content).group(1))
@@ -152,15 +147,15 @@ class orbital:
             # If continuum wave function also change normalization units from
             # 1/sqrt(k) in atomic units to units of 1/sqrt(Angstrom eV)
             # Hartree atomic energy unit in eV
-            Eh = 27.211386245988
+            # Eh = 27.211386245988
             # Fine structure constant
-            alpha = 7.2973525693e-3
+            # alpha = 7.2973525693e-3
             # Convert energy to Hartree units
-            eH = epsilon / Eh
+            # eH = epsilon / Eh
             # wavenumber in atomic units
-            ke = np.sqrt(2 * eH * (1 + alpha ** 2 * eH / 2))
+            # ke = np.sqrt(2 * eH * (1 + alpha ** 2 * eH / 2))
             # Normalization
-            norm = 1 / np.sqrt(ke)
+            # norm = 1 / np.sqrt(ke)
 
         # For bound wave functions we simply interpolate the
         # tabulated values of a0 the wavefunction
@@ -306,12 +301,12 @@ def transition_potential(
     from scipy.interpolate import interp1d
 
     # Get angular momentum quantum numbers for both states
-    l = int(orb1.l)
-    lprime = int(orb2.l)
+    ell = int(orb1.ell)
+    lprime = int(orb2.ell)
 
     # Check that ml and mlprime, the projection quantum numbers for the bound
     # and free states, are sensible
-    if np.abs(ml) > l:
+    if np.abs(ml) > ell:
         return Hn0
     if np.abs(mlprime) > lprime:
         return Hn0
@@ -363,7 +358,9 @@ def transition_potential(
     # The triangle inequality for the Wigner 3j symbols mean that result is
     # only non-zero for certain values of lprimeprime:
     # |l-lprime|<=lprimeprime<=|l+lprime|
-    lprimeprimes = np.arange(np.abs(l - lprime), np.abs(l + lprime) + 1, dtype=np.int)
+    lprimeprimes = np.arange(
+        np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=np.int
+    )
     if lprimeprimes.shape[0] < 1:
         return None
 
@@ -377,7 +374,7 @@ def transition_potential(
         prefactor1 = (
             np.sqrt(4 * np.pi)
             * ((-1j) ** lprimeprime)
-            * np.sqrt((2 * lprime + 1) * (2 * lprimeprime + 1) * (2 * l + 1))
+            * np.sqrt((2 * lprime + 1) * (2 * lprimeprime + 1) * (2 * ell + 1))
         )
         for mlprimeprime in mlprimeprimes:
             if ml - mlprime - mlprimeprime != 0:
@@ -385,9 +382,9 @@ def transition_potential(
             # Evaluate Eq (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
             prefactor2 = (
                 (-1.0) ** (mlprime + mlprimeprime)
-                * np.float(wigner_3j(lprime, lprimeprime, l, 0, 0, 0))
+                * np.float(wigner_3j(lprime, lprimeprime, ell, 0, 0, 0))
                 * np.float(
-                    wigner_3j(lprime, lprimeprime, l, -mlprime, -mlprimeprime, ml)
+                    wigner_3j(lprime, lprimeprime, ell, -mlprime, -mlprimeprime, ml)
                 )
             )
 

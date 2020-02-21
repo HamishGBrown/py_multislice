@@ -323,8 +323,11 @@ def scatter_add_patches(
     input: torch.Tensor, out: torch.Tensor, axes, positions, patch_size, index=None
 ) -> torch.Tensor:
     """
-    Scatter_adds K patches of size :patch_size: at axes [ax1, ax2] into the output tensor. The patches are added at
-    positions :positions:. Additionally, several dimensions can be summed, specified by reduce_dims.
+    Scatter_adds K patches of size :patch_size: at axes [ax1, ax2] into the
+    output tensor. The patches are added at
+
+    positions :positions:. Additionally, several dimensions can be summed,
+                           specified by reduce_dims.
     :param input:   K x M1 x M2 at least 3-dimensional tensor of patches,
     :param out: at least two-dimensional tensor that is the scatter_add target
     :param axes: (2,) axes at which to scatter the input
@@ -435,15 +438,19 @@ def get_scatter_gather_indices(r, s, input, axes, edge_behaviour="periodic"):
 
 def gather_patches(input, axes, positions, patch_size, index=None) -> torch.Tensor:
     """
-    Gathers K patches of size :patch_size: at axes [ax1, ax2] of the input tensor. The patches are collected started at
+    Gathers K patches of size :patch_size: at axes [ax1, ax2] of the input
+    tensor. The patches are collected started at
     K positions pos.
-    if :input: is an n-dimensional tensor with size (x_0, x_1, x_2, ..., x_a, x_ax1, x_ax2, x_b, ..., x_{n-1})
-    then :out: is an n-dimensional tensor with size  (K, x_0, x_1, x_2, ..., x_a, patch_size[0], patch_size[1], x_3, ..., x_{n-1})
+    if :input: is an n-dimensional tensor with size (x_0, x_1, x_2, ..., x_a,
+               x_ax1, x_ax2, x_b, ..., x_{n-1})
+    then :out: is an n-dimensional tensor with size  (K, x_0, x_1, x_2, ...,
+              x_a, patch_size[0], patch_size[1], x_3, ..., x_{n-1})
     :param input: at least two-dimensional tensor
     :param axes: axes at which to gather the patches
     :param positions: K x 2 LongTensor
     :param patch_size: (2,) LongTensor
-    :param out: n-dimensional tensor with size  (K, x_0, x_1, x_2, ..., x_a, patch_size[0], patch_size[1], x_3, ..., x_{n-1})
+    :param out: n-dimensional tensor with size  (K, x_0, x_1, x_2, ..., x_a,
+                patch_size[0], patch_size[1], x_3, ..., x_{n-1})
     :return:
     """
 
@@ -526,7 +533,7 @@ def align(arr1, arr2):
 
 
 def correlate(arr1, arr2):
-    """Find the cross correlation of two arrays using the Fourier transform. 
+    """Find the cross correlation of two arrays using the Fourier transform.
     Assumes that both arrays are periodic so can be circularly shifted."""
 
     complex_input = arr1.size(-1) == 2 and arr2.size(-1) == 2
@@ -604,10 +611,10 @@ def fourier_shift_torch(
 def fourier_shift_array(
     size, posn, dtype=torch.float, device=torch.device("cpu"), units="pixels"
 ):
-    """Fourier shift theorem array for array shape size, 
+    """Fourier shift theorem array for array shape size,
        to (pixel) position given by list posn.
-       
-       posn can be a K x 2 array to give a K x Y x X 
+
+       posn can be a K x 2 array to give a K x Y x X
        array of Fourier shift arrays"""
     # Get number of dimensions
     nn = len(posn.size())
@@ -736,7 +743,7 @@ def fourier_interpolate_2d_torch(
     """Perfoms a fourier interpolation on array ain so that its shape matches
     that given by shapeout.
 
-    Arguments:   
+    Arguments:
     ain      -- Input numpy array
     shapeout -- Shape of output array
     correct_norm -- If True normalization such that values are conserved, if false
