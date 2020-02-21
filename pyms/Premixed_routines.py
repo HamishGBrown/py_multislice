@@ -168,6 +168,7 @@ def STEM_multislice(
     aberrations=[],
     batch_size=5,
     FourD_STEM=False,
+    STEM_images=None,
     scan_posn=None,
     dtype=torch.float32,
     device_type=None,
@@ -216,7 +217,6 @@ def STEM_multislice(
         "output_to_bandwidth_limit": output_to_bandwidth_limit,
     }
 
-    STEM_images = None
     datacube = None
 
     for i in tqdm.tqdm(

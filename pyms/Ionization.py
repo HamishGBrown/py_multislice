@@ -9,48 +9,51 @@ from .crystal import interaction_constant
 from .utils.numpy_utils import fourier_shift
 
 
-def colorize(z, ccc=None, max=None, min=None, gamma=1):
-    from colorsys import hls_to_rgb
+def get_q_numbers_for_transition(l, order=2):
+    """For ionization from bound quantum number l, calculate all excited
+    state quantum numbers ml, lprime, and mlprime needed to calculate all
+    atomic transitions."""
+    # Get projection quantum numbers
+    mls = np.arange(-l, l + 1)
+    qnumbers = []
+    minlprime = max(l - order, 0)
+    for lprime in np.arange(minlprime, l + order + 1):
+        for mlprime in np.arange(-lprime, lprime + 1):
+            for ml in mls:
+                qnumbers.append([lprime, mlprime, ml])
+    return qnumbers
 
-    # Get shape of array
-    n, m = z.shape
-    # Create RGB array
-    c = np.zeros((n, m, 3))
-    # Set infinite values to be constant color
-    c[np.isinf(z)] = (1.0, 1.0, 1.0)
-    c[np.isnan(z)] = (0.5, 0.5, 0.5)
 
-    idx = ~(np.isinf(z) + np.isnan(z))
+def get_transitions(
+    orbital,
+    excited_configuration,
+    epsilon,
+    eV,
+    gridshape,
+    gridsize,
+    order=2,
+    contr=0.99,
+):
+    """"For ionization from bound quantum number l, get all possible transitions
+    up to contr (a fraction) of the contribution to the total ionization
+    cross-section. The orbital configuration (excited_configuration), energy
+    (epsilon) of theexcited state, beam energy (eV) in electron-volts,
+    gridshape in pixels must also be passed to this function"""
 
-    # A is the color (Hue)
-    A = (np.angle(z[idx])) / (2 * np.pi)
-    A = (A) % 1.0
+    qnumberset = get_q_numbers_for_transition(orbital.l, order)
 
-    # B is the lightness
-    B = np.ones_like(A) * 0.5
+    transition_potentials = []
 
-    # Calculate min and max of array or take user provided values
-    if min is None:
-        min_ = (np.abs(z) ** gamma).min()
-    else:
-        min_ = min
-    if max is None:
-        max_ = (np.abs(z) ** gamma).max()
-    else:
-        max_ = np.abs(max)
-    if ccc is None:
-        range = max_ - min_
-        if range < 1e-10:
-            C = np.ones(z.shape)[idx] * 0.49
-        else:
-            C = ((np.abs(z[idx]) - min_) / range) ** gamma * 0.5
+    for qnumbers in qnumberset:
+        lprime, mlprime, ml = qnumbers
 
-    else:
-        C = ccc
-    # C = np.ones_like(B)*0.5
+        excited_state = orbital(orbital.Z, excited_configuration, 0, lprime, epsilon)
 
-    c[idx] = [hls_to_rgb(a, cc, b) for a, b, cc in zip(A, B, C)]
-    return c
+        Hn0 = transition_potential(  # noqa
+            orbital, excited_state, gridshape, gridsize, ml, mlprime, eV
+        )
+
+        transition_potentials.append()
 
 
 class orbital:
@@ -164,7 +167,7 @@ class orbital:
             table[: self.ilast, 1], table[: self.ilast, 4], kind="cubic", fill_value=0
         )
 
-    def wfn(self, r):
+    def __call__(self, r):
         """Evaluate radial wavefunction on grid r from tabulated values"""
 
         is_arr = isinstance(r, np.ndarray)
@@ -221,7 +224,7 @@ class orbital:
         """Plot wavefunction at positions given by grid r"""
 
         fig, ax = plt.subplots(figsize=(4, 4))
-        wavefunction = self.wfn(grid)
+        wavefunction = self(grid)
         ax.plot(grid, wavefunction)
         ax.set_title(self.title)
         if ylim is None:
@@ -306,6 +309,7 @@ def transition_potential(
 
     # Check that ml and mlprime, the projection quantum numbers for the bound
     # and free states, are sensible
+    #  see http://mathworld.wolfram.com/Wigner3j-Symbol.html)
     if np.abs(ml) > ell:
         return Hn0
     if np.abs(mlprime) > lprime:
@@ -338,10 +342,9 @@ def transition_potential(
         for iQ, Q in enumerate(np.ravel(q_)):
             # Redefine kernel for this value of q, factor of a0 converts q from
             # units of inverse Angstrom to inverse Bohr radii,
+            grid = 2 * np.pi * Q * a0
             overlap_kernel = (
-                lambda x: orb1.wfn(x)
-                * spherical_jn(lprimeprime, 2 * np.pi * Q * a0 * x)
-                * orb2.wfn(x)
+                lambda x: orb1(x) * spherical_jn(lprimeprime, grid * x) * orb2(x)
             )
             jq[iQ] = integrate.quad(overlap_kernel, 0, rmax)[0]
 
@@ -377,6 +380,8 @@ def transition_potential(
             * np.sqrt((2 * lprime + 1) * (2 * lprimeprime + 1) * (2 * ell + 1))
         )
         for mlprimeprime in mlprimeprimes:
+            # Check second selection rule
+            # (http://mathworld.wolfram.com/Wigner3j-Symbol.html)
             if ml - mlprime - mlprimeprime != 0:
                 continue
             # Evaluate Eq (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
