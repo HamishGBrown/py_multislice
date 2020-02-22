@@ -8,52 +8,80 @@ from .Probe import wavev
 from .crystal import interaction_constant
 from .utils.numpy_utils import fourier_shift
 
+orbitals = ["s", "p", "d", "f"]
 
-def get_q_numbers_for_transition(l, order=2):
+
+def get_q_numbers_for_transition(ell, order=1):
     """For ionization from bound quantum number l, calculate all excited
     state quantum numbers ml, lprime, and mlprime needed to calculate all
     atomic transitions."""
     # Get projection quantum numbers
-    mls = np.arange(-l, l + 1)
+    mls = np.arange(-ell, ell + 1)
     qnumbers = []
-    minlprime = max(l - order, 0)
-    for lprime in np.arange(minlprime, l + order + 1):
+    minlprime = max(ell - order, 0)
+    for lprime in np.arange(minlprime, ell + order + 1):
         for mlprime in np.arange(-lprime, lprime + 1):
             for ml in mls:
                 qnumbers.append([lprime, mlprime, ml])
     return qnumbers
 
 
-def get_transitions(
-    orbital,
-    excited_configuration,
-    epsilon,
-    eV,
-    gridshape,
-    gridsize,
-    order=2,
-    contr=0.99,
-):
+def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=0.99):
     """"For ionization from bound quantum number l, get all possible transitions
     up to contr (a fraction) of the contribution to the total ionization
     cross-section. The orbital configuration (excited_configuration), energy
     (epsilon) of theexcited state, beam energy (eV) in electron-volts,
     gridshape in pixels must also be passed to this function"""
 
-    qnumberset = get_q_numbers_for_transition(orbital.l, order)
+    # Get orbital configuration in bound state
+    orbital_configuration = full_orbital_filling(Z)
+
+    # Free configuration is the bound orbital with one less electron, find this
+    # orbital in the string and parse its current filling
+    target_orbital_string = str(n) + orbitals[ell]
+    current_filling = int(
+        re.search(target_orbital_string + "([0-9]+)", orbital_configuration).group(0)
+    )
+
+    # Subtract one electron to get the new filling
+    new_filling = current_filling - 1
+
+    # Update the orbital configuration string to create the new orbital filling
+    new_orbital_string = target_orbital_string + str(new_filling)
+    target_orbital_string = target_orbital_string + str(current_filling)
+    excited_configuration = orbital_configuration.repalce(
+        target_orbital_string, new_orbital_string
+    )
+
+    # Now generate the bound_orbital object using pfac
+    bound_orbital = orbital(Z, orbital_configuration, n, ell)
+
+    qnumberset = get_q_numbers_for_transition(bound_orbital.ell, order)
 
     transition_potentials = []
 
-    for qnumbers in qnumberset:
+    for qnumbers in tqdm.tqdm(qnumberset):
         lprime, mlprime, ml = qnumbers
 
-        excited_state = orbital(orbital.Z, excited_configuration, 0, lprime, epsilon)
-
-        Hn0 = transition_potential(  # noqa
-            orbital, excited_state, gridshape, gridsize, ml, mlprime, eV
+        excited_state = orbital(
+            bound_orbital.Z, excited_configuration, 0, lprime, epsilon
         )
 
-        transition_potentials.append()
+        Hn0 = transition_potential(
+            bound_orbital, excited_state, gridshape, gridsize, ml, mlprime, eV
+        )
+
+        transition_potentials.append(Hn0)
+
+    tot = np.sum(np.square(np.abs(transition_potentials)))
+
+    return np.stack(
+        [
+            Hn0
+            for Hn0 in transition_potentials
+            if np.sum(np.abs(Hn0) ** 2) / tot > 1 - contr
+        ]
+    )
 
 
 class orbital:
@@ -623,6 +651,102 @@ def tile_out_ionization_image(image, tiling):
                 image, [y / tiling[0], x / tiling[1]], pixel_units=False
             )
     return tiled_image
+
+
+def valence_orbitals(Z):
+    """Returns the valence orbital filling for an atom with atomic number Z"""
+    if Z < 3:
+        return "1s" + str(Z)
+    elif Z < 5:
+        return "2s" + str(Z - 2)
+    elif Z < 11:
+        return "2s2 2p" + str(Z - 4)
+    elif Z < 13:
+        return "3s" + str(Z - 10)
+    elif Z < 19:
+        return "3s2 3p" + str(Z - 12)
+    elif Z < 21:
+        return "4s" + str(Z - 18)
+    elif Z == 24:
+        return "3d5 4s1"
+    elif Z == 29:
+        return "3d10 4s1"
+    elif Z < 31:
+        return "3d" + str(Z - 20) + " 4s2"
+    elif Z < 37:
+        return "3d10 4s2 4p" + str(Z - 30)
+    elif Z < 39:
+        return "5s" + str(Z - 36)
+    elif Z == 41:
+        return "4d4 5s1"
+    elif Z == 42:
+        return "4d5 5s1"
+    elif Z == 44:
+        return "4d7 5s1"
+    elif Z == 45:
+        return "4d8 5s1"
+    elif Z == 46:
+        return "4d10"
+    elif Z == 47:
+        return "4d10 5s1"
+    elif Z < 49:
+        return "4d" + str(Z - 38) + " 5s2"
+    elif Z < 55:
+        return "4d10 5s2 5p" + str(Z - 48)
+    elif Z < 57:
+        return "6s" + str(Z - 54)
+    elif Z == 57:
+        return "5d1 6s2"
+    elif Z == 58:
+        return "4f1 5d1 6s2"
+    elif Z == 64:
+        return "4f7 5d1 6s2"
+    elif Z < 71:
+        return "4f" + str(Z - 56) + " 6s2"
+    # Filling for Pt and Au
+    elif any([Z == 78, Z == 79]):
+        return "4f14 5d" + str(Z - 69) + " 6s1"
+    elif Z < 81:
+        return "4f14 5d" + str(Z - 70) + " 6s2"
+    elif Z < 87:
+        return "4f14 5d10 6s2 6p" + str(Z - 80)
+    elif Z < 89:
+        return "7s" + str(Z - 86)
+    # Filling for Ac and Th
+    elif Z in [89, 90]:
+        return "7s2 6d" + str(Z - 88)
+    # Filling for Pa, U, Np and Cm
+    elif Z in [91, 92, 93, 96]:
+        return "7s2 5f" + str(Z - 89) + " 6d1"
+    elif Z < 103:
+        return "7s2 5f" + str(Z - 88)
+    else:
+        return None
+
+
+def noble_gas_filling(Z):
+    if Z < 2:
+        return ""
+    orb = "1s2 "
+    if Z < 10:
+        return orb
+    orb += "2s2 2p6 "
+    if Z < 18:
+        return orb
+    orb += "3s2 3p6 "
+    if Z < 36:
+        return orb
+    orb += "4s2 3d10 4p6 "
+    if Z < 54:
+        return orb
+    orb += "5s2 4d10 5p6 "
+    if Z < 71:
+        return orb
+    return None
+
+
+def full_orbital_filling(Z):
+    return noble_gas_filling(Z) + valence_orbitals(Z)
 
 
 if __name__ == "__main__":

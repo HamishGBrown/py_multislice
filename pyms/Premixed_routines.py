@@ -605,10 +605,8 @@ def STEM_EELS_PRISM(
     det,
     thicknesses,
     Ztarget,
-    boundConfiguration,
-    boundQuantumNumbers,
-    freeConfiguration,
-    freeQuantumNumbers,
+    n,
+    ell,
     epsilon,
     Hn0_crop=None,
     subslices=[1.0],
@@ -616,6 +614,7 @@ def STEM_EELS_PRISM(
     tiling=[1, 1],
     nT=5,
     PRISM_factor=[1, 1],
+    contr=0.95,
 ):
 
     # Choose GPU if available and CPU if not
@@ -663,6 +662,7 @@ def STEM_EELS_PRISM(
         nslices * len(subslices),
         eV,
         app,
+        contr=contr,
         batch_size=5,
         subslicing=True,
         transposed=True,
@@ -671,20 +671,13 @@ def STEM_EELS_PRISM(
     # Link the slices and seeds of both scattering matrices
     S1.seed = S2.seed
 
-    from .Ionization import make_transition_potentials, tile_out_ionization_image
+    from .Ionization import tile_out_ionization_image, get_transitions
 
-    nstates = len(freeQuantumNumbers)
-    Hn0 = make_transition_potentials(
-        gridshape,
-        rsize,
-        eV,
-        Ztarget,
-        epsilon,
-        boundQuantumNumbers,
-        boundConfiguration,
-        freeQuantumNumbers,
-        freeConfiguration,
+    # nstates = len(freeQuantumNumbers)
+    Hn0 = get_transitions(
+        Ztarget, n, ell, epsilon, eV, gridshape, rsize, order=1, contr=0.99
     )
+    nstates = Hn0.shape[0]
 
     if Hn0_crop is None:
         Hn0_crop = [S1.stored_gridshape[i] for i in range(2)]
