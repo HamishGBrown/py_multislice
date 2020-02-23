@@ -833,12 +833,12 @@ class crystal:
             )
 
         new = new.tile(*tile1)
-        tiled_zdim = new.unitcell[2]
+        tiled_zdim = new.unitcell[axis]
         other_ = other_.tile(*tile2)
 
         # Update the thickness of the resulting
         # crystal object.
-        new.unitcell[axis] = self.unitcell[axis] + other_.unitcell[axis]
+        new.unitcell[axis] = tiled_zdim + other_.unitcell[axis]
 
         # Adjust fractional coordinates of atoms, multiply by old unitcell
         # size to transform into cartesian coordinates and then divide by

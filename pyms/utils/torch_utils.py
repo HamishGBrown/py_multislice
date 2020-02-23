@@ -3,6 +3,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 re = np.s_[..., 0]
 im = np.s_[..., 1]
 
@@ -75,42 +76,6 @@ def complex_mul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tens
     return torch.stack([real, imag], -1)
 
 
-def colorize(z, ccc=None, max=None, min=None):
-    from colorsys import hls_to_rgb
-
-    # Get shape of array
-    n, m = z.shape
-
-    # Intialize RGB array
-    c = np.zeros((n, m, 3))
-
-    # Set infinite and nan values to constant
-    c[np.isinf(z)] = (1.0, 1.0, 1.0)
-    c[np.isnan(z)] = (0.5, 0.5, 0.5)
-
-    idx = ~(np.isinf(z) + np.isnan(z))
-    # Map phase to float between 0 and 1 and store in array A
-    A = ((np.angle(z[idx])) / (2 * np.pi)) % 1.0
-
-    B = np.ones_like(A)
-    if min is None:
-        min_ = np.abs(z).min()
-    else:
-        min_ = min
-    if max is None:
-        max_ = np.abs(z).max()
-    else:
-        max_ = np.abs(max)
-
-    if ccc is None:
-        C = (np.abs(z[idx]) - min_) / (max_ - min_) * 0.5
-    else:
-        C = ccc
-    # C = np.ones_like(B)*0.5
-    c[idx] = [hls_to_rgb(a, cc, b) for a, b, cc in zip(A, B, C)]
-    return c
-
-
 # def pad_2d(array, padding,value=0):
 #     """Pad a 2d array with value"""
 #     #Calculate size of output array
@@ -145,6 +110,8 @@ def torch_c_exp(angle):
 
 
 def torch_plot(array):
+
+    from .numpy_utils import colorize
 
     if array.size()[-1] == 2:
         fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(12, 4))

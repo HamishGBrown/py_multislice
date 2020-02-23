@@ -40,7 +40,7 @@ def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=
     # orbital in the string and parse its current filling
     target_orbital_string = str(n) + orbitals[ell]
     current_filling = int(
-        re.search(target_orbital_string + "([0-9]+)", orbital_configuration).group(0)
+        re.search(target_orbital_string + "([0-9]+)", orbital_configuration).group(1)
     )
 
     # Subtract one electron to get the new filling
@@ -49,7 +49,7 @@ def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=
     # Update the orbital configuration string to create the new orbital filling
     new_orbital_string = target_orbital_string + str(new_filling)
     target_orbital_string = target_orbital_string + str(current_filling)
-    excited_configuration = orbital_configuration.repalce(
+    excited_configuration = orbital_configuration.replace(
         target_orbital_string, new_orbital_string
     )
 
