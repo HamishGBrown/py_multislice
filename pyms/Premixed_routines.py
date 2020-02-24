@@ -615,6 +615,7 @@ def STEM_EELS_PRISM(
     nT=5,
     PRISM_factor=[1, 1],
     contr=0.95,
+    dtype=torch.complex64,
 ):
 
     # Choose GPU if available and CPU if not
@@ -652,6 +653,7 @@ def STEM_EELS_PRISM(
         batch_size=5,
         subslicing=True,
         PRISM_factor=PRISM_factor,
+        dtype=dtype,
     )
 
     # Scattering matrix 2 propagates probe from slice of ionization to exit surface
@@ -662,11 +664,11 @@ def STEM_EELS_PRISM(
         nslices * len(subslices),
         eV,
         app,
-        contr=contr,
         batch_size=5,
         subslicing=True,
         transposed=True,
         PRISM_factor=PRISM_factor,
+        dtype=dtype,
     )
     # Link the slices and seeds of both scattering matrices
     S1.seed = S2.seed
@@ -675,7 +677,7 @@ def STEM_EELS_PRISM(
 
     # nstates = len(freeQuantumNumbers)
     Hn0 = get_transitions(
-        Ztarget, n, ell, epsilon, eV, gridshape, rsize, order=1, contr=0.99
+        Ztarget, n, ell, epsilon, eV, S1.stored_gridshape, rsize, order=1, contr=0.99
     )
     nstates = Hn0.shape[0]
 
