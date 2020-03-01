@@ -60,7 +60,7 @@ def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=
 
     transition_potentials = []
 
-    for qnumbers in tqdm.tqdm(qnumberset):
+    for qnumbers in tqdm.tqdm(qnumberset, desc="Calculating transition potentials"):
         lprime, mlprime, ml = qnumbers
 
         excited_state = orbital(

@@ -110,16 +110,23 @@ def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
     return maskin, maskout
 
 
+def renormalize(array, newmax=1.0, newmin=0.0):
+    """Rescales the array such that its maximum is newmax and its minimum is
+    newmin"""
+    max_, min_ = [array.max(), array.min()]
+    return (array - min_) / (max_ - min_) * (newmax - newmin)
+
+
 def colorize(z):
     """For plotting purposes, take a complex number and map it to the hsl (hue,
     saturation, lightness) scale and then output in RGB format"""
     from colorsys import hls_to_rgb
 
-    r = np.abs(z)
+    r = np.abs(z) ** 2
     arg = np.angle(z)
 
     H = (arg + np.pi) / (2 * np.pi) + 0.5
-    L = 1.0 - 1.0 / (1.0 + r ** 0.3)
+    L = renormalize(r, newmax=0.5)
     S = 0.8
 
     c = np.vectorize(hls_to_rgb)(H, L, S)  # --> tuple
