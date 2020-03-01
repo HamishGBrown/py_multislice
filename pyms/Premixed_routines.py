@@ -277,6 +277,8 @@ def multislice_precursor(
     eV,
     subslices=[1.0],
     tiling=[1, 1],
+    specimen_tilt=[0, 0],
+    tilt_units="mrad",
     nT=5,
     device=get_device(None),
     dtype=torch.float32,
@@ -292,9 +294,18 @@ def multislice_precursor(
 
     # If slices are basically equidistant, we can use the same propagator
     if np.std(np.diff(subslices, prepend=0)) < 1e-4:
-        P = make_propagators(gridshape, rsize, eV, subslices[:1])[0]
+        P = make_propagators(
+            gridshape,
+            rsize,
+            eV,
+            subslices[:1],
+            tilt=specimen_tilt,
+            tilt_units=tilt_units,
+        )[0]
     else:
-        P = make_propagators(gridshape, rsize, eV, subslices)
+        P = make_propagators(
+            gridshape, rsize, eV, subslices, tilt=specimen_tilt, tilt_units=tilt_units
+        )
 
     T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
 
@@ -323,6 +334,7 @@ def STEM_EELS_multislice(
     thicknesses,
     eV,
     alpha,
+    df=0,
     subslices=[1.0],
     batch_size=1,
     detectors=None,
@@ -505,9 +517,12 @@ def HRTEM(
     nT=5,
     nfph=25,
     showProgress=True,
-    tilt=[0, 0],
+    beam_tilt=[0, 0],
+    specimen_tilt=[0, 0],
     tilt_units="mrad",
     aberrations=[],
+    P=None,
+    T=None,
 ):
     from .Probe import plane_wave_illumination
 
@@ -515,58 +530,54 @@ def HRTEM(
     device = get_device(device_type)
 
     # Make propagators and transmission functions for multslice
-    P, T = multislice_precursor(
-        crystal,
-        gridshape,
-        eV,
-        subslices=subslices,
-        tiling=tiling,
-        dtype=dtype,
-        nT=nT,
-        device=device,
-        showProgress=showProgress,
-    )
+    if P is None and T is None:
+        P, T = multislice_precursor(
+            crystal,
+            gridshape,
+            eV,
+            subslices=subslices,
+            tiling=tiling,
+            dtype=dtype,
+            nT=nT,
+            device=device,
+            showProgress=showProgress,
+        )
 
     bw_limit_size = size_of_bandwidth_limited_array(gridshape)
-    output = np.zeros((thicknesses.shape[0], *bw_limit_size))
+    output = np.zeros((len(thicknesses), *bw_limit_size))
 
-    nslices = np.asarray(np.ceil(thicknesses / crystal.unitcell[2]), dtype=np.int)
+    nslices = np.asarray(
+        np.ceil(np.asarray(thicknesses) / crystal.unitcell[2]), dtype=np.int
+    )
 
     rsize = np.asarray(crystal.unitcell[:2]) * np.asarray(tiling)
 
     # Option for focal series, just pass an array of defocii, this bit of
     # code will set up the lens transfer functions for each case
     if np.isscalar(df):
-        ctf = crop_to_bandwidth_limit_torch(
+        defocii = [df]
+    else:
+        defocii = df
+
+    ctf = torch.zeros(len(defocii), *bw_limit_size, 2, dtype=dtype, device=device)
+    for idf, df_ in enumerate(defocii):
+        ctf[idf] = crop_to_bandwidth_limit_torch(
             cx_from_numpy(
                 make_contrast_transfer_function(
-                    gridshape, rsize, eV, app, df=df, aberrations=aberrations
+                    gridshape, rsize, eV, app, df=df_, aberrations=aberrations
                 ),
                 dtype=dtype,
                 device=device,
             )
         )
-        output = np.zeros((1, len(nslices), *bw_limit_size))
-    else:
-        ctf = torch.zeros(len(df), *bw_limit_size, 2, dtype=dtype, device=device)
-        for idf, df_ in enumerate(df):
-            ctf[idf] = crop_to_bandwidth_limit_torch(
-                cx_from_numpy(
-                    make_contrast_transfer_function(
-                        gridshape, rsize, eV, app, df=df_, aberrations=aberrations
-                    ),
-                    dtype=dtype,
-                    device=device,
-                )
-            )
-        output = np.zeros((len(df), len(nslices), *bw_limit_size))
+    output = np.zeros((len(defocii), len(nslices), *bw_limit_size))
 
     # Iteration over frozen phonon configurations
     for ifph in tqdm.tqdm(
         range(nfph), desc="Frozen phonon iteration", disable=not showProgress
     ):
         probe = plane_wave_illumination(
-            gridshape, rsize, tilt, eV, tilt_units, qspace=True
+            gridshape, rsize, beam_tilt, eV, tilt_units, qspace=True
         )
         # Run multislice iterating over different thickness outputs
         for it, t in enumerate(np.diff(nslices, prepend=0)):
@@ -594,7 +605,7 @@ def HRTEM(
             )
 
     # Divide output by # of pixels to compensate for Fourier transform
-    return np.squeeze(output)
+    return np.squeeze(output) / nfph
 
 
 def STEM_EELS_PRISM(
@@ -608,6 +619,7 @@ def STEM_EELS_PRISM(
     n,
     ell,
     epsilon,
+    df=0,
     Hn0_crop=None,
     subslices=[1.0],
     device_type=None,

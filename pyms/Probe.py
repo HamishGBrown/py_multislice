@@ -282,3 +282,86 @@ def relativistic_mass_correction(E):
     # Electron rest mass in eV
     m0c2 = 5.109989461e5
     return (m0c2 + E) / m0c2
+
+
+def simulation_result_with_Cc(function, Cc, deltaE, eV, args=[], kwargs={}, npoints=7):
+    """Perform simulation, taking into account chromatic aberration. Pass in
+    the function that simulates the multislice result, it is assumed that defocus
+    is a variable named 'df' somewhere in the keyword argument list. Other
+    inputs include  a chromatic aberration (Cc) for (1/e) energy spread deltaE
+    and beam energy eV in electron volts."""
+
+    # Check if a defocii has already been specified if not, assume that nominal
+    # (mean) defocus is 0
+    if "df" in kwargs.keys():
+        nominal_df = kwargs["df"]
+    else:
+        nominal_df = 0
+
+    # Get defocii to integrate over
+    defocii = Cc_integration_points(Cc, deltaE, eV, npoints) + nominal_df
+    ndf = len(defocii)
+
+    # Initialise the average result to None
+    average = None
+
+    # Now
+    for df in defocii:
+        kwargs["df"] = df
+        result = function(*args, **kwargs)
+
+        # Assume that every function will either return a numpy array
+        # (eg. pyms.HRTEM) or a list of numpy arrays (eg. pyms.STEM with both
+        # conventional and 4D-STEM options) so average these results
+        if isinstance(result, np.ndarray):
+            if average is None:
+                average = result / ndf
+            else:
+                average += result / ndf
+        else:
+            if average is None:
+                average = [x / ndf for x in result]
+            else:
+                average = [x / ndf + y for x, y in zip(result, average)]
+    return average
+
+
+def Cc_integration_points(Cc, deltaE, eV, npoints=7):
+    """Calculates the different defocus values that should be calculated for
+    inclusion of chromatic aberration with the appropriate weight in the
+    integration over defocus."""
+
+    # Import the error function (integral of Gaussian) and inverse error function
+    # from scipy's special functions library
+    from scipy.special import erfinv, erf
+
+    # First divide the gaussian pdf into npoints different regions of equal
+    # "area"
+    partitions = erfinv(2 * (np.arange(npoints - 1) + 1) / npoints - 1)
+
+    # Now calculate the mean (expectation value) within each partition
+    x = np.zeros(npoints)
+    prefactor = 1 / (2 * np.sqrt(np.pi))
+    x[0] = -prefactor * np.exp(-partitions[0] ** 2) / (1 + erf(partitions[0])) * 2
+    x[1:-1] = (
+        prefactor
+        * (np.exp(-partitions[:-1] ** 2) - np.exp(-partitions[1:] ** 2))
+        / (erf(partitions[1:]) - erf(partitions[:-1]))
+        * 2
+    )
+    x[-1] = prefactor * np.exp(-partitions[-1] ** 2) / (1 - erf(partitions[-1])) * 2
+
+    # Multiply by 1/e spread of defocus values
+    return x * Cc * deltaE / eV
+
+
+def Cc_defocus_spread(df, Cc, deltaE, eV):
+    """Evaluates the probability density function at defocus df for the defocus
+    spread of a chromatic aberration (Cc) for (1/e) energy spread deltaE and
+    beam energy eV in electron volts."""
+
+    # Calculate defocus spread
+    df_spread = Cc * deltaE / eV
+
+    # Evaluate probability density function for given defocus df
+    return np.exp(-df * df / df_spread / df_spread) / np.sqrt(np.pi) / df_spread

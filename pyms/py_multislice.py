@@ -25,21 +25,24 @@ from .utils.torch_utils import (
 )
 
 
-def make_propagators(pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0]):
+def make_propagators(
+    pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0], tilt_units="mrad"
+):
     """Make the Fresnel freespace propagators for a multislice simulation.
 
     Arguments:
-    pixelsize -- Pixel dimensions of the 2D grid
-    gridsize  -- Size of the grid in real space (first two dimensions) and
-                 thickness of the object in multislice (third dimension)
-    eV        -- Probe energy in electron volts
-    subslices -- A one dimensional array-like object containing the depths
-                 (in fractional coordinates) at which the object will be
-                 subsliced. The last entry should always be 1.0. For example,
-                 to slice the object into four equal sized slices pass
-                 [0.25,0.5,0.75,1.0]
-    tilt      -- Allows the user to simulate a (small < 50 mrad) tilt of the
-                 specimen, units in mrad.
+    pixelsize  -- Pixel dimensions of the 2D grid
+    gridsize   -- Size of the grid in real space (first two dimensions) and
+                  thickness of the object in multislice (third dimension)
+    eV         -- Probe energy in electron volts
+    subslices  -- A one dimensional array-like object containing the depths
+                  (in fractional coordinates) at which the object will be
+                  subsliced. The last entry should always be 1.0. For example,
+                  to slice the object into four equal sized slices pass
+                  [0.25,0.5,0.75,1.0]
+    tilt       -- Allows the user to simulate a (small < 50 mrad) tilt of the
+                  specimen, units given by input variable tilt_units.
+    tilt_units -- Units of specimen tilt, can be 'mrad','pixels' or 'invA'
     """
     from .Probe import make_contrast_transfer_function, wavev
 
@@ -49,8 +52,20 @@ def make_propagators(pixelsize, gridsize, eV, subslices=[1.0], tilt=[0, 0]):
     # gridsize
     app = np.amax(np.asarray(pixelsize) / np.asarray(gridsize[:2]) / 2)
 
-    # Shift of optic axis to take
-    optic_axis = np.asarray(tilt) * 1e-3 * wavev(eV)
+    # Shift of optic axis to take into account specimen tilt, must be converted
+    # to inverse Angstrom
+    if tilt_units == "mrad":
+        optic_axis = np.asarray(tilt) * 1e-3 * wavev(eV)
+    elif tilt_units == "pixels":
+        optic_axis = np.asarray(tilt) / np.asarray(gridsize[:2])
+    elif tilt_units == "invA":
+        optic_axis = np.asarray(tilt)
+    else:
+        print(
+            "Didn't recognize tilt units {0} in make_propagators function".format(
+                tilt_units
+            )
+        )
 
     # Intitialize array
     prop = np.zeros((len(subslices), *pixelsize), dtype=np.complex)
