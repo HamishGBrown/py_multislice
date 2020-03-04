@@ -404,6 +404,7 @@ def STEM_EELS_multislice(
         nslices,
         eV,
         alpha,
+        df=df,
         batch_size=batch_size,
         detectors=detectors,
         FourD_STEM=FourD_STEM,
@@ -619,6 +620,7 @@ def STEM_EELS_PRISM(
     n,
     ell,
     epsilon,
+    # TODO implement defocus, this is not yet included
     df=0,
     Hn0_crop=None,
     subslices=[1.0],

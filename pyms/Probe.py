@@ -1,9 +1,36 @@
+"""Functions for emulating electron optics of a TEM."""
+
 import numpy as np
 from .utils.numpy_utils import q_space_array
 
 
 class aberration:
+    """A class describing electron lens aberrations."""
+
     def __init__(self, Krivanek, Haider, Description, amplitude, angle, n, m):
+        """
+        Intialize the lens aberration object.
+
+        Parameters
+        ----------
+        Krivanek : string
+            A string describing the aberration coefficient in Krivanek notation
+            (C_mn)
+        Haider : string
+            A string describing the aberration coefficient in Haider notation
+            (ie. A1, A2, B2)
+        Description :
+            A string describing the colloqiual name of the aberration ie. 2-fold
+            astig.
+        amplitude :
+            The amplitude of the aberration in Angstrom
+        angle :
+            The angle of the aberration in radians
+        n :
+            The principle aberration order
+        m :
+            The rotational order of the aberration.
+        """
         self.Krivanek = Krivanek
         self.Haider = Haider
         self.Description = Description
@@ -16,6 +43,7 @@ class aberration:
             self.angle = 0
 
     def __str__(self):
+        """Return a string describing the aberration."""
         if self.m > 0:
             return """ {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5 \u03B8 =
                 {4:4d}\u00B0""".format(
@@ -32,14 +60,15 @@ class aberration:
 
 
 def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
-    """For resolution limit in units of inverse length calculate
-    sampling required to meet the Nyquist criterion. If array size in
-    units of length is passed then return how many probe positions are
-    required otherwise just return the sampling. Alternatively pass
-    probe accelerating voltage (eV) in kV and probe forming aperture
-    (alpha) in mrad and the resolution limit in inverse length will be
-    calculated for you."""
+    """
+    Calculate nyquist sampling (typically for minimum sampling of a STEM probe).
 
+    If array size in units of length is passed then return how many probe
+    positions are required otherwise just return the sampling. Alternatively
+    pass probe accelerating voltage (eV) in electron-volts and probe forming
+    aperture (alpha) in mrad and the resolution limit in inverse length will be
+    calculated for you.
+    """
     if eV is None and alpha is None:
         step_size = 1 / (4 * resolution_limit)
     elif resolution_limit is None:
@@ -54,13 +83,21 @@ def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
 
 
 def depth_of_field(eV, alpha):
-    """Calculates the probe depth of field (z-resolution) for a probe
-    accelerating voltage of eV and a probe forming semiangle of alpha in mrad"""
+    """
+    Calculate the probe depth of field (z-resolution) for a probe.
+
+    Parameters
+    ----------
+    eV : float
+        Probe accelerating voltage in electron volts
+    alpha : float
+        Probe forming semi-angle in mrad
+    """
     return 1.77 / wavev(eV) / alpha / alpha * 1e6
 
 
 def aberration_starter_pack():
-    """Creates the set of aberrations up to fifth order"""
+    """Create the set of aberrations up to fifth order."""
     aberrations = []
     aberrations.append(aberration("C10", "C1", "Defocus          ", 0.0, 0.0, 1, 0))
     aberrations.append(aberration("C12", "A1", "2-Fold astig.    ", 0.0, 0.0, 1, 2))
@@ -69,7 +106,7 @@ def aberration_starter_pack():
     aberrations.append(aberration("C30", "C3", "3rd order spher. ", 0.0, 0.0, 3, 0))
     aberrations.append(aberration("C34", "A3", "4-Fold astig.    ", 0.0, 0.0, 3, 4))
     aberrations.append(aberration("C32", "S3", "Axial star aber. ", 0.0, 0.0, 3, 2))
-    aberrations.append(aberration("C45", "A4", "5-Fold astig     ", 0.0, 0.0, 4, 5))
+    aberrations.append(aberration("C45", "A4", "5-Fold astig.    ", 0.0, 0.0, 4, 5))
     aberrations.append(aberration("C43", "D4", "3-Lobe aberr.    ", 0.0, 0.0, 4, 3))
     aberrations.append(aberration("C41", "B4", "4th order coma   ", 0.0, 0.0, 4, 1))
     aberrations.append(aberration("C50", "C5", "5th order spher. ", 0.0, 0.0, 5, 0))
@@ -80,17 +117,25 @@ def aberration_starter_pack():
 
 
 def chi(q, qphi, lam, df=0.0, aberrations=[]):
-    """calculates the aberration function chi as a function of
-    reciprocal space extent q for an electron with wavelength lam.
+    """
+    Calculate the aberration function, chi.
 
     Parameters
     ----------
-    q : number
-        reciprocal space extent (Inverse angstroms).
-    lam : number
-        wavelength of electron (Inverse angstroms).
-    aberrations : list
-        A list object containing a set of the class aberration"""
+    q : float or array_like
+        Reciprocal space extent (Inverse angstroms).
+    qphi : float or array_like
+        Azimuth of grid in radians
+    lam : float
+        Wavelength of electron (Inverse angstroms).
+    Keyword arguments
+    -----------------
+    df : float, optional
+        Defocus in Angstrom
+    aberrations : list, optional
+        A list containing a set of the class aberration, pass an empty list for
+        an unaberrated contrast transfer function.
+    """
     chi_ = (q * lam) ** 2 / 2 * df
     for ab in aberrations:
         chi_ += (
@@ -114,8 +159,10 @@ def make_contrast_transfer_function(
     q=None,
     app_units="mrad",
 ):
-    """Makes a contrast transfer function with pixel dimensions given in pix_dim
-    and real_dimensions given by real_dim
+    """
+    Make an electron lens contrast transfer function.
+
+    Parameters
     ---------
     pix_dim --- The pixel size of the grid
     real_dim --- The size of the grid in Angstrom
@@ -132,7 +179,6 @@ def make_contrast_transfer_function(
         time somewhat
     app_units --- The units of the aperture size (A^-1 or mrad)
     """
-
     # Make reciprocal space array
     if q is None:
         q = q_space_array(pix_dim, real_dim[:2])
@@ -173,8 +219,8 @@ def make_contrast_transfer_function(
 
 
 def focused_probe(
-    pix_dim,
-    real_dim,
+    gridshape,
+    rsize,
     eV,
     app,
     beam_tilt=[0, 0],
@@ -185,20 +231,43 @@ def focused_probe(
     app_units="mrad",
     qspace=False,
 ):
-    """Makes a probe wave function with pixel dimensions given in pix_dim
-    and real_dimensions given by real_dim
+    """
+    Make a focused electron probe wave function.
+
+    Parameters
     ---------
-    pix_dim --- The pixel size of the grid
-    real_dim --- The size of the grid in Angstrom
-    eV --- The energy of the probe electrons in electron volts
-    app --- The apperture in units specified by app_units
-    df --- Probe defocus in A, a negative value indicate overfocus
-    aberrations --- list of probe aberrations of class pyms.Probe.aberration
-    app_units --- The units of the aperture size ("A^-1" or "mrad")
+    gridshape : (2,) array_like
+        The pixel size of the grid
+    rsize : (2,) array_like
+        The size of the grid in Angstrom
+    eV : float
+        The energy of the probe electrons in electron volts
+    app : float
+        The probe-forming apperture in units specified by app_units, pass None
+        if no probe forming aperture is to be used
+
+    Keyword arguments
+    -----------------
+    beam_tilt : array_like, optional
+        Allows the user to simulate a (small < 50 mrad) beam tilt. To maintain
+        periodicity of the wave function at the boundaries this tilt is rounded
+        to the nearest pixel value.
+    aperture_shift : array_like, optional
+        Allows the user to simulate a (small < 50 mrad) aperture shift. To
+        maintain periodicity of the wave function at the boundaries this tilt
+        is rounded to the nearest pixel value.
+    df : float, optional
+        Probe defocus in A, a negative value indicate overfocus
+    aberrations : list, optional
+        A list of of probe aberrations of class pyms.Probe.aberration, pass an
+        empty list for an un-aberrated probe
+    app_units : string, optional
+        The units of the aperture size ("invA", "pixels" or "mrad")
+    qspace : bool, optional
     """
     probe = make_contrast_transfer_function(
-        pix_dim,
-        real_dim,
+        gridshape,
+        rsize,
         eV,
         app,
         beam_tilt,
@@ -222,13 +291,32 @@ def focused_probe(
 def plane_wave_illumination(
     gridshape, gridsize, tilt=[0, 0], eV=None, tilt_units="mrad", qspace=False
 ):
-    """Create plane wave illumination with transverse momentum given by vector
-       tilt in units of inverse Angstrom or mrad. To maintain periodicitiy of
-       the wave function at the boundaries this tilt is rounded to the nearest
-       pixel value. The wave function will be normalized such that sum of
-       intensity is unity."""
+    """
+    Generate plane wave illumination for input to multislice.
 
-    # Initiliaze array that contains wave function
+    The wave function will be normalized such that sum of intensity is unity.
+
+    Parameters
+    ----------
+    gridshape : (2,) array_like
+        Pixel dimensions of the 2D grid
+    gridsize : (2,) array_like
+        Size of the grid in real space
+
+    Keyword arguments
+    -----------------
+    tilt : array_like, optional
+        Allows the user to simulate a (small < 50 mrad) beam tilt, To maintain
+        periodicity of the wave function at the boundaries this tilt is rounded
+        to the nearest pixel value.
+    eV : float
+        Probe energy in electron volts
+    tilt_units : string, optional
+        Units of beam tilt, can be 'mrad','pixels' or 'invA'
+    qspace : bool, optional
+        Pass qspace = True to get the probe in momentum (q) space
+    """
+    # Initialize array that contains wave function
     illum = np.zeros(gridshape, dtype=np.complex)
 
     # Case of an untilted plane wave (phase is zero everywhere)
@@ -265,9 +353,12 @@ def plane_wave_illumination(
 
 
 def wavev(E):
-    """Calculates the relativistically corrected wavenumber k0 (reciprocal of
-    the wavelength) for an electron of energy eV. See Eq. (2.5) in Kirkland's
-    Advanced Computing in electron microscopy"""
+    """
+    Evaluate the relativistically corrected wavenumber of an electron with energy E.
+
+    Energy E must be in electron-volts, see Eq. (2.5) in Kirkland's Advanced
+    Computing in electron microscopy
+    """
     # Planck's constant times speed of light in eV Angstrom
     hc = 1.23984193e4
     # Electron rest mass in eV
@@ -276,21 +367,49 @@ def wavev(E):
 
 
 def relativistic_mass_correction(E):
-    """Gives the relativistic mass correction, m/m0 or gamma, for an electron
-    with kinetic energy given by E in eV. Eq. (2.2) in Kirkland's Advanced
-     Computing in electron microscopy"""
+    """
+    Evaluate the relativistic mass correction for electron with energy E in eV.
+
+    See Eq. (2.2) in Kirkland's Advanced Computing in electron microscopy.
+    """
     # Electron rest mass in eV
     m0c2 = 5.109989461e5
     return (m0c2 + E) / m0c2
 
 
-def simulation_result_with_Cc(function, Cc, deltaE, eV, args=[], kwargs={}, npoints=7):
-    """Perform simulation, taking into account chromatic aberration. Pass in
-    the function that simulates the multislice result, it is assumed that defocus
-    is a variable named 'df' somewhere in the keyword argument list. Other
-    inputs include  a chromatic aberration (Cc) for (1/e) energy spread deltaE
-    and beam energy eV in electron volts."""
+def simulation_result_with_Cc(func, Cc, deltaE, eV, args=[], kwargs={}, npoints=7):
+    """
+    Perform a simulation using function, taking into account chromatic aberration.
 
+    Pass in the function that simulates the multislice result, it is assumed
+    that defocus is a variable named 'df' somewhere in the keyword argument
+    list.
+
+    Parameters
+    ----------
+    func : function
+        Function that simulates the result of interest, ie. pyms.HRTEM. The
+        defocus must be present in the keyword argument list as 'df'
+    Cc : float
+        Chromatic aberration coefficient in Angstroms
+    deltaE : float
+        Energy spread in electron volts using 1/e measure of spread (to convert
+        from FWHM divide by 1.655, and divide by sqrt(2) to convert from
+        standard deviation )
+    eV : float
+        (Mean) beam energy in electron volts
+
+    Keyword arguments
+    -----------------
+    args : list, optional
+        Arguments for the method function used to propagate probes to the exit
+        surface
+    kwargs : Dict, optional
+        Keyword arguments for the method function used to propagate probes to
+        the exit surface
+    npoints : int,optional
+        Number of integration points in the Cc numerical integration
+    """
     # Check if a defocii has already been specified if not, assume that nominal
     # (mean) defocus is 0
     if "df" in kwargs.keys():
@@ -305,10 +424,10 @@ def simulation_result_with_Cc(function, Cc, deltaE, eV, args=[], kwargs={}, npoi
     # Initialise the average result to None
     average = None
 
-    # Now
+    # Now integrate the function over those defocus values
     for df in defocii:
         kwargs["df"] = df
-        result = function(*args, **kwargs)
+        result = func(*args, **kwargs)
 
         # Assume that every function will either return a numpy array
         # (eg. pyms.HRTEM) or a list of numpy arrays (eg. pyms.STEM with both
@@ -327,10 +446,29 @@ def simulation_result_with_Cc(function, Cc, deltaE, eV, args=[], kwargs={}, npoi
 
 
 def Cc_integration_points(Cc, deltaE, eV, npoints=7):
-    """Calculates the different defocus values that should be calculated for
-    inclusion of chromatic aberration with the appropriate weight in the
-    integration over defocus."""
+    """
+    Calculate the defocus integration points for simulating chromatic aberration.
 
+    The integration points are selected by dividing the assumed gaussian defocus
+    spread into npoints regions of equal probability, then finding the mean
+    defocus in each of those regions.
+
+    Parameters
+    ----------
+    Cc : float
+        Chromatic aberration coefficient in Angstroms
+    deltaE : float
+        Energy spread in electron volts using 1/e measure of spread (to convert
+        from FWHM divide by 1.655, and divide by sqrt(2) to convert from
+        standard deviation )
+    eV : float
+        (Mean) beam energy in electron volts
+
+    Keyword arguments
+    -----------------
+    npoints : int,optional
+        Number of integration points in the Cc numerical integration
+    """
     # Import the error function (integral of Gaussian) and inverse error function
     # from scipy's special functions library
     from scipy.special import erfinv, erf
@@ -356,10 +494,13 @@ def Cc_integration_points(Cc, deltaE, eV, npoints=7):
 
 
 def Cc_defocus_spread(df, Cc, deltaE, eV):
-    """Evaluates the probability density function at defocus df for the defocus
-    spread of a chromatic aberration (Cc) for (1/e) energy spread deltaE and
-    beam energy eV in electron volts."""
+    """
+    Calculate the defocus spread for chromatic aberration.
 
+    Evaluates the probability density function at defocus df for the defocus
+    spread of a chromatic aberration (Cc) for (1/e) energy spread deltaE and
+    beam energy eV in electron volts.
+    """
     # Calculate defocus spread
     df_spread = Cc * deltaE / eV
 

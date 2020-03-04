@@ -5,9 +5,11 @@ import scipy.integrate as integrate
 import torch
 import tqdm
 from .Probe import wavev
-from .crystal import interaction_constant
+from .structure import interaction_constant
 from .utils.numpy_utils import fourier_shift
 
+# List of letters for each orbital, used to convert between orbital angular
+# momentum quantum number ell and letter
 orbitals = ["s", "p", "d", "f"]
 
 
@@ -478,6 +480,23 @@ def transition_potential_multislice(
     threshhold=1e-4,
     showProgress=True,
 ):
+    """
+    Perform a multislice calculation with a transition potential for ionization.
+
+    Parameters
+    ----------
+    probes : (n,Y,X) complex array_like
+        Electron wave functions for a set of input probes
+    nslices : int, array_like
+        The number of slices (iterations) to perform multislice over
+    propagators : (N,Y,X,2) torch.array
+        Fresnel free space operators required for the multislice algorithm
+        used to propagate the scattering matrix
+    transmission_functions : (N,Y,X,2)
+        The transmission functions describing the electron's interaction
+        with the specimen for the multislice algorithm
+    ionization_potentials :
+    """
     from .py_multislice import multislice
     from .utils.torch_utils import (
         amplitude,
@@ -605,45 +624,14 @@ def transition_potential_multislice(
     return output
 
 
-def make_transition_potentials(
-    gridshape,
-    rsize,
-    eV,
-    Z,
-    epsilon,
-    boundQuantumNumbers,
-    boundConfiguration,
-    freeQuantumNumbers,
-    freeConfiguration,
-    qspace=False,
-):
-
-    boundOrbital = orbital(Z, boundConfiguration, *boundQuantumNumbers[:2])
-
-    nstates = len(freeQuantumNumbers)
-    Hn0 = np.zeros((nstates, *gridshape), dtype=np.complex)
-
-    for istate, Qnumbers in enumerate(freeQuantumNumbers):
-        freeOrbital = orbital(Z, freeConfiguration, 0, Qnumbers[0], epsilon=epsilon)
-
-        # Calculate transition on same grid as multislice
-        Hn0[istate] = transition_potential(
-            boundOrbital,
-            freeOrbital,
-            gridshape,
-            rsize,
-            boundQuantumNumbers[2],
-            Qnumbers[1],
-            eV,
-            bandwidth_limiting=None,
-            qspace=qspace,
-        )
-
-    return Hn0
-
-
 def tile_out_ionization_image(image, tiling):
-    """For an ionization based image """
+    """
+    Tile out a ionization based image.
+
+    To save time, only ionizations in a single repeat unit cell are simulated.
+    This routine tiles out the result from this unit cell to all other unit
+    cells
+    """
     tiled_image = np.zeros_like(image)
     for y in range(tiling[0]):
         for x in range(tiling[1]):
@@ -654,7 +642,7 @@ def tile_out_ionization_image(image, tiling):
 
 
 def valence_orbitals(Z):
-    """Returns the valence orbital filling for an atom with atomic number Z"""
+    """Return the valence orbital filling for an atom with atomic number Z."""
     if Z < 3:
         return "1s" + str(Z)
     elif Z < 5:
@@ -725,6 +713,7 @@ def valence_orbitals(Z):
 
 
 def noble_gas_filling(Z):
+    """Return the noble gas filling for an atom with atomic number Z."""
     if Z < 2:
         return ""
     orb = "1s2 "
@@ -746,6 +735,7 @@ def noble_gas_filling(Z):
 
 
 def full_orbital_filling(Z):
+    """Return the full orbital filling for an atom with atomic number Z."""
     return noble_gas_filling(Z) + valence_orbitals(Z)
 
 
