@@ -3,6 +3,14 @@ import torch
 import copy
 
 
+def ensure_array(input):
+    """Forces a (potentially scalar) input to be an array."""
+    if hasattr(input, "__len__"):
+        return input
+    else:
+        return np.asarray([input])
+
+
 def q_space_array(pixels, gridsize):
     """Returns the appropriately scaled 2D reciprocal space array for pixel size
     given by pixels (#y pixels, #x pixels) and real space size given by gridsize
@@ -122,16 +130,21 @@ def colorize(z):
     saturation, lightness) scale and then output in RGB format"""
     from colorsys import hls_to_rgb
 
-    r = np.abs(z) ** 2
+    # Get phase an amplitude of complex array
+    r = np.abs(z)
     arg = np.angle(z)
 
-    H = (arg + np.pi) / (2 * np.pi) + 0.5
-    L = renormalize(r, newmax=0.5)
-    S = 0.8
+    # Calculate hue, lightness and saturation
+    h = arg / (2 * np.pi)
+    ell = renormalize(r, newmax=0.5)
+    s = 0.8
 
-    c = np.vectorize(hls_to_rgb)(H, L, S)  # --> tuple
-    c = np.array(c)  # -->  array of (3,n,m) shape, but need (n,m,3)
-    c = c.swapaxes(0, 2)
+    # Convert HLS format to RGB format
+    c = np.vectorize(hls_to_rgb)(h, ell, s)  # --> tuple
+    # Convert to numpy array
+    c = np.array(c)  # -->
+    # Array has shape (3,n,m), but we need (n,m,3) for output
+    c = (c.swapaxes(0, 2) * 256).astype(np.uint8)
     return c
 
 

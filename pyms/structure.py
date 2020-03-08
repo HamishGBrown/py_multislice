@@ -498,20 +498,20 @@ class structure:
         f.write(self.Title + "\n {0:.4f} {1:.4f} {2:.4f}\n".format(*self.unitcell))
 
         if atomic_coordinates == "cartesian":
-            coords = self.atoms[:3] * self.unitcell
+            coords = self.atoms[:, :3] * self.unitcell
         else:
-            coords = self.atoms[:3]
+            coords = self.atoms[:, :3]
 
         # If temperature factors are given as B then convert to urms
         if temperature_factor_units == "B":
-            DWF = self.atoms[:, 5] * 8 * np.pi ** 2
+            DWFs = self.atoms[:, 5] * 8 * np.pi ** 2
         elif temperature_factor_units == "sqrturms":
-            DWF = np.sqrt(self.atoms[:, 5])
+            DWFs = np.sqrt(self.atoms[:, 5])
 
-        for atom in self.atoms:
+        for coord, atom, DWF in zip(coords, self.atoms, DWFs):
             f.write(
                 "{0:d} {1:.4f} {2:.4f} {3:.4f} {4:.2f}  {5:.3f}\n".format(
-                    int(atom[3]), *coords, atom[4], DWF
+                    int(atom[3]), *coord, atom[4], DWF
                 )
             )
         f.write("-1")
@@ -843,7 +843,10 @@ class structure:
             Angle to rotate simulation object by in radians
         axis: array_like
             Axis about which to rotate simulation object eg [0,0,1]
-        origin: array_like, optional
+
+        Keyword arguments
+        ------------------
+        origin : array_like, optional
             Origin (in fractional coordinates) about which to rotate simulation
             object eg [0.5, 0.5, 0.5]
         """

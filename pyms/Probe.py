@@ -154,6 +154,7 @@ def make_contrast_transfer_function(
     app,
     optic_axis=[0, 0],
     aperture_shift=[0, 0],
+    tilt_units="mrad",
     df=0,
     aberrations=[],
     q=None,
@@ -173,6 +174,8 @@ def make_contrast_transfer_function(
                     axis
     aperture_shift --- Shift of the objective aperture relative
                         to the center of the array
+    tilt_units : string
+        Units of the optic_axis or aperture_shift values
     df --- Probe defocus in A, a negative value indicate overfocus
     aberrations --- List containing instances of class aberration
     q --- reciprocal space array, allows the user to reduce computation
@@ -186,31 +189,38 @@ def make_contrast_transfer_function(
     # Get  electron wave number (inverse of wavelength)
     k = wavev(eV)
 
+    # Convert tilts to units of inverse Angstrom
+    optic_axis_ = convert_tilt_angles(
+        optic_axis, tilt_units, real_dim, eV, invA_out=True
+    )
+    aperture_shift_ = convert_tilt_angles(
+        aperture_shift, tilt_units, real_dim, eV, invA_out=True
+    )
+
     if app is None:
         app_ = np.amax(np.abs(q))
     else:
         # Get aperture size in units of inverse Angstrom
-        if app_units == "mrad":
-            app_ = np.tan(app / 1000.0) * k
-        else:
-            app_ = app
+        app_ = convert_tilt_angles(app, app_units, real_dim, eV, invA_out=True)
 
     # Initialize the array to contain the CTF
     CTF = np.zeros(pix_dim, dtype=np.complex)
 
     # Calculate the magnitude of the reciprocal lattice grid
     # qarray1 accounts for a shift of the optic axis
-    qarray1 = np.sqrt(np.square(q[0] - optic_axis[0]) + np.square(q[1] - optic_axis[1]))
+    qarray1 = np.sqrt(
+        np.square(q[0] - optic_axis_[0]) + np.square(q[1] - optic_axis_[1])
+    )
 
     # qarray2 accounts for a shift of both the optic axis and the aperture
     qarray2 = np.sqrt(
-        np.square(q[0] - optic_axis[0] - aperture_shift[0])
-        + np.square(q[1] - optic_axis[1] - aperture_shift[1])
+        np.square(q[0] - optic_axis_[0] - aperture_shift_[0])
+        + np.square(q[1] - optic_axis_[1] - aperture_shift_[1])
     )
 
     # Calculate azimuth of reciprocal space array in case it is required for
     # aberrations
-    qphi = np.arctan2(q[0] - optic_axis[0], q[1] - optic_axis[1])
+    qphi = np.arctan2(q[0] - optic_axis_[0], q[1] - optic_axis_[1])
 
     # Only calculate CTF for region within the aperture
     mask = qarray2 < app_
@@ -225,6 +235,7 @@ def focused_probe(
     app,
     beam_tilt=[0, 0],
     aperture_shift=[0, 0],
+    tilt_units="mrad",
     df=0,
     aberrations=[],
     q=None,
@@ -256,6 +267,8 @@ def focused_probe(
         Allows the user to simulate a (small < 50 mrad) aperture shift. To
         maintain periodicity of the wave function at the boundaries this tilt
         is rounded to the nearest pixel value.
+    tilt_units : string, optional
+        Units of beam tilt and aperture shift, can be 'mrad','pixels' or 'invA'
     df : float, optional
         Probe defocus in A, a negative value indicate overfocus
     aberrations : list, optional
@@ -272,6 +285,7 @@ def focused_probe(
         app,
         beam_tilt,
         aperture_shift,
+        tilt_units,
         df,
         aberrations,
         q,
@@ -319,6 +333,9 @@ def plane_wave_illumination(
     # Initialize array that contains wave function
     illum = np.zeros(gridshape, dtype=np.complex)
 
+    # Convert tilt to units of pixels
+    tilt_ = convert_tilt_angles(tilt, tilt_units, gridsize, eV)
+
     # Case of an untilted plane wave (phase is zero everywhere)
     if tilt[0] == 0 and tilt[1] == 0:
         illum[:, :] = 1 / np.sqrt(np.product(gridshape))
@@ -327,18 +344,6 @@ def plane_wave_illumination(
             return np.fft.fft2(illum)
         else:
             return illum
-
-    # If units of the tilt are given in mrad, convert to inverse Angstrom
-    if tilt_units == "mrad":
-        k = wavev(eV)
-        tilt_ = np.asarray(tilt) * 1e-3 * k
-    else:
-        tilt_ = tilt
-
-    # Convert inverse Angstrom to pixel coordinates, this will be rounded
-    # to the nearest pixel
-    if tilt_units != "pixels":
-        tilt_ = np.round(tilt_ * gridsize[:2]).astype(int)
 
     # Set the value of wavefunction amplitude such that after inverse Fourier
     # transform (and resulting division by the total number of pixels) the sum
@@ -506,3 +511,42 @@ def Cc_defocus_spread(df, Cc, deltaE, eV):
 
     # Evaluate probability density function for given defocus df
     return np.exp(-df * df / df_spread / df_spread) / np.sqrt(np.pi) / df_spread
+
+
+def convert_tilt_angles(tilt, tilt_units, rsize, eV, invA_out=False):
+    """
+    Convert  tilt to pixel or inverse Angstroms units regardless of input units.
+
+    Input units can be mrad, pixels or inverse Angstrom
+
+    Parameters
+    ----------
+    tilt : array_like
+        Tilt in units of mrad, pixels or inverse Angstrom
+    tilt_units : string
+        Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'
+    rsize : (2,) array_like
+        The size of the grid in Angstrom
+    eV : float
+        Probe energy in electron volts
+    Keyword arguments
+    -----------------
+    invA_out : bool
+        Pass True if inverse Angstrom units are desired.
+    """
+    # If units of the tilt are given in mrad, convert to inverse Angstrom
+    if tilt_units == "mrad":
+        k = wavev(eV)
+        tilt_ = np.asarray(tilt) * 1e-3 * k
+    else:
+        tilt_ = tilt
+
+    # If inverse Angstroms are requested our work here is done
+    if invA_out:
+        return tilt_
+
+    # Convert inverse Angstrom to pixel coordinates, this will be rounded
+    # to the nearest pixel
+    if tilt_units != "pixels":
+        tilt_ = np.round(tilt_ * rsize[:2]).astype(int)
+    return tilt_

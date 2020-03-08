@@ -172,6 +172,7 @@ def torch_output(array, fnam, add1=True):
 
 
 def modulus_square(r):
+    """Calculates the sum of the modulus square for a possibly complex tensor."""
     return torch.sum(amplitude(r))
 
 
@@ -198,9 +199,26 @@ def roll_n(X, axis, n):
     return torch.cat([back, front], axis)
 
 
-def cx_from_numpy(x: np.array, dtype=torch.float, device=None) -> torch.Tensor:
+def cx_from_numpy(
+    x: np.array, dtype=torch.float32, device=get_device()
+) -> torch.Tensor:
+    """
+    Turn a complex numpy array into the required pytorch array format.
+
+    Parameters
+    ----------
+    x : complex np.ndarray
+        A complex numpy array
+
+    Keyword arguments
+    -----------------
+    dtype : torch.dtype
+        The datatype of the output array
+    device : torch.device
+        The device (CPU or GPU) of the output array
+    """
     if "complex" in str(x.dtype):
-        out = torch.zeros(x.shape + (2,), device=device)
+        out = torch.zeros(*x.shape, 2)
         out[re] = torch.from_numpy(x.real)
         out[im] = torch.from_numpy(x.imag)
     else:
@@ -210,8 +228,8 @@ def cx_from_numpy(x: np.array, dtype=torch.float, device=None) -> torch.Tensor:
         else:
             out = torch.zeros(x.shape + (2,))
             out[re] = torch.from_numpy(x[re])
-            out[re] = torch.from_numpy(x[im])
-    return out.type(dtype)
+            out[im] = torch.from_numpy(x[im])
+    return out.to(device).type(dtype)
 
 
 def cx_to_numpy(x: torch.Tensor) -> np.ndarray:
@@ -546,7 +564,7 @@ def fourier_shift_array_1d(
 def fourier_shift_torch(
     array,
     posn,
-    dtype=torch.float,
+    dtype=torch.float32,
     device=torch.device("cpu"),
     qspace_in=False,
     qspace_out=False,
@@ -578,11 +596,17 @@ def fourier_shift_torch(
 def fourier_shift_array(
     size, posn, dtype=torch.float, device=torch.device("cpu"), units="pixels"
 ):
-    """Fourier shift theorem array for array shape size,
-       to (pixel) position given by list posn.
+    """
+    Create Fourier shift theorem array to (pixel) position given by list posn.
 
-       posn can be a K x 2 array to give a K x Y x X
-       array of Fourier shift arrays"""
+    Parameters
+    ----------
+    size : array_like
+        size of the aray
+    posn : array_like
+        can be a K x 2 array to give a K x Y x X shift arrays
+    posn
+    """
     # Get number of dimensions
     nn = len(posn.size())
 
@@ -638,8 +662,16 @@ def fourier_shift_array(
 
 
 def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
-    # initialize array to hold flattened index in
+    """
+    Create indices for cropping windows.
 
+    Parameters
+    ----------
+    indices : torch.Tensor
+        The centers of each of the cropping windows
+    shape : array_like
+        Size of the cropping windows
+    """
     return (
         indices[-1].view(1, indices[-1].size(0))
         + indices[-2].view(indices[-2].size(0), 1) * shape[-1]
@@ -647,7 +679,7 @@ def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
 
 
 def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
-    """Crop an array to its bandwidth limit (ie remove superfluous array entries)"""
+    """Crop an array to its bandwidth limit (remove superfluous array entries)"""
 
     from .numpy_utils import crop_window_to_flattened_indices
 
@@ -684,14 +716,19 @@ def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
 
 
 def size_of_bandwidth_limited_array(shape):
+    """Get the size of an array after band-width limiting."""
     return list(crop_to_bandwidth_limit_torch(torch.zeros(*shape)).size())
 
 
 def detect(detector, diffraction_pattern):
-    """Calculates the signal in a diffraction pattern detector even if the size
+    """
+    Apply a detector to a diffraction pattern.
+
+    Calculates the signal in a diffraction pattern detector even if the size
     of the diffraction pattern and the detector are mismatched, assumes that
     the zeroth coordinate in reciprocal space is in the top-left hand corner
-    of the array."""
+    of the array.
+    """
     minsize = min(detector.size()[-2:], diffraction_pattern.size()[-2:])
 
     wind = [fftfreq(minsize[i], torch.long, detector.device) for i in [0, 1]]
@@ -707,8 +744,11 @@ def detect(detector, diffraction_pattern):
 def fourier_interpolate_2d_torch(
     ain, shapeout, correct_norm=True, qspace_in=False, qspace_out=False
 ):
-    """Perfoms a fourier interpolation on array ain so that its shape matches
-    that given by shapeout.
+    """
+    Fourier interpolation of array ain so that to shape shapeout.
+
+    If shapeout is smaller than ain.shape then Fourier downsampling is
+    performed
 
     Arguments:
     ain      -- Input numpy array

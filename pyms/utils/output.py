@@ -1,5 +1,38 @@
 import os
 import numpy as np
+import matplotlib.pyplot as plt
+import png
+
+
+def complex_to_png(arrayin, fnam):
+    """Output a complex array as a hsv colormap in .png format. """
+    from .numpy_utils import colorize
+
+    # Convert complex to RGB colormap and then output array to png
+    RGB_to_PNG(colorize(arrayin), fnam)
+
+
+def array_to_RGB(arrayin, cmap=plt.get_cmap("viridis")):
+    """Convert an array to RGB using a supplied colormap."""
+    from .numpy_utils import renormalize
+
+    return (cmap(renormalize(arrayin))[..., :3] * 256).astype(np.uint8)
+
+
+def RGB_to_PNG(RGB_array, fnam):
+    """Output an RGB array [shape (n,m,3)] as a .png file"""
+    # Get array shape
+    n, m = RGB_array.shape[:2]
+
+    # Replace filename ending with .png
+    fnam_out = os.path.splitext(fnam)[0] + ".png"
+    png.fromarray(RGB_array.reshape((n, m * 3)), mode="RGB").save(fnam_out)
+
+
+def save_array_as_png(array, fnam, cmap=plt.get_cmap("viridis")):
+    """Output a numpy array as a .png file"""
+    # Convert numpy array to RGB and then output to .png file
+    RGB_to_PNG(array_to_RGB(array, cmap), fnam)
 
 
 def datacube_to_py4DSTEM_viewable(

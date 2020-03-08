@@ -475,6 +475,7 @@ def transition_potential_multislice(
     seed=None,
     return_numpy=True,
     qspace_in=False,
+    qspace_out=True,
     posn=None,
     image_CTF=None,
     threshhold=1e-4,
@@ -496,6 +497,10 @@ def transition_potential_multislice(
         The transmission functions describing the electron's interaction
         with the specimen for the multislice algorithm
     ionization_potentials :
+
+    qspace_out : bool
+        Does nothing, purely there to match the calling signature of the STEM
+        function.
     """
     from .py_multislice import multislice
     from .utils.torch_utils import (
@@ -504,8 +509,10 @@ def transition_potential_multislice(
         modulus_square,
         ensure_torch_array,
         fourier_shift_torch,
+        get_device,
     )
 
+    device = get_device(device_type)
     # Number of subslices
     nsubslices = len(subslices)
 
@@ -515,11 +522,9 @@ def transition_potential_multislice(
     # Total number of slices in multislice
     niterations = nslices * nsubslices
 
-    if device_type is None:
-        device = transmission_functions.device
-
     # Ensure pytorch arrays
-    transmission_functions = ensure_torch_array(transmission_functions, device=device)
+    transmission_functions = ensure_torch_array(transmission_functions)
+
     dtype = transmission_functions.dtype
     ionization_potentials = ensure_torch_array(
         ionization_potentials, dtype=dtype, device=device
@@ -530,25 +535,27 @@ def transition_potential_multislice(
     propagators = ensure_torch_array(propagators, dtype=dtype, device=device)
     probes = ensure_torch_array(probes, dtype=dtype, device=device)
 
+    # If Fourier space probes are passed, inverse Fourier transform them
+    if qspace_in:
+        probes = torch.ifft(probes, signal_ndim=2)
+
+    # Calculate threshholds below which an ionization will not be included in
+    # the simulation.
     if threshhold is not None:
         trigger = np.zeros((ionization_potentials.size(0),))
         for i, ionization_potential in enumerate(ionization_potentials):
-            trigger[i] = (
-                threshhold * modulus_square(ionization_potential) / np.prod(gridshape)
-            )
+            print(modulus_square(ionization_potential))
+            trigger[i] = threshhold * modulus_square(ionization_potential)
 
     # Ionization potentials must be in reciprocal space
     ionization_potentials = torch.fft(ionization_potentials, signal_ndim=2)
 
-    # Diffraction pattern
-    if image_CTF is None:
-        output = torch.zeros(*probes.size()[:-1], device=device, dtype=dtype)
-    else:
-        output = torch.zeros(*image_CTF.size()[:-1], device=device, dtype=dtype)
+    # Output array
+    from .utils.torch_utils import size_of_bandwidth_limited_array
 
-    # If Fourier space probes are passed, inverse Fourier transform them
-    if qspace_in:
-        probes = torch.ifft(probes, signal_ndim=2)
+    nprobes = probes.size(0)
+    gridout = size_of_bandwidth_limited_array(probes.size()[-3:-1])
+    output = torch.zeros(nprobes, *gridout, device=device, dtype=dtype)
 
     # Loop over slices of specimens
     for i in tqdm.tqdm(range(niterations), desc="Slice", disable=not showProgress):
@@ -576,11 +583,18 @@ def transition_potential_multislice(
                     .type(dtype)
                     .to(device)
                 )
+
                 psi_n = complex_mul(
                     fourier_shift_torch(ionization_potential, posn, qspace_in=True),
                     probes,
                 )
-
+                print(
+                    modulus_square(psi_n),
+                    modulus_square(
+                        fourier_shift_torch(ionization_potential, posn, qspace_in=True)
+                    ),
+                    trigger[j],
+                )
                 # Only propagate this wave to the exit surface if it is deemed
                 # to contribute significantly (above a user-determined threshhold)
                 # to the image. Pass threshhold = None to disable this feature

@@ -28,7 +28,8 @@ from .utils.torch_utils import (
 def make_propagators(
     gridshape, gridsize, eV, subslices=[1.0], tilt=[0, 0], tilt_units="mrad"
 ):
-    """Make the Fresnel freespace propagators for a multislice simulation.
+    """
+    Make the Fresnel freespace propagators for a multislice simulation.
 
     Parameters
     ----------
@@ -49,32 +50,17 @@ def make_propagators(
         sized slices pass [0.25,0.5,0.75,1.0]
     tilt : array_like, optional
         Allows the user to simulate a (small < 50 mrad) tilt of the specimen,
-        by shearing the propagator units given by input variable tilt_units.
+        by shearing the propagator. Units given by input variable tilt_units.
     tilt_units : string, optional
         Units of specimen tilt, can be 'mrad','pixels' or 'invA'
     """
-    from .Probe import make_contrast_transfer_function, wavev
+    from .Probe import make_contrast_transfer_function
 
     # We will use the make_contrast_transfer_function function to generate
     # the propagator, the aperture of this propagator will supply the
     # bandwidth limit of our simulation it must be 2/3rds of our pixel
     # gridsize
     app = np.amax(np.asarray(gridshape) / np.asarray(gridsize[:2]) / 2)
-
-    # Shift of optic axis to take into account specimen tilt, must be converted
-    # to inverse Angstrom
-    if tilt_units == "mrad":
-        optic_axis = np.asarray(tilt) * 1e-3 * wavev(eV)
-    elif tilt_units == "pixels":
-        optic_axis = np.asarray(tilt) / np.asarray(gridsize[:2])
-    elif tilt_units == "invA":
-        optic_axis = np.asarray(tilt)
-    else:
-        print(
-            "Didn't recognize tilt units {0} in make_propagators function".format(
-                tilt_units
-            )
-        )
 
     # Intitialize array
     prop = np.zeros((len(subslices), *gridshape), dtype=np.complex)
@@ -93,7 +79,8 @@ def make_propagators(
                 app,
                 df=deltaz,
                 app_units="invA",
-                optic_axis=optic_axis,
+                optic_axis=tilt,
+                tilt_units=tilt_units,
             )
         )
 
@@ -757,10 +744,16 @@ class scattering_matrix:
             The multislice algorithm can be performed on multiple scattering
             matrix columns at once to parrallelize computation, this number is
             set by batch_size.
-        device_type : torch.device, optional
+        device : torch.device, optional
             torch.device object which will determine which device (CPU or GPU)
             the calculations will run on. By default this will be determined
             by what device the transmission functions are stored on.
+        PRISM_factor : int (2,) array_like
+            The PRISM "interpolation factor" this is the amount by which the
+            scattering matrices are cropped in real space to speed up
+            calculations see Ophus, Colin. "A fast image simulation algorithm
+            for scanning transmission electron microscopy." Advanced structural
+            and chemical imaging 3.1 (2017): 13 for details on this.
         seed : int32, optional
             A seed to control seeding of the frozen phonon approximation
         showProgress : bool, optional
