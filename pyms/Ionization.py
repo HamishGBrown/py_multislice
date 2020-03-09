@@ -1,3 +1,9 @@
+"""
+Functions for calculating ionization cross sections.
+
+For ionization based TEM methods such as electron energy-loss spectroscopy (EELS)
+or energy-filtered TEM (EFTEM).
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 import re
@@ -14,9 +20,21 @@ orbitals = ["s", "p", "d", "f"]
 
 
 def get_q_numbers_for_transition(ell, order=1):
-    """For ionization from bound quantum number l, calculate all excited
+    """
+    Calculate set of quantum numbers for excited states.
+
+    For ionization from bound quantum number l, calculate all excited
     state quantum numbers ml, lprime, and mlprime needed to calculate all
-    atomic transitions."""
+    atomic transitions.
+
+    Parameters
+    ----------
+    ell : int
+        Target orbital angular momentum quantum number
+    order : int, optional
+        Largest change in orbital angular momentum quantum number, order = 1
+        gives all dipole terms, order = 2 gives all quadropole terms etc.
+    """
     # Get projection quantum numbers
     mls = np.arange(-ell, ell + 1)
     qnumbers = []
@@ -28,13 +46,36 @@ def get_q_numbers_for_transition(ell, order=1):
     return qnumbers
 
 
-def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=0.99):
-    """"For ionization from bound quantum number l, get all possible transitions
-    up to contr (a fraction) of the contribution to the total ionization
-    cross-section. The orbital configuration (excited_configuration), energy
-    (epsilon) of theexcited state, beam energy (eV) in electron-volts,
-    gridshape in pixels must also be passed to this function"""
+def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=0.95):
+    """
+    Calculate all transitions for a particular target orbital.
 
+    Parameters
+    ----------
+    Z : int
+        Target atomic number
+    n : int
+        Target orbital principle quantum number
+    ell : int
+        Target orbital angular momentum quantum number
+    epsilon : Optional, float
+        Energy of continuum wavefunction, ie energy above ionization threshhold
+    eV : float
+        Probe energy in electron volts
+    gridshape : (2,) array_like
+        Pixel size of the simulation grid
+    gridsize : (2,) array_like
+        The real space size of the simulation grid in Angstrom
+    Keyword arguments
+    -----------------
+    order : int
+        Largest change in orbital angular momentum quantum number, order = 1
+        gives all dipole terms, order = 2 gives all quadropole terms etc.
+    contr : float
+        Threshhold for rejection of ionization transition potential, eg. if
+        contr == 0.95 an individual transition is rejected if it would
+        contribute less than 5 % to the total signal
+    """
     # Get orbital configuration in bound state
     orbital_configuration = full_orbital_filling(Z)
 
@@ -62,13 +103,16 @@ def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=
 
     transition_potentials = []
 
+    # Loop over all excited states of interest
     for qnumbers in tqdm.tqdm(qnumberset, desc="Calculating transition potentials"):
         lprime, mlprime, ml = qnumbers
 
+        # Generate orbital for excited state using pfac
         excited_state = orbital(
             bound_orbital.Z, excited_configuration, 0, lprime, epsilon
         )
 
+        # Calculate transition potential for this escited state
         Hn0 = transition_potential(
             bound_orbital, excited_state, gridshape, gridsize, ml, mlprime, eV
         )
@@ -77,6 +121,7 @@ def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=
 
     tot = np.sum(np.square(np.abs(transition_potentials)))
 
+    # Reject orbitals which fall below the user-supplied threshhold
     return np.stack(
         [
             Hn0
@@ -87,19 +132,33 @@ def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=
 
 
 class orbital:
-    def __init__(self, Z: int, config: str, n: int, ell: int, epsilon=1):
-        """Initialize the orbital class and return an orbital
-           object.
-           Parameters:
-           Z:       Atomic number
-           config:  String describing configuration of atom ie:
-                    carbon (C): config = '1s2 2s2 2p2'
-           n:       Principal quantum number of orbital, for
-                    continuum wavefunctions n=0
-           ell:       Orbital angular momentum quantum number of
-                    orbital
-           epsilon: Optional, energy of continuum wavefunction"""
+    """
+    A class for storing the results of a fac atomic structure calculation.
 
+    When initialized this class will calculate the wave function of a bound
+    electron using the flexible atomic code (fac) atomic structure code and
+    store the necessary information about the radial electron wave function.
+    """
+
+    def __init__(self, Z: int, config: str, n: int, ell: int, epsilon=1):
+        """
+        Initialize the orbital class and return an orbital object.
+
+        Parameters
+        ----------
+        Z : int
+            Atomic number
+        config : str
+            String describing configuration of atom ie:
+            carbon (C): config = '1s2 2s2 2p2'
+        n : int
+            Principal quantum number of orbital, for continuum wavefunctions
+            pass n=0
+        ell : int
+            Orbital angular momentum quantum number of orbital
+        epsilon : Optional, float
+            Energy of continuum wavefunction (only matters if n == 0)
+        """
         # Load arguments into orbital object
         self.Z = Z
         self.config = config
@@ -198,8 +257,7 @@ class orbital:
         )
 
     def __call__(self, r):
-        """Evaluate radial wavefunction on grid r from tabulated values"""
-
+        """Evaluate radial wavefunction on grid r from tabulated values."""
         is_arr = isinstance(r, np.ndarray)
 
         if is_arr:
@@ -251,8 +309,7 @@ class orbital:
             return wvfn[0]
 
     def plot(self, grid=np.linspace(0.0, 2.0, num=50), show=True, ylim=None):
-        """Plot wavefunction at positions given by grid r"""
-
+        """Plot wavefunction at positions given by grid r."""
         fig, ax = plt.subplots(figsize=(4, 4))
         wavefunction = self(grid)
         ax.plot(grid, wavefunction)
@@ -281,10 +338,40 @@ def transition_potential(
     bandwidth_limiting=2.0 / 3,
     qspace=False,
 ):
-    """Evaluate an inelastic transition potential for excitation of an
-       electron from orbital 1 to orbital 2 on grid with shape gridshape
-       and real space dimensions in Angstrom given by gridsize"""
+    """
+    Calculate an ionization transition potential.
 
+    Evaluate an inelastic transition potential for excitation of an electron
+    from orbital orb1 to orbital orb2 on grid with shape gridshape and real space
+    dimensions in Angstrom given by gridsize
+
+    Parameters
+    ----------
+    orb1 : class pyms.Ionization.orbital
+        The bound state orbital object
+    orb1 : class pyms.Ionization.orbital
+        The excited state orbital object
+    gridshape : (2,) array_like
+        Pixel size of the simulation grid
+    gridsize : (2,) array_like
+        The real space size of the simulation grid in Angstrom
+    ml : int
+        The angular angular momentum projection quantum number of the bound
+        state
+    mlprime : int
+        The angular angular momentum projection quantum number of the excited
+        state
+    eV : float
+        The energy of the probe electron
+
+    Keyword arguments
+    -----------------
+    bandwidth_limiting : float
+        The band-width limiting as a fraction of the grid of the excitation
+    qspace : bool
+        If qspace = True return the ionization transition potential in reciprocal
+        space
+    """
     # Bohr radius in Angstrom
     a0 = 5.29177210903e-1
 
@@ -346,9 +433,7 @@ def transition_potential(
         return Hn0
 
     def ovlap(q, lprimeprime):
-        """Overlap integral of orbital wave functions weighted
-           by spherical bessel function"""
-
+        """Overlap jn weighted integral of orbital wave functions."""
         # Function currently written assuming at least one of the
         # orbitals is bound
         # Find maximum radial coordinate

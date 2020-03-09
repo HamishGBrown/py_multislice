@@ -1,10 +1,11 @@
+"""Utility functions for working with the numpy library."""
 import numpy as np
 import torch
 import copy
 
 
 def ensure_array(input):
-    """Forces a (potentially scalar) input to be an array."""
+    """Force a (potentially scalar) input to be an array."""
     if hasattr(input, "__len__"):
         return input
     else:
@@ -12,24 +13,33 @@ def ensure_array(input):
 
 
 def q_space_array(pixels, gridsize):
-    """Returns the appropriately scaled 2D reciprocal space array for pixel size
-    given by pixels (#y pixels, #x pixels) and real space size given by gridsize
-    (y size, x size)"""
+    """
+    Return the appropriately scaled 2D reciprocal space coordinates.
+
+    Parameters
+    -----------
+    pixels : (2,) array_like
+        Pixels in each dimension of a 2D array
+    gridsize : (2,) array_like
+        Dimensions of the array in real space units
+    """
     return np.meshgrid(
         *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
     )[::-1]
 
 
 def crop_window_to_flattened_indices(indices, shape):
-    # initialize array to hold flattened index in
-
+    """Map  y and x indices describing a cropping window to a flattened 1d array."""
     return (indices[-1][np.newaxis, :] + indices[-2][:, np.newaxis] * shape[-1]).ravel()
 
 
 def crop_to_bandwidth_limit(array, limit=2 / 3):
-    """Crop an array to its bandwidth limit (ie remove superfluous array entries),
+    """
+    Crop an array to its bandwidth limit (ie remove superfluous array entries).
+
     assumes that input array is in Fourier space with zeroth Fourier component
-    in upper-left corner"""
+    in upper-left corner
+    """
     # Get array shape
     gridshape = array.shape[-2:]
 
@@ -52,7 +62,7 @@ def crop_to_bandwidth_limit(array, limit=2 / 3):
 
 
 def bandwidth_limit_array(arrayin, limit=2 / 3):
-    """Band-width limit an array to fraction of its maximum given by limit"""
+    """Band-width limit an array to fraction of its maximum given by limit."""
     array = copy.deepcopy(arrayin)
     if isinstance(array, np.ndarray):
         pixelsize = array.shape[:2]
@@ -83,7 +93,7 @@ def bandwidth_limit_array(arrayin, limit=2 / 3):
 
 
 def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
-
+    """Calculate a mask of array entries to be included in Fourier interpolation."""
     # Construct input and output fft grids
     qyin, qxin, qyout, qxout = [
         (np.fft.fftfreq(x, 1 / x)).astype(np.int)
@@ -119,15 +129,13 @@ def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
 
 
 def renormalize(array, newmax=1.0, newmin=0.0):
-    """Rescales the array such that its maximum is newmax and its minimum is
-    newmin"""
+    """Rescales the array such that its maximum is newmax and its minimum is newmin."""
     max_, min_ = [array.max(), array.min()]
     return (array - min_) / (max_ - min_) * (newmax - newmin)
 
 
 def colorize(z):
-    """For plotting purposes, take a complex number and map it to the hsl (hue,
-    saturation, lightness) scale and then output in RGB format"""
+    """Map a complex number to the hsl scale and output in RGB format."""
     from colorsys import hls_to_rgb
 
     # Get phase an amplitude of complex array
@@ -149,8 +157,8 @@ def colorize(z):
 
 
 def fourier_interpolate_2d(ain, shapeout):
-    """Perfoms a fourier interpolation on array ain so that its shape matches
-    that given by shapeout.
+    """
+    Perfom fourier interpolation on array ain so that its shape matches shapeout.
 
     Arguments:
     ain      -- Input numpy array
@@ -185,8 +193,8 @@ def fourier_interpolate_2d(ain, shapeout):
 
 
 def oned_shift(N, shift, pixel_units=True):
-    """Constructs a one dimensional shift array of array size
-    len that shifts an array number of pixels given by shift.
+    """
+    Construct a one-dimensional shift array.
 
     Parameters
     ----------
@@ -198,7 +206,6 @@ def oned_shift(N, shift, pixel_units=True):
     pixel_units -- Pass True if shift is to be units of pixels, False for
                    fraction of the array
     """
-
     # Create the Fourier space pixel coordinates of the shift array
     shiftarray = (np.arange(N) + N // 2) % N - N // 2
 
@@ -213,8 +220,8 @@ def oned_shift(N, shift, pixel_units=True):
 
 
 def fourier_shift(arrayin, shift, qspacein=False, qspaceout=False, pixel_units=True):
-    """Shifts a 2d array by an amount given in the tuple shift in units
-     of pixels using the Fourier shift theorem.
+    """
+    Shifts a 2d array using the Fourier shift theorem.
 
     Parameters
     ----------
@@ -229,9 +236,7 @@ def fourier_shift(arrayin, shift, qspacein=False, qspaceout=False, pixel_units=T
                    real space output
     pixel_units -- Pass True if shift is to be units of pixels, False for
                    fraction of the array
-
-           """
-
+    """
     # Construct shift array
     shifty, shiftx = [
         oned_shift(arrayin.shape[-2 + i], shift[i], pixel_units) for i in range(2)
@@ -260,9 +265,12 @@ def fourier_shift(arrayin, shift, qspacein=False, qspaceout=False, pixel_units=T
 
 
 def crop(arrayin, shapeout):
-    """Crop the last two dimensions of arrayin to grid size shapeout. For
-    entries of shapeout which are larger than the shape of the input array,
-    perform zero-padding"""
+    """
+    Crop the last two dimensions of arrayin to grid size shapeout.
+
+    For entries of shapeout which are larger than the shape of the input array,
+    perform zero-padding.
+    """
     # Number of dimensions in input array
     ndim = arrayin.ndim
 

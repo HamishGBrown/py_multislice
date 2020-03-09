@@ -1,4 +1,6 @@
 """
+Premixed routines for simulation of some standard TEM techniques.
+
 The py_multislice library provides users with the ability to put their
 own simulations together using the "building blocks" of py_multislice.
 For standard simulation types the premixed_routines.py functions
@@ -21,8 +23,8 @@ from .utils.torch_utils import (
     complex_matmul,
     complex_mul,
     get_device,
-    size_of_bandwidth_limited_array,
     crop_to_bandwidth_limit_torch,
+    size_of_bandwidth_limited_array,
 )
 from .utils.numpy_utils import (
     fourier_shift,
@@ -36,12 +38,12 @@ from .Probe import (
     focused_probe,
     make_contrast_transfer_function,
     plane_wave_illumination,
+    convert_tilt_angles,
 )
 
 
 def window_indices(center, windowsize, gridshape):
-    """Makes indices for a cropped window centered at center with size given
-    by windowsize on a grid"""
+    """Generate array indices for a sub-region cropped out of a larger grid."""
     window = []
     for i, wind in enumerate(windowsize):
         indices = np.arange(-wind // 2, wind // 2, dtype=np.int) + wind % 2
@@ -53,13 +55,16 @@ def window_indices(center, windowsize, gridshape):
 
 
 def STEM_PRISM(
-    pix_dim,
-    sample,
-    thicknesses,
+    structure,
+    gridshape,
     eV,
-    alpha,
+    app,
+    thicknesses,
     subslices=[1.0],
+    tiling=[1, 1],
+    PRISM_factor=[1, 1],
     df=0,
+    nfph=1,
     aberrations=[],
     batch_size=5,
     FourD_STEM=False,
@@ -67,103 +72,222 @@ def STEM_PRISM(
     scan_posn=None,
     dtype=torch.float32,
     device_type=None,
-    tiling=[1, 1],
-    PRISM_factor=[1, 1],
-    seed=None,
     showProgress=True,
     detector_ranges=None,
     stored_gridshape=None,
     S=None,
     nT=5,
 ):
-    """Perform a STEM simulation using only the PRISM algorithm"""
+    """
+    Perform a STEM simulation using the PRISM algorithm.
 
+    The PRISM algorithm saves time by calculating the scattering matrix operator
+    and reusing this to calculate each probe in the STEM raster. See Ophus,
+    Colin. "A fast image simulation algorithm for scanning transmission
+    electron microscopy." Advanced structural and chemical imaging 3.1 (2017):
+    13 for details on this.
+
+    Parameters
+    ----------
+    structure : pyms.structure
+        The structure of interest
+    gridshape : (2,) array_like
+        Pixel size of the simulation grid
+    eV : float
+        Probe energy in electron volts
+    app : float
+        Objective aperture in mrad
+    thicknesses : float or array_like
+        Thickness of the calculation
+
+    Keyword arguments
+    -----------------
+    subslices : array_like, optional
+        A one dimensional array-like object containing the depths (in fractional
+        coordinates) at which the object will be subsliced. The last entry
+        should always be 1.0. For example, to slice the object into four equal
+        sized slices pass [0.25,0.5,0.75,1.0]
+    tiling : (2,) array_like, optional
+        Tiling of a repeat unit cell on simulation grid
+    PRISM_factor : int (2,) array_like, optional
+        The PRISM "interpolation factor" this is the amount by which the
+        scattering matrices are cropped in real space to speed up
+        calculations see Ophus, Colin. "A fast image simulation algorithm
+        for scanning transmission electron microscopy." Advanced structural
+        and chemical imaging 3.1 (2017): 13 for details on this.
+    df : float
+        Probe defocus
+    aberrations : list, optional
+        A list containing a set of the class aberration, pass an empty list for
+        an unaberrated probe.
+    batch_size : int, optional
+        The multislice algorithm can be performed on multiple scattering matrix
+        columns at once to parrallelize computation, this number is set by
+        batch_size.
+    fourD_STEM : bool or array_like, optional
+        Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
+        space a tuple containing pixel size and diffraction space extent of the
+        datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
+        diffraction patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
+        Angstroms.
+    datacube :  (Ny, Nx, Y, X) array_like, optional
+        datacube for 4D-STEM output, if None is passed (default) this will be
+        initialized in the function. If a datacube is passed then the result
+        will be added by the STEM routine (useful for multiple frozen phonon
+        iterations)
+    scan_posn :  tuple, optional
+        Tuple containing arrays of y and x scan positions, overrides internal
+        calculations of STEM sampling
+    dtype : torch.dtype, optional
+        Datatype of the simulation arrays, by default 32-bit floating point
+    device_type : torch.device, optional
+        torch.device object which will determine which device (CPU or GPU) the
+        calculations will run on
+    showProgress : bool, optional
+        Pass False to disable progress readout
+    stored_gridshape : int, array_like
+        The size of the stored array in the scattering matrix
+    detector_ranges : array_like, optional
+        The acceptance angles of each of the stem detectors should be stored as
+        a list of lists: ie [[0,10],[10,20]] will make two detectors spanning
+        0 to 10 mrad and 10 to 20 mrad.
+    D : (ndet x Y x X) array_like, optional
+        A precomputed set of STEM detectors, overrides detector_ranges.
+    S : (nbeams x Y x X)
+        A precalculated scattering matrix (useful for calculating defocus series)
+        if this is provided then nfph will be ignored since a new scattering
+        matrix should be calculated for each frozen phonon iteration
+    nT : int, optional
+        Number of transmission functions generated to and then selected from
+        in the frozen phonon algorithm
+    """
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
     # Calculate real space grid size
-    real_dim = sample.unitcell[:2] * np.asarray(tiling)
+    real_dim = structure.unitcell[:2] * np.asarray(tiling)
+
+    # Check if a scattering matrix is provided
+    S_provided = S is not None
+    # If S is provided then nfph will be ignored since a new scattering
+    # matrix should be calculated for each frozen phonon iteration
+    if S_provided:
+        nfph_ = 1
+    else:
+        nfph_ = nfph
 
     # Make the STEM probe
     probe = focused_probe(
-        pix_dim, real_dim[:2], eV, alpha, df=df, aberrations=aberrations
+        gridshape, real_dim[:2], eV, app, df=df, aberrations=aberrations
     )
 
     Fourier_space_output = np.all([x == 1 for x in PRISM_factor])
 
-    # Option to provide a precomputed scattering matrix (S), however if
-    # none is given then we make our own
-    if S is None:
-        # Make propagators and transmission functions for multslice
-        P, T = multislice_precursor(
-            sample,
-            pix_dim,
-            eV,
-            subslices=subslices,
-            tiling=tiling,
-            nT=nT,
-            device=device,
-            showProgress=showProgress,
-        )
-
-        # Convert thicknesses into number of slices for multislice
-        nslices = np.ceil(thicknesses / sample.unitcell[2]).astype(np.int)
-
-        S = scattering_matrix(
-            real_dim[:2],
-            P,
-            T,
-            nslices,
-            eV,
-            alpha,
-            tiling=tiling,
-            batch_size=batch_size,
-            device=device,
-            stored_gridshape=stored_gridshape,
-            Fourier_space_output=Fourier_space_output,
-        )
-
     # Make STEM detectors
+    maxq = 0
     if detector_ranges is None:
         D = None
     else:
         D = np.stack(
             [
-                make_detector(pix_dim, real_dim, eV, drange[1], drange[0])
+                make_detector(gridshape, real_dim, eV, drange[1], drange[0])
                 for drange in detector_ranges
             ]
+        )
+        # Work out maximum angular value needed in calculation
+        maxq = max(
+            maxq,
+            np.amax(
+                convert_tilt_angles(detector_ranges, "mrad", real_dim, eV, True), axis=0
+            )[1],
         )
 
     # If no instructions are passed regarding size of the 4D-STEM
     # datacube size then we will have to base this on the output size
     # of the scattering matrix
-    if not isinstance(FourD_STEM, (list, tuple)):
-        # Generate scan positions in units of fractions of the grid if not supplied
-        if scan_posn is None:
-            scan_posn = generate_STEM_raster(pix_dim, real_dim[:2], eV, alpha, tiling)
+    if FourD_STEM and isinstance(FourD_STEM, (list, tuple)):
+        if len(FourD_STEM) > 1:
+            maxq = max(maxq, max(FourD_STEM[1]))
+        else:
+            maxq = max(maxq, max(FourD_STEM[0]) / real_dim[np.argmax(FourD_STEM[0])])
+    else:
+        from .py_multislice import max_grid_resolution
 
-        # Number of scan positions
-        nscan = [x.size for x in scan_posn]
+        maxq = max(maxq, max_grid_resolution(gridshape, real_dim))
 
-        if datacube is None:
-            datacube = np.zeros([*nscan, *S.stored_gridshape], dtype=np.float32)
-
-    return STEM(
-        S.rsize,
-        probe,
-        S,
-        [1],
-        S.eV,
-        alpha,
-        batch_size=batch_size,
-        detectors=D,
-        FourD_STEM=FourD_STEM,
-        datacube=datacube,
-        scan_posn=scan_posn,
-        device=S.device,
-        tiling=S.tiling,
-        showProgress=showProgress,
+    # Calculations can be expedited by only storing the scattering matrix out
+    # to the maximum scattering angle of interest here we work out if the
+    # calculation would benefit from this
+    maxpix = np.minimum(
+        (maxq * np.asarray(real_dim)).astype(np.int),
+        size_of_bandwidth_limited_array(gridshape),
     )
+
+    for i in tqdm.tqdm(
+        range(nfph_),
+        desc="Frozen phonon iteration",
+        disable=not showProgress or nfph_ < 2,
+    ):
+        # Option to provide a precomputed scattering matrix (S), however if
+        # none is given then we make our own
+        if not S_provided:
+            print(structure, gridshape, eV, subslices, tiling, nT, device)
+            # Make propagators and transmission functions for multslice
+            P, T = multislice_precursor(
+                structure,
+                gridshape,
+                eV,
+                subslices=subslices,
+                tiling=tiling,
+                nT=nT,
+                device=device,
+                showProgress=showProgress,
+            )
+
+            # Convert thicknesses into number of slices for multislice
+            nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
+
+            S = scattering_matrix(
+                real_dim[:2],
+                P,
+                T,
+                nslices,
+                eV,
+                app,
+                PRISM_factor=PRISM_factor,
+                tiling=tiling,
+                batch_size=batch_size,
+                device=device,
+                stored_gridshape=maxpix,
+                Fourier_space_output=Fourier_space_output,
+            )
+
+        result = STEM(
+            S.rsize,
+            probe,
+            S,
+            [1],
+            S.eV,
+            app,
+            batch_size=batch_size,
+            detectors=D,
+            FourD_STEM=FourD_STEM,
+            datacube=datacube,
+            scan_posn=scan_posn,
+            device=S.device,
+            tiling=S.tiling,
+            showProgress=showProgress,
+        )
+
+        # Retrieve results from STEM routine
+        if (D is not None) and FourD_STEM:
+            STEM_images, datacube = result
+        elif D is not None:
+            STEM_images = result[0]
+        elif FourD_STEM:
+            datacube = result[0]
+
+    return [i / nfph for i in [STEM_images, datacube] if i is not None]
 
 
 def STEM_multislice(
@@ -190,7 +314,8 @@ def STEM_multislice(
     fractional_occupancy=True,
     nT=5,
 ):
-    """Perform a STEM simulation using only the multislice algorithm.
+    """
+    Perform a STEM simulation using only the multislice algorithm.
 
     Parameters
     ----------
@@ -242,11 +367,13 @@ def STEM_multislice(
         an unaberrated probe.
     showProgress : bool, optional
         Pass False to disable progress readout
-    ionization_cutoff : float
-        Threshhold below which the contribution of certain ionizations will be
-        ignored.
+    detector_ranges : array_like, optional
+        The acceptance angles of each of the stem detectors should be stored as
+        a list of lists: ie [[0,10],[10,20]] will make two detectors spanning
+        0 to 10 mrad and 10 to 20 mrad.
+    D : (ndet x Y x X) array_like, optional
+        A precomputed set of STEM detectors, overrides detector_ranges.
     """
-
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -840,7 +967,6 @@ def HRTEM(
     T : (n,Y,X) array_like
         Precomputed transmission functions
     """
-
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 

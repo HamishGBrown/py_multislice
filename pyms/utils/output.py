@@ -1,3 +1,4 @@
+"""Utility functions for outputting data to file."""
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -5,7 +6,7 @@ import png
 
 
 def complex_to_png(arrayin, fnam):
-    """Output a complex array as a hsv colormap in .png format. """
+    """Output a complex array as a hsv colormap in .png format."""
     from .numpy_utils import colorize
 
     # Convert complex to RGB colormap and then output array to png
@@ -20,7 +21,7 @@ def array_to_RGB(arrayin, cmap=plt.get_cmap("viridis")):
 
 
 def RGB_to_PNG(RGB_array, fnam):
-    """Output an RGB array [shape (n,m,3)] as a .png file"""
+    """Output an RGB array [shape (n,m,3)] as a .png file."""
     # Get array shape
     n, m = RGB_array.shape[:2]
 
@@ -30,7 +31,7 @@ def RGB_to_PNG(RGB_array, fnam):
 
 
 def save_array_as_png(array, fnam, cmap=plt.get_cmap("viridis")):
-    """Output a numpy array as a .png file"""
+    """Output a numpy array as a .png file."""
     # Convert numpy array to RGB and then output to .png file
     RGB_to_PNG(array_to_RGB(array, cmap), fnam)
 
@@ -45,8 +46,7 @@ def datacube_to_py4DSTEM_viewable(
     comments="STEM datacube simulated using the py-multislice package",
     sample="",
 ):
-    """Write a 4D-STEM datacube to an hdf5 in the py4DSTEM standard including
-    metadata as given"""
+    """Write a 4D-STEM datacube to a py4DSTEM hdf5 file including metadata."""
     import h5py
 
     f = h5py.File(os.path.splitext(filename)[0] + ".h5", "w")
@@ -100,6 +100,7 @@ def datacube_to_py4DSTEM_viewable(
 
 
 def tiff_stack_out(array, tag):
+    """Output a multi-dimensional array as a set of tif files."""
     from PIL import Image
 
     direc = os.path.dirname(tag)

@@ -923,6 +923,7 @@ class structure:
         """Transpose the axes of a simulation object."""
         self.atoms[:, :3] = self.atoms[:, axes]
         self.unitcell = self.unitcell[axes]
+        return self
 
     def tile(self, x=1, y=1, z=1):
         """Make a repeat unit tiling of the simulation object."""
@@ -1046,6 +1047,7 @@ class structure:
         """Reflect structure in each of the axes enumerated in list axes."""
         for ax in axes:
             self.atoms[:, ax] = 1 - self.atoms[:, ax]
+        return self
 
     def slice(self, slice_frac, axis):
         """

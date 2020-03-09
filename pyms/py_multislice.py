@@ -1171,9 +1171,15 @@ class scattering_matrix:
             # For evaluating the probes in real space we only want to perform the matrix
             # multiplication and summation within the real space PRISM cropping region
             for k in range(probes.size(0)):
+
                 window = crop_window_to_flattened_indices_torch(
                     [
-                        (crop_[i] + posn[k, i] * self.stored_gridshape[i])
+                        (
+                            crop_[i]
+                            + (posn[k, i] * self.stored_gridshape[i]).type(
+                                torch.LongTensor
+                            )
+                        )
                         % self.stored_gridshape[i]
                         for i in range(2)
                     ],

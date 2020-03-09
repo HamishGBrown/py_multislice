@@ -1,3 +1,4 @@
+"""Setup script for pyms, ensure that all dependent packages are installed."""
 from setuptools import setup, find_packages
 
 setup(
@@ -8,14 +9,14 @@ setup(
     author_email="hamishgallowaybrown@gmail.com",
     url="https://github.com/HamishGBrown/py_multislice/",
     packages=find_packages(),
-     install_requires=[
-        'ipython >= 4.0',
-        'scipy >= 1.1',
-        'matplotlib >= 3.0',
-        'numpy >= 1.17',
-        'Pillow >= 6.0',
-        'torch >= 1.2',
-        'tqdm >= 4.0'
-        ]
-
+    install_requires=[
+        "ipython >= 4.0",
+        "scipy >= 1.1",
+        "matplotlib >= 3.0",
+        "numpy >= 1.17",
+        "Pillow >= 6.0",
+        "torch >= 1.2",
+        "tqdm >= 4.0",
+        "pypng",
+    ],
 )

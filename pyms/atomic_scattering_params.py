@@ -1,3 +1,4 @@
+"""File containing all atomic and electron scattering parameters."""
 import numpy as np
 
 # Atomic symbol lookup table, for conversion from symbol to atomic number Z
@@ -129,7 +130,7 @@ atomic_symbol = [
 # Crystallographica Section A: Foundations and Advances, 70(6), 636-649.
 
 # The array will be shaped such that ai and bi coefficients of the fit will sit
-# along the
+# along the second dimension of the array.
 e_scattering_factors = np.asarray(
     [
         6.47384848835291790e-03,

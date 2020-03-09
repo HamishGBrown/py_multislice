@@ -1,6 +1,5 @@
+"""A set of utility functions for working with pytorch tensors."""
 import torch
-from PIL import Image
-import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -9,10 +8,12 @@ im = np.s_[..., 1]
 
 
 def iscomplex(a: torch.Tensor):
+    """Return True if a is complex, False otherwise."""
     return a.shape[-1] == 2
 
 
 def check_complex(A):
+    """Raise a RuntimeWarning if tensor A is not complex."""
     for a in A:
         if not iscomplex(a):
             raise RuntimeWarning(
@@ -21,6 +22,7 @@ def check_complex(A):
 
 
 def to_complex(real, imag=None):
+    """Convert real and imaginary tensors to a complex tensor."""
     if imag is None:
         return torch.stack(
             [real, torch.zeros(real.size(), dtype=real.dtype, device=real.device)], -1
@@ -30,7 +32,7 @@ def to_complex(real, imag=None):
 
 
 def get_device(device_type=None):
-    """ Initialize device cuda if available, CPU if no cuda is available"""
+    """Initialize device cuda if available, CPU if no cuda is available."""
     if device_type is None and torch.cuda.is_available():
         device = torch.device("cuda")
     elif device_type is None:
@@ -41,8 +43,11 @@ def get_device(device_type=None):
 
 
 def complex_matmul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tensor:
-    """Complex matrix multiplication of tensors a and b. Pass conjugate = True
-    to conjugate tensor b in the multiplication."""
+    """
+    Complex matrix multiplication of tensors a and b.
+
+    Pass conjugate = True to conjugate tensor b in the multiplication.
+    """
     check_complex([a, b])
     are = a[re]
     aim = a[im]
@@ -59,8 +64,11 @@ def complex_matmul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.T
 
 
 def complex_mul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tensor:
-    """Complex array multiplication of tensors a and b. Pass conjugate = True
-    to conjugate tensor b in the multiplication."""
+    """
+    Complex array multiplication of tensors a and b.
+
+    Pass conjugate = True to conjugate tensor b in the multiplication.
+    """
     check_complex([a, b])
     are = a[re]
     aim = a[im]
@@ -76,26 +84,8 @@ def complex_mul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tens
     return torch.stack([real, imag], -1)
 
 
-# def pad_2d(array, padding,value=0):
-#     """Pad a 2d array with value"""
-#     #Calculate size of output array
-#     outsize = array.size()
-#     ndim = len(array.size())
-#     for i in ndim:
-#         outsize[i] += padding[i][0]+padding[i][1]
-
-#     #initialize output padded array
-#     if value == 0 :
-#         out = torch.zeros(*outsize,dtype=array.dtype,device=array.device)
-#     else:
-#         out = torch.ones(*outsize,dtype=array.dtype,device=array.device)*value
-
-#     for i in ndim:
-#         out[padding[i][0]:padding[i][1]]
-
-
 def torch_c_exp(angle):
-    """Calculate exp(1j*angle)"""
+    """Calculate exp(1j*angle)."""
     if angle.size()[-1] != 2:
         # Case of a real exponent
         result = torch.zeros(*angle.shape, 2, dtype=angle.dtype, device=angle.device)
@@ -109,45 +99,19 @@ def torch_c_exp(angle):
     return result
 
 
-def torch_plot(array):
-
-    from .numpy_utils import colorize
-
-    if array.size()[-1] == 2:
-        fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(12, 4))
-
-        axes[0].imshow(
-            np.angle(array[..., 0].cpu().numpy() + 1j * array[..., 1].cpu().numpy())
-        )
-        axes[0].set_title("Phase")
-        axes[1].imshow(
-            np.square(array[..., 0].cpu().numpy())
-            + np.square(array[..., 1].cpu().numpy())
-        )
-        axes[1].set_title("Amplitude")
-        axes[2].imshow(
-            colorize(array[..., 0].cpu().numpy() + 1j * array[..., 1].cpu().numpy())
-        )
-        axes[2].set_title("Colorized")
-    else:
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        ax.imshow(array.cpu().numpy())
-        ax.set_axis_off()
-
-    plt.show()
-
-
 def sinc(x):
-    """sinc function return sin(pi x)/(pi x)"""
+    """Calculate the sinc function ie. sin(pi x)/(pi x)."""
     y = torch.where(torch.abs(x) < 1.0e-20, torch.tensor([1.0e-20], dtype=x.dtype), x)
     return torch.sin(np.pi * y) / np.pi / y
 
 
 def ensure_torch_array(array, dtype=torch.float, device=torch.device("cpu")):
-    """Takes an array and converts it to a pytorch array if it is numpy
-    and does nothing if the array is already a numpy array"""
+    """
+    Ensure that the input array is a pytorch tensor.
 
+    Converts to a pytorch array if input is a numpy array and do nothing if the
+    input is a pytorch tensor
+    """
     if not isinstance(array, torch.Tensor):
         if np.iscomplexobj(array):
             return cx_from_numpy(array, dtype=dtype, device=device)
@@ -157,28 +121,17 @@ def ensure_torch_array(array, dtype=torch.float, device=torch.device("cpu")):
         return array
 
 
-def torch_output(array, fnam, add1=True):
-    """Outputs a pytorch tensor as a 32-bit tiff for quick inspection"""
-    from numpy import abs, angle
-
-    numparray = array[:, :, 0].cpu().numpy() + 1j * array[:, :, 1].cpu().numpy()
-    if add1:
-        Image.fromarray(abs(1 + numparray)).save(fnam + "_amp.tif")
-        Image.fromarray(angle(1 + numparray)).save(fnam + "_phse.tif")
-    else:
-        print(abs(numparray).dtype)
-        Image.fromarray(abs(numparray)).save(fnam + "_amp.tif")
-        Image.fromarray(angle(numparray)).save(fnam + "_phse.tif")
-
-
 def modulus_square(r):
-    """Calculates the sum of the modulus square for a possibly complex tensor."""
+    """Calculate the sum of the modulus square for a tensor."""
     return torch.sum(amplitude(r))
 
 
 def amplitude(r):
-    """Calculate the amplitude of a complex tensor (final dimension is 2) otherwise
-    do nothing"""
+    """
+    Calculate the amplitude of a complex tensor.
+
+    If the tensor is not complex then do nothing.
+    """
     if r.size(-1) == 2:
         return r[..., 0] * r[..., 0] + r[..., 1] * r[..., 1]
     else:
@@ -186,6 +139,7 @@ def amplitude(r):
 
 
 def roll_n(X, axis, n):
+    """Roll a pytorch tensor X n entries along a given axis."""
     f_idx = tuple(
         slice(None, None, None) if i != axis % X.dim() else slice(0, n, None)
         for i in range(X.dim())
@@ -233,325 +187,25 @@ def cx_from_numpy(
 
 
 def cx_to_numpy(x: torch.Tensor) -> np.ndarray:
-
+    """Convert a complex pytorch tensor to a complex numpy array."""
     check_complex(x)
 
     return x[re].cpu().numpy() + 1j * x[im].cpu().numpy()
 
 
-def batch_fftshift2d_real(x, axes=None):
-    """Apply an FFTshift operation the last two dimensions of the torch tensor
-       x which is a real valued array"""
-
-    # If no instructions are given regarding axes apply
-    # an FFT shift to all axes
-    if axes is None:
-        axes = [x for x in range(len(x.size()))]
-
-    # Loop over axes
-    for dim in axes:
-
-        # Shift axes by number of dimensions divided by 2, add 1 for odd axes
-        n_shift = x.size(dim) // 2 + x.size(dim) % 2
-
-        # Apply circular shift to each axes
-        x = roll_n(x, axis=dim, n=n_shift)
-
-    # Return array
-    return x
-
-
-def batch_fftshift2d(x, axes=None):
-    """Apply an FFTshift operation the last two dimensions of the torch tensor
-       x"""
-    # real and imaginary components of the tensor assumed to be stored in the
-    # final dimension of array x, torch.unbind maps these to seperate arrays
-    # real and imag, see https://pytorch.org/docs/stable/torch.html#torch.unbind
-    real, imag = torch.unbind(x, -1)
-
-    # If no instructions are given regarding axes to apply FFT shift apply
-    # an FFT shift to all axes
-    if axes is None:
-        axes = [x for x in range(len(real.size()))]
-
-    # Loop over axes
-    for dim in axes:
-
-        # Shift axes by number of dimensions divided by 2, add 1 for odd axes
-        n_shift = real.size(dim) // 2 + real.size(dim) % 2
-
-        # Apply circular shift to each axes
-        [real, imag] = [roll_n(x, axis=dim, n=n_shift) for x in [real, imag]]
-
-    # Return array with real and imaginary components spliced back together
-    return torch.stack((real, imag), -1)  # last dim=2 (real&imag)
-
-
-def batch_ifftshift2d(x, axes=None):
-    # Split tensor into real and imaginary components
-    real, imag = torch.unbind(x, -1)
-
-    # If axes is None then fftshift all dimensions
-    if axes is None:
-        axes = torch.arange(len(real.size()) - 1, -1, -1)
-
-    # Loop over axes
-    for dim in axes:
-        real = roll_n(real, axis=dim, n=real.size(dim) // 2)
-        imag = roll_n(imag, axis=dim, n=imag.size(dim) // 2)
-
-    # Splice back real and imaginary components
-    return torch.stack((real, imag), -1)  # last dim=2 (real&imag)
-
-
-def scatter_add_patches(
-    input: torch.Tensor, out: torch.Tensor, axes, positions, patch_size, index=None
-) -> torch.Tensor:
-    """
-    Scatter_adds K patches of size :patch_size: at axes [ax1, ax2] into the
-    output tensor. The patches are added at
-
-    positions :positions:. Additionally, several dimensions can be summed,
-                           specified by reduce_dims.
-    :param input:   K x M1 x M2 at least 3-dimensional tensor of patches,
-    :param out: at least two-dimensional tensor that is the scatter_add target
-    :param axes: (2,) axes at which to scatter the input
-    :param positions: K x 2 LongTensor
-    :param patch_size: (2,) LongTensor
-    :param reduce_dims: (N,) LongTensor
-    :return: out, the target of scatter_add_
-    """
-    if index is None:
-        index = get_scatter_gather_indices(positions, patch_size, out, axes)
-
-    out.view(-1).scatter_add_(0, index.view(-1), input.view(-1))
-    return out
-
-
-def get_scatter_gather_indices(r, s, input, axes, edge_behaviour="periodic"):
-    """Get indicies for the scatter or gather functions, where r is a set of
-    indices with dimensions K x 2, s is the size of the patch that will be
-    gathered of scattered to, input is the array that will be gathered from
-    or scattered to and axes are the indices of the dimensions that the
-    patches will come from."""
-    # Get number of patches
-    K = r.shape[0]
-
-    # Create tensors with indices of the patches (0,1,2,...,patchsize[i]), use
-    # view to adjust to the correct dimensionality, then expand these tensors to
-    # two dimensional arrays. The function "expand" returns a new view of the
-    # tensor with singleton dimensions expanded to a larger size, ie it performs
-    # a similar role to the meshgrid function in numpy.
-    # index0 and index1 are shape s[0] x s[1]
-    start = -s[0] // 2 + s[0] % 2
-    stop = s[0] // 2 + s[0] % 2
-    index0 = (
-        torch.arange(start, stop, device=input.device, dtype=torch.long)
-        .view(s[0], 1)
-        .expand(s[0], s[1])
-    )
-    start = -s[1] // 2 + s[1] % 2
-    stop = s[1] // 2 + s[1] % 2
-    index1 = (
-        torch.arange(start, stop, device=input.device, dtype=torch.long)
-        .view(1, s[1])
-        .expand(s[0], s[1])
-    )
-
-    # Add the positions of the patches (r) to each of these indices (index0 and
-    # index1), view expands the dimensionality of r to allow for proper
-    # broadcasting.
-    # index is shape K x s[0] x s[1]
-    if edge_behaviour == "periodic":
-        index = input.stride(axes[0]) * (
-            torch.remainder(index0 + r[:, 0].view(K, 1, 1), input.shape[axes[0]])
-        ) + input.stride(axes[1]) * (
-            torch.remainder(index1 + r[:, 1].view(K, 1, 1), input.shape[axes[1]])
-        )
-    else:
-        index = input.stride(axes[0]) * (
-            torch.clamp(index0 + r[:, 0].view(K, 1, 1), 0, input.shape[axes[0]])
-        ) + input.stride(axes[1]) * (
-            torch.clamp(index1 + r[:, 1].view(K, 1, 1), 0, input.shape[axes[1]])
-        )
-
-    # Now add the offsets for the higher dimensions of the array, torch.arange
-    # produces an array between 0 and the stride of the final axis and the view
-    # method maps this to a shape that can be broadcast across the whole index
-    # array
-    higher_dim_offsets = torch.arange(input.stride(axes[1]), device=input.device).view(
-        1, 1, 1, input.stride(axes[1])
-    )
-
-    # Reshape the index array and broadcast it across the stride of the final
-    # dimension
-    # index is shape K x s[0] x s[1] x stride(axes[1])
-    index = index.view(index.shape[0], index.shape[1], index.shape[2], 1).expand(
-        (index.shape[0], index.shape[1], index.shape[2], input.stride(axes[1]))
-    )
-
-    # Add the offsets for the higher dimension to hte array
-    index = index + higher_dim_offsets
-
-    # condense all dimensions x_0 ... x_a leading up to the those designated
-    # in the input axes
-    dim0size = (
-        torch.prod(torch.Tensor([input.shape[: axes[0]]])).int().item()
-        if axes[0] > 0
-        else 1
-    )
-
-    view = [dim0size]
-
-    # Add all of those dimensions after those specified by axes (do not condense)
-    for d in input.shape[axes[0] :]:
-        view.append(d)
-    y = input.view(torch.Size(view)).squeeze()
-    # index is shape K x prod(size(input[:axes[0]])) x s[0] x s[1] x stride(axes[1])
-    index = index.view(
-        index.shape[0], 1, index.shape[1], index.shape[2], index.shape[3]
-    ).expand((index.shape[0], dim0size, index.shape[1], index.shape[2], index.shape[3]))
-
-    # Add the offset for dimensions leading up to axis[0]
-    lower_dim_offset = torch.arange(dim0size, device=input.device) * y.stride(0)
-    lower_dim_offset = lower_dim_offset.view(1, dim0size, 1, 1, 1).long()
-    index = index + lower_dim_offset
-
-    # print(f"new index shape: {index.shape}")
-    return index.contiguous().view(-1)
-
-
-def gather_patches(input, axes, positions, patch_size, index=None) -> torch.Tensor:
-    """
-    Gathers K patches of size :patch_size: at axes [ax1, ax2] of the input
-    tensor. The patches are collected started at
-    K positions pos.
-    if :input: is an n-dimensional tensor with size (x_0, x_1, x_2, ..., x_a,
-               x_ax1, x_ax2, x_b, ..., x_{n-1})
-    then :out: is an n-dimensional tensor with size  (K, x_0, x_1, x_2, ...,
-              x_a, patch_size[0], patch_size[1], x_3, ..., x_{n-1})
-    :param input: at least two-dimensional tensor
-    :param axes: axes at which to gather the patches
-    :param positions: K x 2 LongTensor
-    :param patch_size: (2,) LongTensor
-    :param out: n-dimensional tensor with size  (K, x_0, x_1, x_2, ..., x_a,
-                patch_size[0], patch_size[1], x_3, ..., x_{n-1})
-    :return:
-    """
-
-    r = positions
-    s = patch_size
-    K = positions.shape[0]
-
-    # Call the get index function
-    if index is None:
-        index = get_scatter_gather_indices(r, s, input, axes).contiguous().view(-1)
-
-    # condense all dimensions x_0 ... x_a leading up to the those designated
-    # in the input axes
-    dim0size = (
-        torch.prod(torch.Tensor([input.shape[: axes[0]]])).int().item()
-        if axes[0] > 0
-        else 1
-    )
-    view = [dim0size]
-
-    # Add all of those dimensions after those specified by axes (do not condense)
-    for d in input.shape[axes[0] :]:
-        view.append(d)
-    y = input.view(torch.Size(view)).squeeze()
-
-    # Select the relevant indices
-    out = torch.index_select(y.view(-1), 0, index)
-
-    # Now reconstruct the output array into the right shape
-
-    # out_view will be shape of the output tensor. This will be constructed over
-    # the next few lines, starting with the number of positions, K.
-    out_view = (K,)
-    # Progessively add the indices of the input, starting with the indices
-    # leading up to the start of the axes specified in the input variable axes
-    for ax in input.shape[: axes[0]]:
-        out_view += (ax,)
-
-    # Add the size of the patch to the output shape
-    # The function .item() turns a tensor into a number single value
-    out_view += (patch_size[0].item(),)
-    out_view += (patch_size[1].item(),)
-
-    # Progessively add the indices of the input, finishing with the indices
-    # after those axes specified in the input variable axes
-    for ax in input.shape[axes[1] + 1 :]:
-        out_view += (ax,)
-
-    # Return out with the shape built up over the last few lines
-    out = out.view(out_view)
-    return out
-
-
-def torch_bin(array, factor=2):
-    y, x = array.size()[-2:]
-    biny, binx = [y // factor, x // factor]
-    yy, xx = [biny * factor, binx * factor]
-    result = torch.zeros(
-        *array.size()[:2], biny, binx, device=array.device, dtype=array.dtype
-    )
-
-    for iy in range(factor):
-        for ix in range(factor):
-            result[..., :, :] += array[
-                ..., 0 + iy : yy + iy : factor, 0 + ix : xx + ix : factor
-            ]
-    return result
-
-
-def align(arr1, arr2):
-    """Align array arr1 to arr2 using Fourier correlation."""
-    # Correlate both arrays
-    corr = correlate(arr2, arr1)
-
-    # Now get index of maximum value of correlation
-    ind = torch.argmax(corr)
-    y, x = [ind // arr1.stride(-2), ind % arr1.stride(-2)]
-
-    return roll_n(roll_n(arr1, -2, y), -1, x)
-
-
-def correlate(arr1, arr2):
-    """Find the cross correlation of two arrays using the Fourier transform.
-    Assumes that both arrays are periodic so can be circularly shifted."""
-
-    complex_input = arr1.size(-1) == 2 and arr2.size(-1) == 2
-
-    if complex_input:
-        result = complex_mul(*[torch.fft(x, 2) for x in [arr2, arr1]], conjugate=True)
-        return torch.ifft2(result, 2)
-    else:
-        # Make arrays "complex" by ading zero valued imaginary component to final index
-        a_ = torch.cat(
-            [x.view(*arr1.size(), 1) for x in [arr1, torch.zeros_like(arr1)]], -1
-        )
-        b_ = torch.cat(
-            [x.view(*arr2.size(), 1) for x in [arr2, torch.zeros_like(arr2)]], -1
-        )
-
-        # Multiply arr1 by conjugate of arr2 in Fourier space
-        # TODO make use of the real Fourier transforms (torch.rfft) to make this much
-        # more efficient
-        result = complex_mul(*[torch.fft(x, 2) for x in [b_, a_]], conjugate=True)
-
-        # Return real part of invere Fourier transformed result
-        return torch.ifft(result, 2)[..., 0]
-
-
 def fftfreq(n, dtype=torch.float, device=torch.device("cpu")):
-    """Same as numpy.fft.fftfreq(n)*n """
+    """
+    Generate an array of Fourier coordinates in units of pixels.
+
+    Same as numpy.fft.fftfreq(n)*n but for a torch array.
+    """
     return (torch.arange(n, dtype=dtype, device=device) + n // 2) % n - n // 2
 
 
 def fourier_shift_array_1d(
     y, posn, dtype=torch.float, device=torch.device("cpu"), units="pixels"
 ):
+    """Apply Fourier shift theorem for sub-pixel shift to a 1 dimensional array."""
     ramp = torch.empty(y, 2, dtype=dtype, device=device)
     ky = 2 * np.pi * fftfreq(y) * posn
     if units == "pixels":
@@ -570,9 +224,7 @@ def fourier_shift_torch(
     qspace_out=False,
     units="pixels",
 ):
-    """Apply Fourier shift theorem to array. Calls Fourier_shift_array to generate
-    the shift array"""
-
+    """Apply Fourier shift theorem for sub-pixel shifts to array."""
     if not qspace_in:
         array = torch.fft.fft2(array, signal_ndim=2)
 
@@ -673,14 +325,17 @@ def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
         Size of the cropping windows
     """
     return (
-        indices[-1].view(1, indices[-1].size(0))
-        + indices[-2].view(indices[-2].size(0), 1) * shape[-1]
-    ).flatten()
+        (
+            indices[-1].view(1, indices[-1].size(0))
+            + indices[-2].view(indices[-2].size(0), 1) * shape[-1]
+        )
+        .flatten()
+        .type(torch.LongTensor)
+    )
 
 
 def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
-    """Crop an array to its bandwidth limit (remove superfluous array entries)"""
-
+    """Crop an array to its bandwidth limit (remove superfluous array entries)."""
     from .numpy_utils import crop_window_to_flattened_indices
 
     # Check if array is complex or not
