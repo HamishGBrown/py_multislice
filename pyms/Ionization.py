@@ -10,13 +10,18 @@ import re
 import scipy.integrate as integrate
 import torch
 import tqdm
-from .Probe import wavev
-from .structure import interaction_constant
+from .Probe import wavev, relativistic_mass_correction
 from .utils.numpy_utils import fourier_shift
 
 # List of letters for each orbital, used to convert between orbital angular
 # momentum quantum number ell and letter
 orbitals = ["s", "p", "d", "f"]
+
+# Bohr radius in Angstrom
+a0 = 5.29177210903e-1
+
+# Rydberg energy in electron volts
+Ry = 13.605693122994
 
 
 def get_q_numbers_for_transition(ell, order=1):
@@ -157,7 +162,7 @@ class orbital:
         ell : int
             Orbital angular momentum quantum number of orbital
         epsilon : Optional, float
-            Energy of continuum wavefunction (only matters if n == 0)
+            Energy of continuum wavefunction in eV (only matters if n == 0)
         """
         # Load arguments into orbital object
         self.Z = Z
@@ -228,26 +233,32 @@ class orbital:
         from scipy.interpolate import interp1d
 
         if self.n == 0:
+            # If continuum wave function also change normalization units from
+            # 1/sqrt(k) in atomic units to units of 1/sqrt(Angstrom eV)
+            # Hartree atomic energy unit in eV
+            Eh = 27.211386245988
+            # Fine structure constant
+            alpha = 7.2973525693e-3
+            # Convert energy to Hartree units
+            eH = epsilon / Eh
+            # wavenumber in atomic units
+            ke = np.sqrt(2 * eH * (1 + alpha ** 2 * eH / 2))
+            # Normalization used in flexible atomic code
+            facnorm = 1 / np.sqrt(ke)
+            # Desired normalization from Manson 1972
+            norm = 1 / np.sqrt(np.pi * epsilon / Ry)
+            # norm = 1
+
             # If continuum wave function load phase-amplitude solution
             self.__amplitude = interp1d(
-                table[self.ilast - 1 :, 1], table[self.ilast - 1 :, 2], fill_value=0
+                table[self.ilast - 1 :, 1],
+                table[self.ilast - 1 :, 2] / facnorm * norm,
+                fill_value=0,
             )
             self.__phase = interp1d(
                 table[self.ilast - 1 :, 1], table[self.ilast - 1 :, 3], fill_value=0
             )
-
-            # If continuum wave function also change normalization units from
-            # 1/sqrt(k) in atomic units to units of 1/sqrt(Angstrom eV)
-            # Hartree atomic energy unit in eV
-            # Eh = 27.211386245988
-            # Fine structure constant
-            # alpha = 7.2973525693e-3
-            # Convert energy to Hartree units
-            # eH = epsilon / Eh
-            # wavenumber in atomic units
-            # ke = np.sqrt(2 * eH * (1 + alpha ** 2 * eH / 2))
-            # Normalization
-            # norm = 1 / np.sqrt(ke)
+            self.wfn_table *= norm / facnorm
 
         # For bound wave functions we simply interpolate the
         # tabulated values of a0 the wavefunction
@@ -308,9 +319,13 @@ class orbital:
         else:
             return wvfn[0]
 
-    def plot(self, grid=np.linspace(0.0, 2.0, num=50), show=True, ylim=None):
-        """Plot wavefunction at positions given by grid r."""
+    def plot(self, grid=None, show=True, ylim=None):
+        """Plot wavefunction at positions given by grid r in Bohr radii."""
         fig, ax = plt.subplots(figsize=(4, 4))
+        if grid is None:
+            rmax = max(2.0, self.r[self.ilast - 1])
+            grid = np.linspace(0.0, rmax, num=50)
+
         wavefunction = self(grid)
         ax.plot(grid, wavefunction)
         ax.set_title(self.title)
@@ -372,9 +387,6 @@ def transition_potential(
         If qspace = True return the ionization transition potential in reciprocal
         space
     """
-    # Bohr radius in Angstrom
-    a0 = 5.29177210903e-1
-
     # Calculate energy loss
     deltaE = orb1.energy - orb2.energy
     # Calculate wave number in inverse Angstrom of incident and scattered
@@ -387,12 +399,9 @@ def transition_potential(
 
     # Get grid dimensions in reciprocal space in units of inverse Bohr radii
     # (to match atomic wave function output from the Flexible Atomic Code)
-    qspace = [gridshape[i] / gridsize[i] for i in range(2)]
+    qq = [gridshape[i] / gridsize[i] for i in range(2)]
     deltaq = [1 / gridsize[i] for i in range(2)]
-    qgrid = [
-        np.fft.fftfreq(gridshape[1]) * qspace[0],
-        np.fft.fftfreq(gridshape[0]) * qspace[1],
-    ]
+    qgrid = [np.fft.fftfreq(gridshape[1]) * qq[0], np.fft.fftfreq(gridshape[0]) * qq[1]]
 
     # Transverse momentum transfer
     qt = np.sqrt(qgrid[0][:, np.newaxis] ** 2 + qgrid[1][np.newaxis, :] ** 2)
@@ -463,6 +472,9 @@ def transition_potential(
             )
             jq[iQ] = integrate.quad(overlap_kernel, 0, rmax)[0]
 
+        # Bound wave function was in units of 1/sqrt(bohr-radii) and excited
+        # wave function was in units of 1/sqrt(bohr-radii Rydbergs) integration
+        # was performed in borh-radii units so result is 1/sqrt(Rydbergs)
         return jq
 
     # Mesh to calculate overlap integrals on and then interpolate
@@ -520,22 +532,25 @@ def transition_potential(
 
                 # Evaluate Eq (13) from Dwyer Ultramicroscopy 104 (2005) 141-151
                 Hn0[qmask] += prefactor1 * prefactor2 * jq * Ylm
-    # Vaccuum permitivity in Coulomb/VA
-    eps0 = 8.8541878128e-22
-    # Electron charge in Coulomb
-    qe = 1.60217662e-19
-
-    # Relativistic electron mass correction
-    # gamma = relativistic_mass_correction(eV)
-
-    sigma = interaction_constant(eV + deltaE, units="rad/VA")
 
     # Need to multiply by area of k-space pixel (1/gridsize) and multiply by
-    # pixels to get correct units from inverse Fourier transform
-    Hn0 *= np.prod(gridshape) ** 1.5 / np.prod(gridsize)
+    # pixels to get correct units from inverse Fourier transform (since an
+    # inverse Fourier transform implicitly divides by gridshape)
+    Hn0 *= np.prod(gridshape) / np.prod(gridsize)
 
-    # Apply constants
-    Hn0 = qe / 4 / np.pi ** 2 / eps0 * sigma * Hn0 / qabs ** 2 * np.sqrt(2)
+    # Multiply by orbital filling
+    # filling = 4*ell+2
+
+    # Apply constants:
+    # sqrt(Rdyberg) to convert to 1/sqrt(eV) units
+    # 1 / (2 pi**2 a0 kn) as as per paper
+    # Relativistic mass correction to go from a0 to relativistically corrected a0*
+    # divide by q**2
+    Hn0 *= (
+        np.sqrt(2)
+        * relativistic_mass_correction(eV)
+        / (2 * a0 * np.pi ** 2 * np.sqrt(Ry) * kn * qabs ** 2)
+    )
 
     # Return result of Eq. (10) from Dwyer Ultramicroscopy 104 (2005) 141-151
     # in real space
@@ -543,8 +558,6 @@ def transition_potential(
         Hn0 = np.fft.ifft2(Hn0)
 
     return Hn0
-    # return 2*np.pi**1.5/a0**3*np.fft.ifft2(Hn0/qabs**2,norm='ortho')
-    # return 2*np.pi**1.5/a0**2*const*np.fft.ifft2(Hn0/qabs**2,norm='ortho')
 
 
 def transition_potential_multislice(

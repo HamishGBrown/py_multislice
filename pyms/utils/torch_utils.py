@@ -366,7 +366,7 @@ def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
     if complx:
         flat_shape += (2,)
         newshape += (2,)
-        return array.view(flat_shape)[..., ind, :].view(newshape)
+        return array.view(flat_shape)[..., ind].view(newshape)
     return array.view(flat_shape)[..., ind].view(newshape)
 
 

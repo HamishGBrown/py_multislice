@@ -878,9 +878,7 @@ def CBED(
                 qspace_out=True,
                 device_type=device,
             )
-            output[it, ...] += (
-                np.abs(np.fft.fftshift(crop_to_bandwidth_limit(probe))) ** 2
-            )
+            output[it] += np.abs(np.fft.fftshift(crop_to_bandwidth_limit(probe))) ** 2
 
     # Divide output by # of pixels to compensate for Fourier transform
     return output / np.prod(gridshape)

@@ -219,11 +219,11 @@ def multislice(
         # there is the option of randomly shifting it around to
         # generate "more" transmission functions
         if tiling is None or (tiling[0] == 1 & tiling[1] == 1):
-            T_ = T[it, subslice, ...]
+            T_ = T[it, subslice]
         elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
             # Shift an integer number of pixels in y
             T_ = roll_n(
-                T[it, subslice, ...], 0, r.randint(0, tiling[0]) * (nopiy // tiling[0])
+                T[it, subslice], 0, r.randint(0, tiling[0]) * (nopiy // tiling[0])
             )
 
             # Shift an integer number of pixels in x
@@ -242,9 +242,7 @@ def multislice(
 
             # Apply Fourier shift theorem for sub-pixel shift
             T_ = torch.ifft(
-                complex_mul(
-                    FFT_shift_array, torch.fft(T[it, subslice, ...], signal_ndim=2)
-                ),
+                complex_mul(FFT_shift_array, torch.fft(T[it, subslice], signal_ndim=2)),
                 signal_ndim=2,
             )
 
@@ -1079,14 +1077,14 @@ class scattering_matrix:
 
             if self.Fourier_space_output:
 
-                self.S[beams, ...] = output[
+                self.S[beams] = output[
                     :, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
                 ] * np.sqrt(np.prod(self.stored_gridshape) / np.prod(self.gridshape))
             else:
                 output = fourier_interpolate_2d_torch(
                     output, self.stored_gridshape, correct_norm=False
                 )
-                self.S[beams, ...] = output
+                self.S[beams] = output
 
     def __call__(self, probes, nslices, posn=None):
         """
