@@ -224,9 +224,18 @@ def fourier_shift_torch(
     qspace_out=False,
     units="pixels",
 ):
-    """Apply Fourier shift theorem for sub-pixel shifts to array."""
+    """
+    Apply Fourier shift theorem for sub-pixel shifts to array.
+
+    Parameters
+    -----------
+    array : torch.tensor (...,Y,X)
+        Array to be Fourier shifted
+    posn : torch.tensor (K x 2) or (2,)
+        Shift(s) to be applied
+    """
     if not qspace_in:
-        array = torch.fft.fft2(array, signal_ndim=2)
+        array = torch.fft(array, signal_ndim=2)
 
     array = complex_mul(
         array,
@@ -254,13 +263,13 @@ def fourier_shift_array(
     Parameters
     ----------
     size : array_like
-        size of the aray
+        size of the array (Y,X)
     posn : array_like
         can be a K x 2 array to give a K x Y x X shift arrays
     posn
     """
     # Get number of dimensions
-    nn = len(posn.size())
+    nn = len(posn.shape)
 
     # Get size of array
     y, x = size
@@ -280,7 +289,7 @@ def fourier_shift_array(
         # appropriate broadcasting to 2D
         return complex_mul(yramp.view(y, 1, 2), xramp.view(1, x, 2))
     else:
-        K = posn.size(0)
+        K = posn.shape[0]
         # Make y ramp exp(-2pi i ky y)
         yramp = torch.empty(K, y, 2, dtype=dtype, device=device)
         ky = (
@@ -324,10 +333,12 @@ def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
     shape : array_like
         Size of the cropping windows
     """
+    yind = torch.as_tensor(indices[-1])
+    xind = torch.as_tensor(indices[-2])
     return (
         (
-            indices[-1].view(1, indices[-1].size(0))
-            + indices[-2].view(indices[-2].size(0), 1) * shape[-1]
+            yind.view(1, yind.size(0)) % shape[-1]
+            + (xind.view(xind.size(0), 1) % shape[-2]) * shape[-1]
         )
         .flatten()
         .type(torch.LongTensor)
@@ -357,6 +368,7 @@ def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
     ind = torch.tensor(
         crop_window_to_flattened_indices(ind, gridshape).astype("int32"),
         dtype=torch.long,
+        device=array.device,
     )
 
     # flatten final two dimensions of array
@@ -366,7 +378,13 @@ def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
     if complx:
         flat_shape += (2,)
         newshape += (2,)
-        return array.view(flat_shape)[..., ind].view(newshape)
+        return torch.gather(
+            array.view(flat_shape),
+            -2,
+            ind.to(array.device)
+            .view(1, ind.size(0), 1)
+            .repeat(flat_shape[0], 1, flat_shape[-1]),
+        ).view(newshape)
     return array.view(flat_shape)[..., ind].view(newshape)
 
 

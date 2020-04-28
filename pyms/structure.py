@@ -363,7 +363,13 @@ class structure:
         else:
             print("File extension: {0} not recognized".format(ext))
             return None
-        # If temperature factors are given as B then convert to ums
+
+        # Close file
+        f.close()
+
+        # If temperature factors are given in any other format than mean square
+        # (ums) convert to mean square. Acceptable formats are crystallographic
+        # temperature factor B and root mean square (urms) displacements
         if temperature_factor_units == "B":
             self.atoms[:, 5] /= 8 * np.pi ** 2
         elif temperature_factor_units == "urms":
@@ -385,7 +391,7 @@ class structure:
         monoclinic structure. Assumes that the self.unitcell matrix is lower
         triangular.
         """
-        if not np.dot(self.unitcell[0], self.unitcell[1]) < EPS:
+        if not np.abs(np.dot(self.unitcell[0], self.unitcell[1])) < EPS:
             tiley, tilex = psuedo_rational_tiling(*self.unitcell[0:2, 0], EPS)
 
             # Make deepcopy of old unit cell
@@ -478,7 +484,7 @@ class structure:
         """
         f = open(splitext(fnam)[0] + ".xtl", "w")
         f.write("TITLE " + self.Title + "\n CELL \n")
-        f.write("  {0:.2f} {1:.2f} {2:.2f} 90 90 90\n".format(*self.unitcell))
+        f.write("  {0:.5f} {1:.5f} {2:.5f} 90 90 90\n".format(*self.unitcell))
         f.write("SYMMETRY NUMBER 1\n SYMMETRY LABEL  P1\n ATOMS \n")
         f.write("NAME         X           Y           Z" + "\n")
         for i in range(self.atoms.shape[0]):
@@ -517,69 +523,6 @@ class structure:
         f.write("-1")
         f.close()
 
-    def make_transmission_functions(
-        self,
-        pixels,
-        eV,
-        subslices=[1.0],
-        tiling=[1, 1],
-        fe=None,
-        displacements=True,
-        fftout=True,
-        dtype=None,
-        device=None,
-        fractional_occupancy=True,
-    ):
-        """
-        Make the transmission functions for the simulation object.
-
-        Transmission functions are the exponential of the specimen electrostatic
-        potential scaled by the interaction constant for electrons, sigma. These
-        are used to model scattering by a thin slice of the object in the
-        multislice algorithm
-
-        Parameters:
-        -----------
-        pixels : array_like
-            Output pixel grid
-        eV : float
-            Probe accelerating voltage in electron-volts
-        subslices : array_like, optional
-            An array containing the depths at which each slice ends as a fraction
-            of the simulation unit-cell, used for simulation objects thicker
-            than typical multislice slicing (about 2 Angstrom)
-        tiling : array_like,optional
-            Repeat tiling of the simulation object
-        fe: array_like,optional
-            An array containing the electron scattering factors for the elements
-            in the simulation object as calculated by the function
-            calculate_scattering_factors
-        """
-        # Make the specimen electrostatic potential
-        T = self.make_potential(
-            pixels,
-            subslices,
-            tiling,
-            fe=fe,
-            displacements=displacements,
-            device=device,
-            dtype=dtype,
-            fractional_occupancy=fractional_occupancy,
-        )
-
-        # Now take the complex exponential of the electrostatic potential
-        # scaled by the electron interaction constant
-        T = torch.fft(torch_c_exp(interaction_constant(eV) * T), signal_ndim=2)
-
-        # Band-width limit the transmission function, see Earl Kirkland's book
-        # for an discussion of why this is necessary
-        for i in range(T.shape[0]):
-            T[i] = bandwidth_limit_array(T[i])
-
-        if fftout:
-            return torch.ifft(T, signal_ndim=2)
-        return T
-
     def make_potential(
         self,
         pixels,
@@ -590,6 +533,7 @@ class structure:
         fe=None,
         device=None,
         dtype=torch.float32,
+        seed=None,
     ):
         """
         Generate the projected potential of the structure.
@@ -629,9 +573,15 @@ class structure:
             on
         dtype: torch.dtype
             Controls the data-type of the output
+        seed: int
+            Seed for random number generator for atomic displacements.
         """
         # Initialize device cuda if available, CPU if no cuda is available
         device = get_device(device)
+
+        # Seed random number generator for displacements
+        if seed is not None:
+            torch.manual_seed(seed)
 
         tiling_ = np.asarray(tiling[:2])
         gsize = np.asarray(self.unitcell[:2]) * tiling_
@@ -710,6 +660,7 @@ class structure:
             posn = torch.from_numpy(posn).to(device).type(P.dtype)
 
             if displacements:
+
                 # Add displacement sampled from normal distribution to account
                 # for atomic thermal motion
                 disp = (
@@ -760,7 +711,8 @@ class structure:
 
         # FFT potential to reciprocal space
         for i in range(P.shape[0]):
-            P[i] = torch.fft(P[i], signal_ndim=2)
+            for j in range(P.shape[1]):
+                P[i, j] = torch.fft(P[i, j], signal_ndim=2)
 
         # Make sinc functions with appropriate singleton dimensions for pytorch
         # broadcasting /gridsize[0]*pixels[0] /gridsize[1]*pixels[1]
@@ -796,6 +748,72 @@ class structure:
 
         # Only return real part
         return torch.ifft(P, signal_ndim=2)[..., 0]
+
+    def make_transmission_functions(
+        self,
+        pixels,
+        eV,
+        subslices=[1.0],
+        tiling=[1, 1],
+        fe=None,
+        displacements=True,
+        fftout=True,
+        dtype=None,
+        device=None,
+        fractional_occupancy=True,
+        seed=None,
+        bandwidth_limit=2 / 3,
+    ):
+        """
+        Make the transmission functions for the simulation object.
+
+        Transmission functions are the exponential of the specimen electrostatic
+        potential scaled by the interaction constant for electrons, sigma. These
+        are used to model scattering by a thin slice of the object in the
+        multislice algorithm
+
+        Parameters:
+        -----------
+        pixels : array_like
+            Output pixel grid
+        eV : float
+            Probe accelerating voltage in electron-volts
+        subslices : array_like, optional
+            An array containing the depths at which each slice ends as a fraction
+            of the simulation unit-cell, used for simulation objects thicker
+            than typical multislice slicing (about 2 Angstrom)
+        tiling : array_like,optional
+            Repeat tiling of the simulation object
+        fe: array_like,optional
+            An array containing the electron scattering factors for the elements
+            in the simulation object as calculated by the function
+            calculate_scattering_factors
+        """
+        # Make the specimen electrostatic potential
+        T = self.make_potential(
+            pixels,
+            subslices,
+            tiling,
+            fe=fe,
+            displacements=displacements,
+            device=device,
+            dtype=dtype,
+            fractional_occupancy=fractional_occupancy,
+            seed=seed,
+        )
+
+        # Now take the complex exponential of the electrostatic potential
+        # scaled by the electron interaction constant
+        T = torch.fft(torch_c_exp(interaction_constant(eV) * T), signal_ndim=2)
+
+        # Band-width limit the transmission function, see Earl Kirkland's book
+        # for an discussion of why this is necessary
+        for i in range(T.shape[0]):
+            T[i] = bandwidth_limit_array(T[i], bandwidth_limit)
+
+        if fftout:
+            return torch.ifft(T, signal_ndim=2)
+        return T
 
     def generate_slicing_figure(self, slices, show=True):
         """

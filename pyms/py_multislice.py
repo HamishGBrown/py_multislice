@@ -2,12 +2,12 @@
 import numpy as np
 import torch
 from tqdm import tqdm
+from .Probe import wavev, focused_probe
 from .utils.numpy_utils import (
     bandwidth_limit_array,
     q_space_array,
     fourier_interpolate_2d,
     crop,
-    crop_to_bandwidth_limit,
 )
 from .utils.torch_utils import (
     roll_n,
@@ -22,11 +22,18 @@ from .utils.torch_utils import (
     crop_to_bandwidth_limit_torch,
     size_of_bandwidth_limited_array,
     fourier_interpolate_2d_torch,
+    crop_window_to_flattened_indices_torch,
 )
 
 
 def make_propagators(
-    gridshape, gridsize, eV, subslices=[1.0], tilt=[0, 0], tilt_units="mrad"
+    gridshape,
+    gridsize,
+    eV,
+    subslices=[1.0],
+    tilt=[0, 0],
+    tilt_units="mrad",
+    bandwidth_limit=2 / 3,
 ):
     """
     Make the Fresnel freespace propagators for a multislice simulation.
@@ -57,10 +64,11 @@ def make_propagators(
     from .Probe import make_contrast_transfer_function
 
     # We will use the make_contrast_transfer_function function to generate
-    # the propagator, the aperture of this propagator will supply the
-    # bandwidth limit of our simulation it must be 2/3rds of our pixel
-    # gridsize
-    app = np.amax(np.asarray(gridshape) / np.asarray(gridsize[:2]) / 2)
+    # the propagator, the aperture of this propagator will go out to the maximum
+    # possible and the function bandwidth_limit_array will provide the band
+    # width_limiting
+    gridmax = np.asarray(gridshape) / np.asarray(gridsize[:2]) / 2
+    app = np.hypot(*gridmax)
 
     # Intitialize array
     prop = np.zeros((len(subslices), *gridshape), dtype=np.complex)
@@ -81,7 +89,8 @@ def make_propagators(
                 app_units="invA",
                 optic_axis=tilt,
                 tilt_units=tilt_units,
-            )
+            ),
+            limit=bandwidth_limit,
         )
 
     return prop
@@ -89,7 +98,7 @@ def make_propagators(
 
 def generate_slice_indices(nslices, nsubslices, subslicing=False):
     """Generate the slice indices for the multislice routine."""
-    from collections import Sequence
+    from collections.abc import Sequence
 
     if isinstance(nslices, Sequence) or isinstance(nslices, np.ndarray):
         # If a list is passed, continue as before
@@ -176,7 +185,8 @@ def multislice(
     # , if None then np.random.RandomState will use the system clock as a seed
     seed_provided = not (seed is None)
     if not seed_provided:
-        r = np.random.RandomState(seed)
+        r = np.random.RandomState()
+        np.random.seed(seed)
 
     # Initialize device cuda if available, CPU if no cuda is available
     device = get_device(device_type)
@@ -319,8 +329,6 @@ def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     units : float, optional
         Units of betamin and betamax, mrad or invA are both acceptable
     """
-    from .Probe import wavev
-
     # Get reciprocal space array
     q = q_space_array(gridshape, rsize)
 
@@ -338,49 +346,83 @@ def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     return np.where(detector, 1, 0)
 
 
+def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
+    """
+    Calculate nyquist sampling (typically for minimum sampling of a STEM probe).
+
+    If array size in units of length is passed then return how many probe
+    positions are required otherwise just return the sampling. Alternatively
+    pass probe accelerating voltage (eV) in electron-volts and probe forming
+    aperture (alpha) in mrad and the resolution limit in inverse length will be
+    calculated for you.
+    """
+    if eV is None and alpha is None:
+        step_size = 1 / (4 * resolution_limit)
+    elif resolution_limit is None:
+        step_size = 1 / (4 * wavev(eV) * alpha * 1e-3)
+    else:
+        return None
+
+    if rsize is None:
+        return step_size
+    else:
+        return np.ceil(rsize / step_size).astype(np.int)
+
+
 def generate_STEM_raster(
-    gridshape, rsize, eV, alpha, tiling=[1, 1], ROI=[0.0, 0.0, 1.0, 1.0]
+    rsize,
+    eV,
+    alpha,
+    tiling=[1, 1],
+    ROI=[0.0, 0.0, 1.0, 1.0],
+    gridshape=[1, 1],
+    invA=False,
 ):
     """
     Return the probe positions for a nyquist-sampled STEM raster.
 
-    For a grid of pixel size given by gridshape and real space size rsize
-    return probe positions for nyquist sampled STEM raster
+    For a real space size rsize return probe positions in units of fraction of
+    the array for nyquist sampled STEM raster
 
     Parameters
     ----------
-    gridshape : (2,) array_like
-        Pixel dimensions of the 2D grid
     rsize :  (2,) array_like
         Size of the grid in real space in units of Angstroms
     eV : float
         Probe energy in electron volts
     alpha : float
-        Probe forming aperture semi-angle in mrad
+        Probe forming aperture semi-angle in mrad or inverse Angstorm
+        (if invA == True)
 
     Keyword arguments
     -----------------
+    gridshape : (2,) array_like, optional
+        Pixel dimensions of the 2D grid, by default [1,1] so probe positions will
+        be returned as a fraction of the array size
     tiling : (2,) array_like
-        Tiling of a repeat unit cell on simulation grid, STEM raster will only
-        scan a single unit cell.
+        Tiling of a repeat unit cell on simulation grid, if provided STEM raster
+        will only scan a single unit cell.
     ROI : (4,) array_like
-        Fraction of the unit cell to be scanned this array. Should contain
-        [y0,x0,y1,x1] where [x0,y0] and [x1,y1] are the bottom left and top
-        right coordinates of the region of interest (ROI) expressed as a
-        fraction of the total grid (or unit cell).
-
+        Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
+        where [x0,y0] and [x1,y1] are the bottom left and top right coordinates
+        of the region of interest (ROI) expressed as a fraction of the total
+        grid (or unit cell).
+    invA : bool
+        If True, alpha is taken to be in units of inverse Angstrom, not mrad.
+        This also means that the value of eV no longer matters
     """
-    # Calculate number of scan positions in STEM scan
-    from .Probe import nyquist_sampling
-
     # Field of view in Angstrom
     FOV = np.asarray([rsize[0] * (ROI[2] - ROI[0]), rsize[1] * (ROI[3] - ROI[1])])
 
-    # Number of scan coordinates in each dimension
-    nscan = nyquist_sampling(FOV / np.asarray(tiling), eV=eV, alpha=alpha)
+    if invA:
+        # Number of scan coordinates in each dimension
+        nscan = nyquist_sampling(FOV / np.asarray(tiling), resolution_limit=alpha)
+    else:
+        # Number of scan coordinates in each dimension
+        nscan = nyquist_sampling(FOV / np.asarray(tiling), eV=eV, alpha=alpha)
 
     # Generate Y and X scan coordinates
-    return [
+    yy, xx = [
         np.arange(
             ROI[0 + i] * gridshape[i] / tiling[i],
             ROI[2 + i] * gridshape[i] / tiling[i],
@@ -389,6 +431,70 @@ def generate_STEM_raster(
         / gridshape[i]
         for i in range(2)
     ]
+
+    return np.stack(np.broadcast_arrays(yy[:, None], xx[None, :]), axis=2)
+
+
+def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
+    """
+    Calculate 4D-STEM datacube diffraction pattern gridsize and resampling function.
+
+    Parameters
+    ----------
+    fourD_STEM : bool or array_like
+        Pass fourD_STEM = True gives 4D STEM output with native simulation grid
+        sampling. Alternatively, to save disk space a tuple containing pixel
+        size and diffraction space extent of the datacube can be passed in. For
+        example ([64,64],[1.2,1.2]) will output diffraction patterns measuring
+        64 x 64 pixels and 1.2 x 1.2 inverse Angstroms.
+    rsize : (2,) array_like
+        Real space size of simulation grid
+    gridshape : (2,) array_like
+        Pixel size of gridshape
+
+    Returns
+    -------
+    gridout : (2,) array_like
+        Pixel size of the diffraciton pattern output
+    resize : function
+        A function that takes diffraction patterns from the simulation and
+        resamples and crops them to the requested size.
+    """
+    # Check whether a resampling directive has been given
+    if isinstance(FourD_STEM, (list, tuple)):
+        gridout = FourD_STEM[0]
+
+        if len(FourD_STEM) > 1:
+            # Get output grid and diffraction space size of that grid from tuple
+            sizeout = FourD_STEM[1]
+
+            #
+            diff_pat_crop = np.round(
+                np.asarray(sizeout) * np.asarray(rsize[:2])
+            ).astype(np.int)
+
+            # Define resampling function to crop and interpolate
+            # diffraction patterns
+            def resize(array):
+                cropped = crop(np.fft.fftshift(array, axes=(-1, -2)), diff_pat_crop)
+                return fourier_interpolate_2d(cropped, gridout)
+
+        else:
+            # Define resampling function to just crop diffraction
+            # patterns
+            def resize(array):
+                return crop(np.fft.fftshift(array, axes=(-1, -2)), gridout)
+
+    else:
+        # If no resampling then the output size is just the simulation
+        # grid size
+        gridout = size_of_bandwidth_limited_array(gridshape)
+
+        # Define a resampling function that does nothing
+        def resize(array):
+            return np.fft.fftshift(array, axes=(-1, -2))
+
+    return gridout, resize
 
 
 def STEM(
@@ -442,7 +548,7 @@ def STEM(
         The multislice algorithm can be performed on multiple scattering matrix
         columns at once to parrallelize computation, this number is set by
         batch_size.
-    detectors : (Ndet, Y, X) array_like
+    detectors : (Ndet, Y, X) array_like, optional
         Diffraction plane detectors to perform conventional STEM imaging. If
         None is passed then no conventional STEM images will be returned.
     fourD_STEM : bool or array_like, optional
@@ -456,9 +562,9 @@ def STEM(
         initialized in the function. If a datacube is passed then the result
         will be added by the STEM routine (useful for multiple frozen phonon
         iterations)
-    scan_posn :  tuple, optional
-        Tuple containing arrays of y and x scan positions, overrides internal
-        calculations of STEM sampling
+    scan_posn :  (...,2) array_like, optional
+        Array containing the STEM scan positions in fractional coordinates.
+        If provided scan_posn.shape[:-1] will give the shape of the STEM image.
     dtype : torch.dtype, optional
         Datatype of the simulation arrays, by default 32-bit floating point
     device : torch.device, optional
@@ -491,19 +597,23 @@ def STEM(
     # Get shape of grid
     gridshape = probe.shape[-2:]
 
-    # Generate scan positions in units of fractions of the grid if not supplied
+    # Generate scan positions in units of pixels if not supplied
     if scan_posn is None:
-        scan_posn = generate_STEM_raster(gridshape, rsize[:2], eV, alpha, tiling)
+        scan_posn = generate_STEM_raster(rsize[:2], eV, alpha, tiling)
 
     # Number of scan positions
-    nscan = [x.size for x in scan_posn]
-    nscantot = np.prod(nscan)
+    scan_shape = scan_posn.shape[:-1]
+    nscantot = np.prod(scan_shape)
+    scan_posn = scan_posn.reshape((nscantot, 2))
+
+    # Ensure scan_posn is a pytorch tensor with same device and datatype as other
+    # arrays
+    scan_posn = torch.as_tensor(scan_posn).to(device).type(dtype)
 
     # Assume real space probe is passed in so perform Fourier transform in
     # anticipation of application of Fourier shift theorem
-    probe_ = torch.fft(
-        ensure_torch_array(probe, dtype=dtype, device=device), signal_ndim=2
-    )
+    probe_ = ensure_torch_array(probe, dtype=dtype, device=device)
+    probe_ = torch.fft(probe_, signal_ndim=2)
 
     # Work out whether to perform conventional STEM or not
     conventional_STEM = detectors is not None
@@ -520,43 +630,15 @@ def STEM(
 
         # Also move detectors to pytorch if necessary
         D = ensure_torch_array(detectors, device=device, dtype=dtype)
+    else:
+        STEM_image = None
 
     # Initialize array in which to store resulting 4D-STEM datacube if required
     if FourD_STEM:
 
-        # Check whether a resampling directive has been given
-        if isinstance(FourD_STEM, (list, tuple)):
-            gridout = FourD_STEM[0]
-
-            if len(FourD_STEM) > 1:
-                # Get output grid and diffraction space size of that grid from tuple
-                sizeout = FourD_STEM[1]
-
-                #
-                diff_pat_crop = np.round(
-                    np.asarray(sizeout) * np.asarray(rsize[:2])
-                ).astype(np.int)
-
-                # Define resampling function to crop and interpolate
-                # diffraction patterns
-                def resize(array):
-                    cropped = crop(np.fft.fftshift(array, axes=(-1, -2)), diff_pat_crop)
-                    return fourier_interpolate_2d(cropped, gridout)
-
-            else:
-                # Define resampling function to just crop diffraction
-                # patterns
-                def resize(array):
-                    return crop(np.fft.fftshift(array, axes=(-1, -2)), gridout)
-
-        else:
-            # If no resampling then the output size is just the simulation
-            # grid size
-            gridout = size_of_bandwidth_limited_array(gridshape)
-
-            # Define a resampling function that does nothing
-            def resize(array):
-                return np.fft.fftshift(crop_to_bandwidth_limit(array), axes=(-1, -2))
+        # Get diffraction pattern gridsize in pixels from input and function
+        # to resample the simulation output to store in the datacube
+        gridout, resize = workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape)
 
         # Check whether a datacube is already provided or not
         if datacube is None:
@@ -589,27 +671,13 @@ def STEM(
             i * batch_size, min((i + 1) * batch_size, nscantot), dtype=np.int
         )
 
-        K = scan_index.shape[0]
-        # x scan is fast(est changing) scan direction
-        xscan = scan_posn[1][scan_index % nscan[1]]
-        # y scan is slow(est changing) scan direction
-        yscan = scan_posn[0][scan_index // nscan[1]]
-
-        # Shift probes using Fourier shift theorem, prepare shift operators
-        # and store them in the array that the probes will eventually inhabit.
-
-        # Array of scan positions must be of size batch_size x 2
-        posn = torch.cat(
-            [
-                torch.from_numpy(x).type(dtype).to(device).view(K, 1)
-                for x in [yscan, xscan]
-            ],
-            dim=1,
-        )
-
         # The shift operator array array will be of size batch_size x Y x X
         probes = fourier_shift_array(
-            gridshape, posn, dtype=dtype, device=device, units="fractional"
+            gridshape,
+            torch.as_tensor(scan_posn[scan_index]),
+            dtype=dtype,
+            device=device,
+            units="fractional",
         )
 
         # Apply shift to original probe
@@ -620,7 +688,9 @@ def STEM(
         for it, t in enumerate(np.diff(nslices, prepend=0)):
 
             # Evaluate exit surface wave function from input probes
-            probes = method(probes, t, *method_args, posn=posn, **method_kwargs)
+            probes = method(
+                probes, t, *method_args, posn=scan_posn[scan_index], **method_kwargs
+            )
 
             # Calculate amplitude of probes
             amp = amplitude(probes)
@@ -639,20 +709,17 @@ def STEM(
             if FourD_STEM:
                 datacube[it, scan_index] += resize(amp.cpu().numpy())
 
+    # TODO return datacube and STEM image as a dictionary so that
     # Unflatten 4D-STEM datacube scan dimensions, use numpy squeeze to
     # remove superfluous dimensions (ones with length 1)
     if FourD_STEM:
-        datacube = datacube.reshape(nthick, *nscan, *datacube.shape[-2:])
-
-    if conventional_STEM and FourD_STEM:
-        return (
-            np.squeeze(STEM_image.reshape(ndet, nthick, *nscan)),
-            np.squeeze(datacube),
+        datacube = np.squeeze(
+            datacube.reshape(nthick, *scan_shape, *datacube.shape[-2:])
         )
-    if FourD_STEM:
-        return [np.squeeze(datacube)]
+
     if conventional_STEM:
-        return [np.squeeze(STEM_image.reshape(ndet, nthick, *nscan))]
+        STEM_image = np.squeeze(STEM_image.reshape(ndet, nthick, *scan_shape))
+    return {"STEM images": STEM_image, "datacube": datacube}
 
 
 def unit_cell_shift(array, axis, shift, tiles):
@@ -794,34 +861,24 @@ class scattering_matrix:
         # Get alpha in units of inverse Angstrom
         self.alpha_ = wavev(eV) * alpha * 1e-3
 
-        # Make a list of beams in the scattering matrix
-        q = q_space_array(gridshape, rsize)
         self.PRISM_factor = PRISM_factor
-        self.beams = np.argwhere(
+
+        # Make a list of beams in the scattering matrix
+        # Take beams inside the aperture and every nth beam where n is the
+        # PRISM "interpolation" factor
+        q = q_space_array(gridshape, rsize)
+        inside_aperture = np.less_equal(q[0] ** 2 + q[1] ** 2, self.alpha_ ** 2)
+        mody, modx = [
+            np.mod(np.fft.fftfreq(x, 1 / x).astype(np.int), p) == 0
+            for x, p in zip(gridshape, self.PRISM_factor)
+        ]
+        self.beams = np.nonzero(
             np.logical_and(
-                np.logical_and(
-                    np.less_equal(q[0] ** 2 + q[1] ** 2, self.alpha_),
-                    (
-                        np.mod(
-                            np.fft.fftfreq(gridshape[0], d=1 / gridshape[0]).astype(
-                                np.int
-                            ),
-                            self.PRISM_factor[0],
-                        )
-                        == 0
-                    )[:, np.newaxis],
-                ),
-                (
-                    np.mod(
-                        np.fft.fftfreq(gridshape[1], d=1 / gridshape[1]).astype(np.int),
-                        self.PRISM_factor[1],
-                    )
-                    == 0
-                )[np.newaxis, :],
+                np.logical_and(inside_aperture, mody[:, None]), modx[None, :]
             )
         )
 
-        self.nbeams = self.beams.shape[0]
+        self.nbeams = len(self.beams[0])
 
         # For a scattering matrix stored in real space there is the option
         # of storing it on a much smaller pixel grid than the grid used for
@@ -895,8 +952,13 @@ class scattering_matrix:
         self.initialized = False
         # Propagate wave functions of scattering matrix
         self.current_slice = 0
+        self.show_Progress = showProgress
         self.Propagate(
-            nslice, propagators, transmission_functions, subslicing=subslicing
+            nslice,
+            propagators,
+            transmission_functions,
+            subslicing=subslicing,
+            showProgress=self.show_Progress,
         )
 
     def Propagate(
@@ -963,7 +1025,7 @@ class scattering_matrix:
                     plane_wave_illumination(
                         self.gridshape,
                         self.rsize[:2],
-                        tilt=self.beams[ibeam],
+                        tilt=[self.beams[0][ibeam], self.beams[1][ibeam]],
                         tilt_units="pixels",
                         qspace=True,
                     )
@@ -991,7 +1053,11 @@ class scattering_matrix:
             nslice_ = nslice * self.nsubslices
 
         # Work out direction of propagation through specimen
-        direction = np.sign(nslice_ - self.current_slice)
+        if nslice_ != self.current_slice:
+            direction = np.sign(nslice_ - self.current_slice)
+        else:
+            direction = 1
+
         if direction == 0:
             direction = 1
 
@@ -1086,7 +1152,21 @@ class scattering_matrix:
                 )
                 self.S[beams] = output
 
-    def __call__(self, probes, nslices, posn=None):
+    def PRISM_crop_window(self, win=None):
+        """Calculate 2D array indices of STEM crop window."""
+        if win is None:
+            win = self.PRISM_factor
+
+        crop_ = [
+            torch.arange(
+                -self.stored_gridshape[i] // (2 * win[i]),
+                self.stored_gridshape[i] // (2 * win[i]),
+            )
+            for i in range(2)
+        ]
+        return crop_
+
+    def __call__(self, probes, nslices, posn=None, Smat=None, scan_transform=None):
         """
         Calculate exit-surface waves function using the scattering matrix.
 
@@ -1094,37 +1174,57 @@ class scattering_matrix:
         ----------
         probes : (N,Y,X,2) torch.array
             Input wave functions to calculate exit surface wave functions from
+            must be in Diffraction space
         nslices :
             Does nothing, only there to match call signature for STEM routine
-        posn : array_like
+        posn : array_like (N,2)
             Positions of
+        S : array_like (Nbeams,Y,X,2)
+            Scattering matrix object
 
         Returns
         -------
         output : (N,Y,X,2) torch.array
             Exit surface wave functions
         """
-        from .utils.torch_utils import crop_window_to_flattened_indices_torch
         from copy import deepcopy
 
-        crop_ = [
-            torch.arange(
-                -self.stored_gridshape[i] // (2 * self.PRISM_factor[i]),
-                self.stored_gridshape[i] // (2 * self.PRISM_factor[i]),
-            )
-            for i in range(2)
-        ]
+        crop_ = self.PRISM_crop_window()
+
+        if Smat is None:
+            Smat = self.S
+        Sshape = Smat.shape
+
+        # Ensure posn and probes are pytorch arrays
+        probes = ensure_torch_array(probes, dtype=self.dtype, device=self.device)
+
+        # Ensure probes tensors correspond to the shape N x Y x X x 2
+        # If they have the shape Y x X x 2 then reshape to 1 x Y x X x 2
+        if probes.ndim < 4:
+            probes = probes.view(1, *probes.shape)
 
         # Get number of probes
-        nprobes = probes.size(0)
+        nprobes = probes.shape[0]
 
+        if posn is None:
+            posn = torch.zeros(nprobes, 2, device=self.device, dtype=self.dtype)
+        else:
+            posn = torch.as_tensor(posn, device=self.device, dtype=self.dtype).view(
+                (nprobes, 2)
+            )
+
+        if scan_transform is not None:
+            posn = scan_transform(posn)
+
+        # TODO decide whether to remove the Fourier_space_output option
         if self.Fourier_space_output:
+
             # A note on normalization: an individual probe enters the STEM routine
             # with sum_squared intensity of 1, but the STEM routine applies an
             # FFT so the sum_squared intensity is now equal to # pixels
             # For a correct matrix multiplication we must now divide by sqrt(# pixels)
             probe_vec = complex_matmul(
-                probes[:, self.beams[:, 0], self.beams[:, 1]], self.S
+                probes[:, self.beams[0], self.beams[1]], Smat
             ) / np.sqrt(np.prod(self.gridshape))
 
             # Now reshape output from vectors to square arrays
@@ -1161,7 +1261,7 @@ class scattering_matrix:
             return probes
         else:
             # Flatten the array dimensions
-            flattened_shape = [self.S.size(-3) * self.S.size(-2), 2]
+            flattened_shape = [Smat.size(-3) * Smat.size(-2), 2]
             output = torch.zeros(
                 probes.size(0), *flattened_shape, dtype=self.dtype, device=self.device
             )
@@ -1174,20 +1274,315 @@ class scattering_matrix:
                     [
                         (
                             crop_[i]
-                            + (posn[k, i] * self.stored_gridshape[i]).type(
-                                torch.LongTensor
-                            )
+                            + (posn[k, i] * Sshape[-3 + i]).type(torch.LongTensor)
                         )
-                        % self.stored_gridshape[i]
+                        % Sshape[-3 + i]
                         for i in range(2)
                     ],
-                    self.stored_gridshape,
+                    Sshape[-3:-1],
                 )
 
-                output[k, window] = complex_matmul(
-                    probes[k, self.beams[:, 0], self.beams[:, 1]],
-                    self.S.view(self.nbeams, *flattened_shape)[:, window],
+                output[k, window] += complex_matmul(
+                    probes[k, self.beams[0], self.beams[1]],
+                    Smat.view(self.nbeams, *flattened_shape)[:, window],
                 ) / np.sqrt(np.prod(probes.size()[-3:-1]))
-            output = output.reshape(probes.size(0), *self.S.size()[-3:])
+
+                # output[k,window] = 1
+
+            output = cx_from_numpy(
+                crop(
+                    cx_to_numpy(output.reshape(probes.size(0), *Smat.size()[-3:])),
+                    self.stored_gridshape,
+                )
+            )
 
             return torch.fft(output, signal_ndim=2)
+
+    def STEM_with_GPU_streaming(
+        self,
+        detectors=None,
+        FourD_STEM=None,
+        datacube=None,
+        STEM_image=None,
+        nstreams=None,
+        df=0,
+        aberrations=[],
+        ROI=[0.0, 0.0, 1.0, 1.0],
+        device=None,
+        scan_posns=None,
+        showProgress=True,
+    ):
+        """
+        Perform STEM with scattering matrix streamed between RAM and GPU memory.
+
+        This allows much larger fields of view to be calculated with relatively
+        modest graphics card memory. The STEM raster is segmented into spatially
+        close clusters and the probe positions in these clusters are processed
+        sequentially, with the relevant part of the scattering matrix streamed
+        from CPU to GPU memory.
+
+        Keyword arguement
+        ----------
+        detectors : (Ndet, Y, X) array_like, optional
+            Diffraction plane detectors to perform conventional STEM imaging. If
+            None is passed then no conventional STEM images will be returned.
+        fourD_STEM : bool or array_like, optional
+            Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
+            space a tuple containing pixel size and diffraction space extent of the
+            datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
+            diffraction patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
+            Angstroms.
+        datacube :  (Ny, Nx, Y, X) array_like, optional
+            datacube for 4D-STEM output, if None is passed (default) this will be
+            initialized in the function. If a datacube is passed then the result
+            will be added by the STEM routine (useful for multiple frozen phonon
+            iterations)
+        STEM_image : (Ndet,Ny,Nx) array_like, optional
+            Array that will contain the conventional STEM images, if not passed
+            will be initialized within the function. If it is passed then the result
+            will be accumulated within the function, which is useful for multiple
+            frozen phonon iterations.
+        nstreams : int, optional
+            Number of streams (seperate transfers from CPU to GPU memory). If
+            None this will just be set to the product of the PRISM interpolation
+            factor
+        df : float, optional
+            Defocus in Angstrom
+        aberrations : list, optional
+            A list containing a set of the class aberration, pass an empty list for
+            an unaberrated contrast transfer function.
+        ROI : (4,) array_like
+            Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
+            where [x0,y0] and [x1,y1] are the bottom left and top right coordinates
+            of the region of interest (ROI) expressed as a fraction of the total
+            grid (or unit cell).
+        device : torch.device, optional
+            torch.device object which will determine which device (CPU or GPU) the
+            calculations will run on.
+        scan_posn :  (...,2) array_like, optional
+            Array containing the STEM scan positions in fractional coordinates.
+            If provided scan_posn.shape[:-1] will give the shape of the STEM
+            image.
+        showProgress : bool, optional
+            Pass showProgress=False to disable progress bar.
+        """
+        device = get_device(device)
+
+        # Get indices of PRISM cropping window
+        crop_ = [x.cpu().numpy() for x in self.PRISM_crop_window()]
+
+        # Make the STEM probe
+        probe = focused_probe(
+            self.gridshape,
+            self.rsize[:2],
+            self.eV,
+            self.alpha_,
+            df=df,
+            aberrations=aberrations,
+            app_units="invA",
+        )
+
+        # Make scan positions if none already provided
+        if scan_posns is None:
+            scan_posns = generate_STEM_raster(
+                self.rsize, self.eV, self.alpha_, tiling=self.tiling, ROI=ROI, invA=True
+            )
+        # Get scan (and STEM image) array shape and total number of scan positions
+        scan_shape = scan_posns.shape[:-1]
+        nscan = np.product(scan_shape)
+
+        # Flatten scan positions to simplify iteration later on.
+        scan_posns = scan_posns.reshape((nscan, 2))
+
+        # Calculate default 4D-STEM diffraction pattern sampling
+        if FourD_STEM is True:
+            GS = self.stored_gridshape
+            FourD_STEM = [GS, GS / self.rsize[:2]]
+
+        # Allocate diffraction pattern and STEM images if not already provided
+        if (datacube is None) and FourD_STEM:
+            gridout, resize = workout_4DSTEM_datacube_DP_size(
+                FourD_STEM, self.rsize, self.gridshape
+            )
+            datacube = np.zeros((nscan, *gridout))
+        if not FourD_STEM:
+            datacube = None
+
+        # If detectors are provided then we are doing conventional STEM
+        doConventionalSTEM = detectors is not None
+
+        # Initialize STEM images if not provided
+        if doConventionalSTEM:
+            ndet = detectors.shape[0]
+            if STEM_image is None:
+                STEM_image = np.zeros((ndet, nscan))
+        else:
+            STEM_image = None
+
+        if nstreams is None:
+            # If the number of seperate streams is not suggested by the
+            # user, make this equal to the product of the PRISM factor
+            nstreams = int(np.product(self.PRISM_factor))
+
+        # Divide up the scan positions into clusters based on Euclidean
+        # distance
+        from sklearn.cluster import Birch
+
+        model = Birch(threshold=0.01, n_clusters=nstreams)
+        yhat = model.fit_predict(scan_posns)
+        clusters = np.unique(yhat)
+
+        # Now do STEM with each of the scan position clusters, streaming
+        # only the necessary bits of the scattering matrix to the GPU.
+        Datacube_segment = None
+        STEM_image_segment = None
+        FlatS = self.S.reshape((self.nbeams, np.prod(self.stored_gridshape), 2))
+        # import matplotlib.pyplot as plt
+        # fig, ax = plt.subplots()
+        # ax.set_axis_off()
+        # ax.imshow(self.S[0, ..., 0].cpu().numpy())
+        # colors = ['r','w','b','orange']
+        # for c,cluster in zip(colors,clusters):
+        #     points = np.nonzero(yhat == cluster)
+        #     pix_posn = scan_posns[points]*np.asarray(self.stored_gridshape)
+        #     ax.plot(pix_posn[:,1], pix_posn[:,0], marker='o',lw=0.0,
+        # markersize=1.0,color=c)
+        # Loop over probe positions clusters. This would be a good candidate
+        # for multi-GPU work.
+        for cluster in clusters:
+            # for c,cluster in zip(colors,clusters):
+
+            # Get map of probe positions in cluster
+            points = np.nonzero(yhat == cluster)
+            # import matplotlib.pyplot as plt
+
+            # Get segments of images to update
+            if doConventionalSTEM:
+                STEM_image_segment = STEM_image[:, points]
+            if FourD_STEM:
+                Datacube_segment = datacube[points]
+            # print(crop_)
+            pix_posn = scan_posns[points] * np.asarray(self.stored_gridshape)
+
+            # Work out bounds of the rectangular region of the scattering
+            # matrix to stream to the GPU
+            ymin, ymax = [
+                int(np.floor(np.amin(pix_posn[:, 0]) + crop_[0][0])),
+                int(np.ceil(np.amax(pix_posn[:, 0]) + crop_[0][-1])),
+            ]
+            xmin, xmax = [
+                int(np.floor(np.amin(pix_posn[:, 1]) + crop_[1][0])),
+                int(np.ceil(np.amax(pix_posn[:, 1]) + crop_[1][-1])),
+            ]
+            # print(xmin,xmax,ymin,ymax)
+            size = np.asarray([(ymax - ymin), (xmax - xmin)])
+
+            # from matplotlib.patches import Rectangle
+
+            # ax.add_patch(
+            #     Rectangle(
+            #         [xmin, ymin],
+            #         *[xmax - xmin, ymax - ymin],
+            #         edgecolor=c,
+            #         linewidth=2.0,
+            #         linestyle='--',
+            #         facecolor=None,
+            #         fill = False,
+            #     )
+            # )
+            # ax.add_patch(
+            #     Rectangle(
+            #         [xmin, ymin+self.gridshape[0]],
+            #         *[xmax - xmin, ymax - ymin],
+            #         edgecolor=c,
+            #         linewidth=2.0,
+            #         linestyle='--',
+            #         facecolor=None,
+            #         fill = False,
+            #     )
+            # )
+            # ax.add_patch(
+            #     Rectangle(
+            #         [xmin, ymin+self.gridshape[0]],
+            #         *[xmax - xmin, ymax - ymin],
+            #         edgecolor=c,
+            #         linewidth=2.0,
+            #         linestyle='--',
+            #         facecolor=None,
+            #         fill = False,
+            #     )
+            # )
+            # ax.add_patch(
+            #     Rectangle(
+            #         [xmin+self.gridshape[1], ymin+self.gridshape[0]],
+            #         *[xmax - xmin, ymax - ymin],
+            #         edgecolor=c,
+            #         linewidth=2.0,
+            #         linestyle='--',
+            #         facecolor=None,
+            #         fill = False,
+            #     )
+            # )
+
+            # Get indices of region of scattering matrix to stream to GPU
+            window = [np.arange(a, b) for a, b in zip([ymin, xmin], [ymax, xmax])]
+            indices = crop_window_to_flattened_indices_torch(
+                window, self.stored_gridshape
+            )
+
+            # Get segment of the scattering matrix to stream to GPU
+            segmentshape = [len(x) for x in window]
+            SegmentS = FlatS[:, indices, :].reshape((self.nbeams, *segmentshape, 2))
+
+            # Define a function that will map probe positions for the global
+            # scattering matrix to their correct place on the smaller scattering
+            # matrix streamed to the GPU.
+            gshape = (
+                torch.as_tensor(self.stored_gridshape).to(self.device).type(self.dtype)
+            )
+            Origin = torch.as_tensor([ymin, xmin]).to(self.device).type(self.dtype)
+            segment_size = torch.as_tensor(size).to(self.device).type(self.dtype)
+
+            def scan_transform(posn):
+                return (posn * gshape - Origin) / segment_size
+
+            # Keyword arguments to be passed to the __call__ function by the
+            # STEM routine
+            kwargs = {"Smat": SegmentS.to(device), "scan_transform": scan_transform}
+
+            # Calculate STEM images
+            STEM(
+                self.rsize,
+                probe,
+                self.__call__,
+                [1],
+                self.eV,
+                self.alpha_,
+                detectors=detectors,
+                FourD_STEM=FourD_STEM,
+                datacube=Datacube_segment,
+                scan_posn=scan_posns[points],
+                STEM_image=STEM_image_segment,
+                method_kwargs=kwargs,
+                showProgress=showProgress,
+                device=device,
+            )
+
+            if doConventionalSTEM:
+                STEM_image[:, points] += STEM_image_segment
+            if FourD_STEM:
+                datacube[points] += Datacube_segment
+        # plt.show(block=True)
+
+        # Unflatten 4D-STEM datacube scan dimensions, use numpy squeeze to
+        # remove superfluous dimensions (ones with length 1)
+        if FourD_STEM:
+            datacube = datacube.reshape(*scan_shape, *datacube.shape[-2:])
+
+        if doConventionalSTEM:
+            STEM_image = np.squeeze(STEM_image.reshape(ndet, *scan_shape))
+
+        # Return STEM images and datacube as a dictionary. If either of these
+        # objects were not calculated the dictionary will contain None for those
+        # entries.
+        return {"STEM images": STEM_image, "datacube": datacube}

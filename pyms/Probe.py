@@ -45,8 +45,10 @@ class aberration:
     def __str__(self):
         """Return a string describing the aberration."""
         if self.m > 0:
-            return """ {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5 \u03B8 =
-                {4:4d}\u00B0""".format(
+            return (
+                "{0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5 \u03B8 = "
+                + "{4:4d}\u00B0 "
+            ).format(
                 self.Description,
                 self.Haider,
                 self.Krivanek,
@@ -57,29 +59,6 @@ class aberration:
             return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5".format(
                 self.Description, self.Haider, self.Krivanek, self.amplitude
             )
-
-
-def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
-    """
-    Calculate nyquist sampling (typically for minimum sampling of a STEM probe).
-
-    If array size in units of length is passed then return how many probe
-    positions are required otherwise just return the sampling. Alternatively
-    pass probe accelerating voltage (eV) in electron-volts and probe forming
-    aperture (alpha) in mrad and the resolution limit in inverse length will be
-    calculated for you.
-    """
-    if eV is None and alpha is None:
-        step_size = 1 / (4 * resolution_limit)
-    elif resolution_limit is None:
-        step_size = 1 / (4 * wavev(eV) * alpha * 1e-3)
-    else:
-        return None
-
-    if rsize is None:
-        return step_size
-    else:
-        return np.ceil(rsize / step_size).astype(np.int)
 
 
 def depth_of_field(eV, alpha):
@@ -136,10 +115,11 @@ def chi(q, qphi, lam, df=0.0, aberrations=[]):
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated contrast transfer function.
     """
-    chi_ = (q * lam) ** 2 / 2 * df
+    qlam = q * lam
+    chi_ = qlam ** 2 / 2 * df
     for ab in aberrations:
         chi_ += (
-            (q * lam) ** (ab.n + 1)
+            qlam ** (ab.n + 1)
             * float(ab.amplitude)
             / (ab.n + 1)
             * np.cos(ab.m * (qphi - float(ab.angle)))
@@ -213,9 +193,8 @@ def make_contrast_transfer_function(
     )
 
     # qarray2 accounts for a shift of both the optic axis and the aperture
-    qarray2 = np.sqrt(
-        np.square(q[0] - optic_axis_[0] - aperture_shift_[0])
-        + np.square(q[1] - optic_axis_[1] - aperture_shift_[1])
+    qarray2 = np.square(q[0] - optic_axis_[0] - aperture_shift_[0]) + np.square(
+        q[1] - optic_axis_[1] - aperture_shift_[1]
     )
 
     # Calculate azimuth of reciprocal space array in case it is required for
@@ -223,7 +202,7 @@ def make_contrast_transfer_function(
     qphi = np.arctan2(q[0] - optic_axis_[0], q[1] - optic_axis_[1])
 
     # Only calculate CTF for region within the aperture
-    mask = qarray2 < app_
+    mask = qarray2 <= app_ ** 2
     CTF[mask] = np.exp(-1j * chi(qarray1[mask], qphi[mask], 1.0 / k, df, aberrations))
     return CTF
 
@@ -297,7 +276,7 @@ def focused_probe(
 
     # Return real or diffraction space probe depending on user preference
     if qspace:
-        return probe
+        return probe * np.sqrt(np.prod(gridshape))
     else:
         return np.fft.ifft2(probe, norm="ortho")
 

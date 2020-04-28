@@ -77,6 +77,7 @@ def STEM_PRISM(
     stored_gridshape=None,
     S=None,
     nT=5,
+    GPU_streaming=True,
 ):
     """
     Perform a STEM simulation using the PRISM algorithm.
@@ -160,6 +161,10 @@ def STEM_PRISM(
     nT : int, optional
         Number of transmission functions generated to and then selected from
         in the frozen phonon algorithm
+    GPU_streaming : bool
+        Choose whether to use GPU streaming or not for the scattering matrix,
+        providing a scattering matrix to the routine will override whatever is
+        selected for this option
     """
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -176,15 +181,11 @@ def STEM_PRISM(
     else:
         nfph_ = nfph
 
-    # Make the STEM probe
-    probe = focused_probe(
-        gridshape, real_dim[:2], eV, app, df=df, aberrations=aberrations
-    )
-
     Fourier_space_output = np.all([x == 1 for x in PRISM_factor])
 
     # Make STEM detectors
     maxq = 0
+    STEM_images = None
     if detector_ranges is None:
         D = None
     else:
@@ -231,7 +232,6 @@ def STEM_PRISM(
         # Option to provide a precomputed scattering matrix (S), however if
         # none is given then we make our own
         if not S_provided:
-            print(structure, gridshape, eV, subslices, tiling, nT, device)
             # Make propagators and transmission functions for multslice
             P, T = multislice_precursor(
                 structure,
@@ -260,34 +260,45 @@ def STEM_PRISM(
                 device=device,
                 stored_gridshape=maxpix,
                 Fourier_space_output=Fourier_space_output,
+                GPU_streaming=GPU_streaming,
             )
+        if S.GPU_streaming:
+            result = S.STEM_with_GPU_streaming(
+                detectors=D,
+                FourD_STEM=FourD_STEM,
+                datacube=datacube,
+                STEM_image=STEM_images,
+                df=df,
+                aberrations=aberrations,
+                scan_posns=scan_posn,
+                showProgress=showProgress,
+            )
+        else:
+            # Make the STEM probe
+            probe = focused_probe(
+                gridshape, real_dim[:2], eV, app, df=df, aberrations=aberrations
+            )
+            result = STEM(
+                S.rsize,
+                probe,
+                S,
+                [1],
+                S.eV,
+                app,
+                batch_size=batch_size,
+                detectors=D,
+                FourD_STEM=FourD_STEM,
+                datacube=datacube,
+                scan_posn=scan_posn,
+                device=S.device,
+                tiling=S.tiling,
+                showProgress=showProgress,
+                STEM_image=STEM_images,
+            )
+        datacube = result["datacube"]
+        STEM_images = result["STEM images"]
 
-        result = STEM(
-            S.rsize,
-            probe,
-            S,
-            [1],
-            S.eV,
-            app,
-            batch_size=batch_size,
-            detectors=D,
-            FourD_STEM=FourD_STEM,
-            datacube=datacube,
-            scan_posn=scan_posn,
-            device=S.device,
-            tiling=S.tiling,
-            showProgress=showProgress,
-        )
-
-        # Retrieve results from STEM routine
-        if (D is not None) and FourD_STEM:
-            STEM_images, datacube = result
-        elif D is not None:
-            STEM_images = result[0]
-        elif FourD_STEM:
-            datacube = result[0]
-
-    return [i / nfph for i in [STEM_images, datacube] if i is not None]
+    return {"STEM images": STEM_images, "datacube": datacube}
 
 
 def STEM_multislice(
@@ -477,6 +488,8 @@ def multislice_precursor(
     showProgress=True,
     displacements=True,
     fractional_occupancy=True,
+    seed=None,
+    band_width_limiting=[2 / 3, 2 / 3],
 ):
     """
     Make transmission functions and propagators for the multislice algorithm.
@@ -518,6 +531,10 @@ def multislice_precursor(
         Pass False to disable thermal vibration of the atoms
     fractional_occupancy : bool, optional
         Pass False to fractional occupancy of atomic sites
+    bandwidth_limiting : (2,) array_like, optional
+        The bandwidth limiting scheme. The propagator and transmission functions
+        will be bandwidth limited up to the fraction given by the first and
+        second entries of band_width_limiting respectively
     """
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
@@ -533,10 +550,17 @@ def multislice_precursor(
             subslices[:1],
             tilt=specimen_tilt,
             tilt_units=tilt_units,
+            bandwidth_limit=band_width_limiting[0],
         )[0]
     else:
         P = make_propagators(
-            gridshape, rsize, eV, subslices, tilt=specimen_tilt, tilt_units=tilt_units
+            gridshape,
+            rsize,
+            eV,
+            subslices,
+            tilt=specimen_tilt,
+            tilt_units=tilt_units,
+            bandwidth_limit=band_width_limiting[0],
         )
 
     T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
@@ -553,6 +577,8 @@ def multislice_precursor(
             dtype=dtype,
             displacements=displacements,
             fractional_occupancy=fractional_occupancy,
+            seed=seed,
+            bandwidth_limit=band_width_limiting[0],
         )
 
     return P, T
@@ -756,6 +782,10 @@ def CBED(
     tilt_units="mrad",
     aberrations=[],
     probe_posn=None,
+    nslices=None,
+    P=None,
+    T=None,
+    seed=None,
 ):
     """
     Perform a convergent-beam electron diffraction (CBED) simulation.
@@ -815,29 +845,40 @@ def CBED(
         Probe position as a fraction of the unit-cell, by default the probe will
         be in the upper-left corner of the simulation grid. This is the [0,0]
         coordinate.
+    P : (n,Y,X) array_like, optional
+        Precomputed Fresnel free-space propagators
+    T : (n,Y,X) array_like
+        Precomputed transmission functions
+    seed : int
+        Seed for random number generator for generating transmission functions
+        and frozen phonon passes. Useful for testing purposes
     """
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
     # Make propagators and transmission functions for multslice
-    P, T = multislice_precursor(
-        structure,
-        gridshape,
-        eV,
-        subslices=subslices,
-        tiling=tiling,
-        nT=nT,
-        device=device,
-        showProgress=showProgress,
-        specimen_tilt=specimen_tilt,
-        tilt_units=tilt_units,
-    )
+    if P is None and T is None:
+        P, T = multislice_precursor(
+            structure,
+            gridshape,
+            eV,
+            subslices=subslices,
+            tiling=tiling,
+            dtype=dtype,
+            nT=nT,
+            device=device,
+            showProgress=showProgress,
+            specimen_tilt=specimen_tilt,
+            tilt_units=tilt_units,
+            seed=seed,
+        )
 
-    t_ = ensure_array(thicknesses)
+    t_ = np.asarray(ensure_array(thicknesses))
 
     output = np.zeros((t_.shape[0], *size_of_bandwidth_limited_array(gridshape)))
 
-    nslices = np.asarray(np.ceil(t_ / structure.unitcell[2]), dtype=np.int)
+    if nslices is None:
+        nslices = np.asarray(np.ceil(t_ / structure.unitcell[2]), dtype=np.int)
 
     # Iteration over frozen phonon configurations
     for ifph in tqdm.tqdm(
@@ -877,7 +918,9 @@ def CBED(
                 qspace_in=True,
                 qspace_out=True,
                 device_type=device,
+                seed=seed,
             )
+
             output[it] += np.abs(np.fft.fftshift(crop_to_bandwidth_limit(probe))) ** 2
 
     # Divide output by # of pixels to compensate for Fourier transform

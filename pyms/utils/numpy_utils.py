@@ -23,14 +23,15 @@ def q_space_array(pixels, gridsize):
     gridsize : (2,) array_like
         Dimensions of the array in real space units
     """
-    return np.meshgrid(
-        *[np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [1, 0]]
-    )[::-1]
+    qspace = [np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [0, 1]]
+    return [
+        np.broadcast_to(q, pixels) for q in [qspace[0][:, None], qspace[1][None, :]]
+    ]
 
 
 def crop_window_to_flattened_indices(indices, shape):
     """Map  y and x indices describing a cropping window to a flattened 1d array."""
-    return (indices[-1][np.newaxis, :] + indices[-2][:, np.newaxis] * shape[-1]).ravel()
+    return (indices[-1][None, :] + indices[-2][:, None] * shape[-1]).ravel()
 
 
 def crop_to_bandwidth_limit(array, limit=2 / 3):
@@ -63,6 +64,10 @@ def crop_to_bandwidth_limit(array, limit=2 / 3):
 
 def bandwidth_limit_array(arrayin, limit=2 / 3):
     """Band-width limit an array to fraction of its maximum given by limit."""
+    # Case where band-width limiting has been turned off
+    if limit is None:
+        return arrayin
+
     array = copy.deepcopy(arrayin)
     if isinstance(array, np.ndarray):
         pixelsize = array.shape[:2]
