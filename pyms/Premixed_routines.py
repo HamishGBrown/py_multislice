@@ -421,6 +421,7 @@ def STEM_multislice(
     }
 
     datacube = None
+    STEM_images = None
 
     for i in tqdm.tqdm(
         range(nfph), desc="Frozen phonon iteration", disable=not showProgress
@@ -462,16 +463,15 @@ def STEM_multislice(
             datacube=datacube,
             STEM_image=STEM_images,
         )
+        datacube = result["datacube"]
+        STEM_images = result["STEM images"]
 
-        # Retrieve results from STEM routine
-        if (D is not None) and FourD_STEM:
-            STEM_images, datacube = result
-        elif D is not None:
-            STEM_images = result[0]
-        elif FourD_STEM:
-            datacube = result[0]
+    if datacube is not None:
+        datacube /= nfph
+    if STEM_images is not None:
+        STEM_images /= nfph
 
-    return [i / nfph for i in [STEM_images, datacube] if i is not None]
+    return {"STEM images": STEM_images, "datacube": datacube}
 
 
 def multislice_precursor(

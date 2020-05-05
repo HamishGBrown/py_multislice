@@ -94,6 +94,7 @@ def torch_c_exp(angle):
     else:
         # Case of a complex valued exponent
         exp = torch.exp(-angle[im])
+        result = torch.zeros(*angle.shape, dtype=angle.dtype, device=angle.device)
         result[re] = exp * torch.cos(angle[re])
         result[im] = exp * torch.sin(angle[re])
     return result
@@ -105,20 +106,22 @@ def sinc(x):
     return torch.sin(np.pi * y) / np.pi / y
 
 
-def ensure_torch_array(array, dtype=torch.float, device=torch.device("cpu")):
+def ensure_torch_array(array, dtype=torch.float, device=None):
     """
     Ensure that the input array is a pytorch tensor.
 
     Converts to a pytorch array if input is a numpy array and do nothing if the
     input is a pytorch tensor
     """
+    if device is None:
+        device = get_device(device)
     if not isinstance(array, torch.Tensor):
         if np.iscomplexobj(array):
             return cx_from_numpy(array, dtype=dtype, device=device)
         else:
             return torch.from_numpy(array).type(dtype).to(device)
     else:
-        return array
+        return array.to(device)
 
 
 def modulus_square(r):
@@ -481,3 +484,50 @@ def fourier_interpolate_2d_torch(
     if inputComplex:
         return aout
     return aout[re]
+
+
+def crop_torch(arrayin, shapeout):
+    """
+    Crop the last two dimensions of arrayin to grid size shapeout.
+
+    For entries of shapeout which are larger than the shape of the input array,
+    perform zero-padding.
+    """
+    C = iscomplex(arrayin)
+
+    # Number of dimensions in input array
+    ndim = arrayin.ndim
+
+    # Number of dimensions not covered by shapeout (ie not to be cropped)
+    nUntouched = ndim - 2 - C
+
+    # Shape of output array
+    shapeout_ = arrayin.shape[:nUntouched] + tuple(shapeout)
+    if C:
+        shapeout_ += (2,)
+
+    arrayout = torch.zeros(shapeout_, dtype=arrayin.dtype, device=arrayin.device)
+
+    y, x = arrayin.shape[-2 - C :][:2]
+    y_, x_ = shapeout[-2:]
+
+    def indices(y, y_):
+        if y > y_:
+            # Crop in y dimension
+            y1, y2 = [(y - y_) // 2, (y + y_) // 2]
+            y1_, y2_ = [0, y_]
+        else:
+            # Zero pad in y dimension
+            y1, y2 = [0, y]
+            y1_, y2_ = [(y_ - y) // 2, (y + y_) // 2]
+        return y1, y2, y1_, y2_
+
+    y1, y2, y1_, y2_ = indices(y, y_)
+    x1, x2, x1_, x2_ = indices(x, x_)
+
+    if C:
+        arrayout[..., y1_:y2_, x1_:x2_, :] = arrayin[..., y1:y2, x1:x2, :]
+    else:
+        arrayout[..., y1_:y2_, x1_:x2_] = arrayin[..., y1:y2, x1:x2]
+
+    return arrayout

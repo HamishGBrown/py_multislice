@@ -23,6 +23,7 @@ from .utils.torch_utils import (
     size_of_bandwidth_limited_array,
     fourier_interpolate_2d_torch,
     crop_window_to_flattened_indices_torch,
+    crop_torch,
 )
 
 
@@ -307,6 +308,7 @@ def multislice(
     return psi
 
 
+# TODO make detectors binary for use with numpy and pytorch sum routines
 def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     """
     Make a STEM detector with acceptance angle between betamin and betamax.
@@ -477,7 +479,7 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
             # diffraction patterns
             def resize(array):
                 cropped = crop(np.fft.fftshift(array, axes=(-1, -2)), diff_pat_crop)
-                return fourier_interpolate_2d(cropped, gridout)
+                return fourier_interpolate_2d(cropped, gridout, norm="conserve_L1")
 
         else:
             # Define resampling function to just crop diffraction
@@ -510,7 +512,7 @@ def STEM(
     datacube=None,
     scan_posn=None,
     dtype=torch.float32,
-    device=torch.device("cpu"),
+    device=None,
     tiling=[1, 1],
     seed=None,
     showProgress=True,
@@ -594,8 +596,14 @@ def STEM(
     # Get number of thicknesses in the series
     nthick = len(nslices)
 
+    if device is None:
+        device = get_device(device)
+
     # Get shape of grid
-    gridshape = probe.shape[-2:]
+    if torch.is_tensor(probe):
+        gridshape = probe.shape[-3:-1]
+    else:
+        gridshape = probe.shape[-2:]
 
     # Generate scan positions in units of pixels if not supplied
     if scan_posn is None:
@@ -748,7 +756,6 @@ def max_grid_resolution(gridshape, rsize, bandwidthlimit=2 / 3, eV=None):
     max_res = min([gridshape[x] / rsize[x] / 2 * bandwidthlimit for x in range(2)])
     if eV is None:
         return max_res
-    from .Probe import wavev
 
     return max_res / wavev(eV) * 1e3
 
@@ -765,7 +772,7 @@ class scattering_matrix:
         eV,
         alpha,
         GPU_streaming=False,
-        batch_size=1,
+        batch_size=30,
         device=None,
         PRISM_factor=[1, 1],
         tiling=[1, 1],
@@ -845,8 +852,6 @@ class scattering_matrix:
             space view than that implied by the multislice at no cost to
             computational accuracy.
         """
-        from .Probe import wavev
-
         # Get size of grid
         gridshape = transmission_functions.size()[-3:-1]
 
@@ -855,7 +860,9 @@ class scattering_matrix:
 
         # Device (CPU or GPU) is also inferred from transmission functions
         self.device = device
-        if self.device is None:
+        if GPU_streaming:
+            self.device = torch.device("cpu")
+        elif self.device is None:
             self.device = transmission_functions.device
 
         # Get alpha in units of inverse Angstrom
@@ -959,6 +966,7 @@ class scattering_matrix:
             transmission_functions,
             subslicing=subslicing,
             showProgress=self.show_Progress,
+            batch_size=batch_size,
         )
 
     def Propagate(
@@ -1152,8 +1160,9 @@ class scattering_matrix:
                 )
                 self.S[beams] = output
 
-    def PRISM_crop_window(self, win=None):
+    def PRISM_crop_window(self, win=None, device=None):
         """Calculate 2D array indices of STEM crop window."""
+        device = get_device(device)
         if win is None:
             win = self.PRISM_factor
 
@@ -1161,6 +1170,7 @@ class scattering_matrix:
             torch.arange(
                 -self.stored_gridshape[i] // (2 * win[i]),
                 self.stored_gridshape[i] // (2 * win[i]),
+                device=device,
             )
             for i in range(2)
         ]
@@ -1189,14 +1199,14 @@ class scattering_matrix:
         """
         from copy import deepcopy
 
-        crop_ = self.PRISM_crop_window()
-
         if Smat is None:
             Smat = self.S
         Sshape = Smat.shape
 
+        device = Smat.device
+        crop_ = self.PRISM_crop_window(device=device)
         # Ensure posn and probes are pytorch arrays
-        probes = ensure_torch_array(probes, dtype=self.dtype, device=self.device)
+        probes = ensure_torch_array(probes, dtype=self.dtype, device=device)
 
         # Ensure probes tensors correspond to the shape N x Y x X x 2
         # If they have the shape Y x X x 2 then reshape to 1 x Y x X x 2
@@ -1207,9 +1217,9 @@ class scattering_matrix:
         nprobes = probes.shape[0]
 
         if posn is None:
-            posn = torch.zeros(nprobes, 2, device=self.device, dtype=self.dtype)
+            posn = torch.zeros(nprobes, 2, device=device, dtype=self.dtype)
         else:
-            posn = torch.as_tensor(posn, device=self.device, dtype=self.dtype).view(
+            posn = torch.as_tensor(posn, device=device, dtype=self.dtype).view(
                 (nprobes, 2)
             )
 
@@ -1263,7 +1273,7 @@ class scattering_matrix:
             # Flatten the array dimensions
             flattened_shape = [Smat.size(-3) * Smat.size(-2), 2]
             output = torch.zeros(
-                probes.size(0), *flattened_shape, dtype=self.dtype, device=self.device
+                probes.size(0), *flattened_shape, dtype=self.dtype, device=Smat.device
             )
 
             # For evaluating the probes in real space we only want to perform the matrix
@@ -1287,13 +1297,8 @@ class scattering_matrix:
                     Smat.view(self.nbeams, *flattened_shape)[:, window],
                 ) / np.sqrt(np.prod(probes.size()[-3:-1]))
 
-                # output[k,window] = 1
-
-            output = cx_from_numpy(
-                crop(
-                    cx_to_numpy(output.reshape(probes.size(0), *Smat.size()[-3:])),
-                    self.stored_gridshape,
-                )
+            output = crop_torch(
+                output.reshape(probes.size(0), *Smat.size()[-3:]), self.stored_gridshape
             )
 
             return torch.fft(output, signal_ndim=2)
@@ -1381,6 +1386,7 @@ class scattering_matrix:
             aberrations=aberrations,
             app_units="invA",
         )
+        probe = cx_from_numpy(probe, device=device, dtype=self.dtype)
 
         # Make scan positions if none already provided
         if scan_posns is None:
@@ -1449,7 +1455,9 @@ class scattering_matrix:
         # markersize=1.0,color=c)
         # Loop over probe positions clusters. This would be a good candidate
         # for multi-GPU work.
-        for cluster in clusters:
+        for cluster in tqdm(
+            clusters, desc="Probe position clusters", disable=not showProgress
+        ):
             # for c,cluster in zip(colors,clusters):
 
             # Get map of probe positions in cluster
@@ -1537,11 +1545,9 @@ class scattering_matrix:
             # Define a function that will map probe positions for the global
             # scattering matrix to their correct place on the smaller scattering
             # matrix streamed to the GPU.
-            gshape = (
-                torch.as_tensor(self.stored_gridshape).to(self.device).type(self.dtype)
-            )
-            Origin = torch.as_tensor([ymin, xmin]).to(self.device).type(self.dtype)
-            segment_size = torch.as_tensor(size).to(self.device).type(self.dtype)
+            gshape = torch.as_tensor(self.stored_gridshape).to(device).type(self.dtype)
+            Origin = torch.as_tensor([ymin, xmin]).to(device).type(self.dtype)
+            segment_size = torch.as_tensor(size).to(device).type(self.dtype)
 
             def scan_transform(posn):
                 return (posn * gshape - Origin) / segment_size
@@ -1564,7 +1570,7 @@ class scattering_matrix:
                 scan_posn=scan_posns[points],
                 STEM_image=STEM_image_segment,
                 method_kwargs=kwargs,
-                showProgress=showProgress,
+                showProgress=False,
                 device=device,
             )
 

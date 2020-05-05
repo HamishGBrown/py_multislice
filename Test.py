@@ -13,7 +13,9 @@ scratch_cell_name = "test_cell.xyz"
 
 def sumsqr(array):
     """Calculate the sum of squares for a single array."""
-    return np.sum(np.square(array))
+    if torch.is_tensor(array):
+        return torch.sum(pyms.utils.amplitude(array))
+    return np.sum(np.square(np.abs(array)))
 
 
 def sumsqr_diff(array1, array2):
@@ -77,6 +79,33 @@ def make_temp_structure(atoms=None, title="scratch", ucell=None, seed=0):
 class Test_util_Methods(unittest.TestCase):
     """Test the utility functions for numpy and pytorch."""
 
+    def test_torch_complex_matmul(self):
+        """Test complex matmul against numpy complex matrix multiplication."""
+        k, m, n = 2, 3, 4
+        a = np.random.randint(-5, 5, size=k * m).reshape(
+            (k, m)
+        ) + 1j * np.random.randint(-5, 5, size=k * m).reshape((k, m))
+        b = np.random.randint(-5, 5, size=m * n).reshape(
+            (m, n)
+        ) + 1j * np.random.randint(-5, 5, size=m * n).reshape((m, n))
+
+        c = sumsqr_diff(
+            a @ b,
+            pyms.utils.cx_to_numpy(
+                pyms.utils.complex_matmul(
+                    *[pyms.utils.cx_from_numpy(x) for x in [a, b]]
+                )
+            ),
+        )
+        self.assertTrue(c < 1e-10)
+
+    def test_torch_complex_mul(self):
+        """Multiply 1 + i and 3 + 4i to give -1 + 7 i."""
+        a = torch.as_tensor([1, 1])
+        b = torch.as_tensor([3, 4])
+        c = pyms.utils.complex_mul(a, b)
+        self.assertTrue(float(sumsqr_diff(c, torch.as_tensor([-1, 7]))) < 1e-10)
+
     def test_numpy_fft_shift(self):
         """Test to see if fourier shift correctly shifts a pixel 2 to the right."""
         test_array = np.zeros((5, 5))
@@ -89,27 +118,53 @@ class Test_util_Methods(unittest.TestCase):
             and sumsqr_diff(shifted1, test_array) < 1e-10
         )
 
+    def test_torch_c_exp(self):
+        """Test exponential function by calculating e^{i pi} and e^{1 + i pi}."""
+        # Test e^{i pi} = -1
+        # Test complex input
+        arg = np.asarray(np.pi + 1j)
+        a = pyms.utils.torch_c_exp(pyms.utils.cx_from_numpy(arg))
+        passcomplex = (a.data[0] + 1 / np.exp(1.0)) ** 2 < 1e-10 and a.data[
+            1
+        ] ** 2 < 1e-10
+
+        # Test real input
+        arg = torch.as_tensor([np.pi])
+        a = pyms.utils.torch_c_exp(arg)
+        passreal = (a[0, 0] + 1) ** 2 < 1e-10
+        passtest = passreal and passcomplex
+        self.assertTrue(passtest.item())
+
     def test_crop(self):
         """Test cropping method on scipy test image."""
         # Get astonaut image
         from skimage.data import astronaut
 
-        img = np.sum(astronaut(), axis=2).astype(np.float32)
+        im = np.sum(astronaut(), axis=2).astype(np.float32)
 
-        # Check that normal cropping works
-        cropPass = (
-            sumsqr_diff(
-                pyms.utils.crop(img, [256, 256]), img[128 : 512 - 128, 128 : 512 - 128]
+        passTest = True
+
+        for c_func, img in zip(
+            [pyms.utils.crop, pyms.utils.crop_torch],
+            [im, torch.as_tensor(copy.deepcopy(im))],
+        ):
+            # Check that normal cropping works
+            cropPass = (
+                sumsqr_diff(
+                    c_func(img, [256, 256]), img[128 : 512 - 128, 128 : 512 - 128]
+                )
+                < 1e-10
             )
-            < 1e-10
-        )
+            passTest = passTest and cropPass
 
-        # If an output size larger than that of the input is requested then the
-        # input array should be padded instead, check that this is working too.
-        pad = pyms.utils.crop(img, [700, 700])
-        pad[350 - 256 : 350 + 256, 350 - 256 : 350 + 256] -= img
-        padPass = sumsqr(pad) < 1e-10
-        self.assertTrue(padPass and cropPass)
+            # If an output size larger than that of the input is requested then the
+            # input array should be padded instead, check that this is working too.
+            pad = c_func(img, [700, 700])
+            pad[350 - 256 : 350 + 256, 350 - 256 : 350 + 256] -= img
+            padPass = sumsqr(pad) < 1e-10
+            passTest = passTest and padPass
+
+        self.assertTrue(passTest)
 
     def test_fourier_interpolation(self):
         """Test fourier interpolation of a cosine function."""
@@ -131,7 +186,16 @@ class Test_util_Methods(unittest.TestCase):
             < 1e-10
         )
 
-        numpyVersionPass = passY and passX
+        # Test that the option 'conserve_norm' works too.
+        passNorm = (
+            np.sum(
+                pyms.utils.fourier_interpolate_2d(a, (8, 8), norm="conserve_L2") ** 2
+            )
+            - np.sum(a ** 2)
+            < 1e-10
+        )
+
+        numpyVersionPass = (passY and passX) and passNorm
 
         # test pytorch versions
         passY = (
@@ -149,7 +213,19 @@ class Test_util_Methods(unittest.TestCase):
             - 1 / np.sqrt(2)
             < 1e-10
         )
-        pytorchVersionPass = passY.item() and passX.item()
+
+        # Test that the option 'conserve_norm' works too.
+        passNorm = (
+            torch.sum(
+                pyms.utils.fourier_interpolate_2d_torch(
+                    pyms.utils.cx_from_numpy(a.T), (8, 8), correct_norm=False
+                )
+                ** 2
+            )
+            - torch.sum(pyms.utils.cx_from_numpy(a) ** 2)
+            < 1e-10
+        )
+        pytorchVersionPass = passY.item() and passX.item() and passNorm.item()
 
         self.assertTrue(pytorchVersionPass and numpyVersionPass)
 
@@ -441,6 +517,43 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
         self.assertTrue(nyquistpass and probe_scanpass)
 
+    def test_diffraction_pattern_resize(self):
+        """Test the method for resizing diffraction patterns."""
+        from skimage.data import astronaut
+
+        im = np.fft.fftshift(np.sum(astronaut(), axis=2).astype(np.float32))
+        im /= np.sum(im)
+        # Assume that the original pattern measures 1 x 1 inverse Angstroms and is
+        # 512 x 512 (size of astronaut image)
+        rsize = im.shape
+        gridshape = im.shape
+        # Check cropping only
+        FourD_STEM = [[256, 256]]
+        gridout, resize = pyms.workout_4DSTEM_datacube_DP_size(
+            FourD_STEM, rsize, gridshape
+        )
+
+        imout1 = resize(im)
+
+        # imout1 should just be im cropped by factor of two
+        passtest = (
+            sumsqr_diff(pyms.utils.crop(np.fft.ifftshift(im), FourD_STEM[0]), imout1)
+            < 1e-10
+        )
+
+        # Check cropping  and interpolation
+        FourD_STEM = [[512, 512], [1.5, 1.5]]
+
+        gridout, resize = pyms.workout_4DSTEM_datacube_DP_size(
+            FourD_STEM, rsize, gridshape
+        )
+
+        imout2 = resize(im)
+
+        # Make sure that imout2 has the same normalisation as bfore
+        passtest = sumsqr_diff(np.sum(imout2), np.sum(im)) < 1e-10 and passtest
+        self.assertTrue(passtest)
+
     def test_Smatrix(self):
         """
         Testing scattering matrix and PRISM algorithms.
@@ -581,7 +694,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         )
 
         probe = torch.squeeze(probe).flatten(0, 1)
-        new = torch.zeros(np.prod(gridout), 2, dtype=S.dtype, device=S.device)
+        new = torch.zeros(np.prod(gridout), 2, dtype=S.dtype, device=probe.device)
         new[window] = probe[window]
         probe = new.reshape(*gridout, 2)
         probe = torch.fft(probe, signal_ndim=2) / np.sqrt(np.prod(gridout))
@@ -606,6 +719,16 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
 
 if __name__ == "__main__":
+
+    # import matplotlib.pyplot as plt
+
+    # fig,ax = plt.subplots(nrows=3)
+    # ax[0].imshow(np.fft.fftshift(im))
+    # ax[1].imshow(imout1)
+    # ax[2].imshow(imout2)
+    # print([np.sum(x) for x in [im,imout1,imout2]])
+    # plt.show(block=True)
+    # sys.exit()
     unittest.main()
     clean_temp_structure()
     # sys.exit()

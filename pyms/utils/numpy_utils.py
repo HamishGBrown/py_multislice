@@ -161,13 +161,23 @@ def colorize(z):
     return c
 
 
-def fourier_interpolate_2d(ain, shapeout):
+def fourier_interpolate_2d(ain, shapeout, norm="conserve_val"):
     """
     Perfom fourier interpolation on array ain so that its shape matches shapeout.
 
-    Arguments:
-    ain      -- Input numpy array
-    shapeout -- Shape of output array
+    Arguments
+    ---------
+    ain      -- array_like
+        Input numpy array
+    shapeout -- int (2,) , array_like
+        Shape of output array
+
+    Keyword arguments
+    -----------------
+    norm     -- str
+        Normalization of output. If 'conserve_val' then array values are preserved
+        if 'conserve_norm' L2 norm is conserved under interpolation and if
+        'conserve_L1' L1 norm is conserved under interpolation
     """
     # Import required FFT functions
     from numpy.fft import fft2, ifft2
@@ -186,7 +196,13 @@ def fourier_interpolate_2d(ain, shapeout):
     aout[..., maskout] = fft2(np.asarray(ain, dtype=np.complex))[..., maskin]
 
     # Fourier transform result with appropriate normalization
-    aout = ifft2(aout) * (1.0 * np.prod(shapeout) / np.prod(np.shape(ain)[-2:]))
+    if norm == "conserve_val":
+        aout = ifft2(aout) * (np.prod(shapeout) / np.prod(np.shape(ain)[-2:]))
+    elif norm == "conserve_norm":
+        aout = ifft2(aout) * np.sqrt(np.prod(shapeout) / np.prod(np.shape(ain)[-2:]))
+    else:
+        aout = ifft2(aout)
+
     # Return correct array data type
     if (
         str(ain.dtype) in ["float64", "float32", "float", "f"]
