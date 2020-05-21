@@ -308,6 +308,43 @@ def multislice(
     return psi
 
 
+def STEM_phase_contrast_transfer_function(probe, detector):
+    """
+    Calculate the STEM phase contrast transfer function.
+
+    For a thin and weakly scattering sample convolution with the STEM contrast
+    transfer function gives a good approximate for STEM image contrast.
+
+    Parameters
+    ----------
+    probe : complex, (Y,X) array_like
+        The STEM probe in reciprocal space
+    detector : real, (Y,X) array_like
+        The STEM detector
+
+    Returns
+    -------
+    PCTF : complex (Y,X) np.ndarray
+        The phase contrast transfer function
+    """
+    from .utils import convolve
+
+    norm = np.sum(np.square(np.abs(probe)))
+    # Use two ffts to perform reflection k -> -k
+    PCTF = (
+        convolve(
+            probe,
+            np.fft.fft2(
+                np.fft.fft2(np.conj(probe) * detector, norm="ortho"), norm="ortho"
+            ),
+        )
+        / norm
+    )
+    PCTF -= np.conj(np.fft.fft2(np.fft.fft2(PCTF, norm="ortho"), norm="ortho"))
+
+    return -2 * np.imag(PCTF)
+
+
 # TODO make detectors binary for use with numpy and pytorch sum routines
 def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     """
@@ -468,12 +505,12 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
 
         if len(FourD_STEM) > 1:
             # Get output grid and diffraction space size of that grid from tuple
-            sizeout = FourD_STEM[1]
+            Ksize = FourD_STEM[1]
 
             #
-            diff_pat_crop = np.round(
-                np.asarray(sizeout) * np.asarray(rsize[:2])
-            ).astype(np.int)
+            diff_pat_crop = np.round(np.asarray(Ksize) * np.asarray(rsize[:2])).astype(
+                np.int
+            )
 
             # Define resampling function to crop and interpolate
             # diffraction patterns
@@ -482,6 +519,9 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
                 return fourier_interpolate_2d(cropped, gridout, norm="conserve_L1")
 
         else:
+            # The size in inverse Angstrom of the grid
+            Ksize = np.asarray(gridout) / np.asarray(rsize)
+
             # Define resampling function to just crop diffraction
             # patterns
             def resize(array):
@@ -492,11 +532,14 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
         # grid size
         gridout = size_of_bandwidth_limited_array(gridshape)
 
+        # The size in inverse Angstrom of the grid
+        Ksize = np.asarray(gridout) / np.asarray(rsize)
+
         # Define a resampling function that does nothing
         def resize(array):
             return np.fft.fftshift(array, axes=(-1, -2))
 
-    return gridout, resize
+    return gridout, resize, Ksize
 
 
 def STEM(
@@ -646,16 +689,26 @@ def STEM(
 
         # Get diffraction pattern gridsize in pixels from input and function
         # to resample the simulation output to store in the datacube
-        gridout, resize = workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape)
+        gridout, resize, _ = workout_4DSTEM_datacube_DP_size(
+            FourD_STEM, rsize, gridshape
+        )
 
         # Check whether a datacube is already provided or not
         if datacube is None:
             datacube = np.zeros((nthick, nscantot, *gridout))
-        else:
-            # If datacube is provided, flatten the scan dimensions of the array
-            # the reshape function `should` provide a new view of the object,
-            # not a copy of the whole array
-            datacube = datacube.reshape((nthick, nscantot, *datacube.shape[-2:]))
+        # else:
+        # If datacube is provided, flatten the scan dimensions of the array
+        # the reshape function `should` provide a new view of the object,
+        # not a copy of the whole array
+
+        # If we have a list or tuple of datacubes then we need to reshape
+        # them one by one (ie a list of hdf5 datacubes)
+        # if isinstance(datacube,(list,tuple)):
+        #     for i,dcube in enumerate(datacube):
+        #         datacube[i] = dcube[:].reshape((nscantot,*dcube.shape[-2:]))
+        # else:
+        #     # Otherwise we can reshape all the datacubes as a contiguous array
+        #     datacube = datacube.reshape((nthick, nscantot, *datacube.shape[-2:]))
 
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
@@ -710,20 +763,21 @@ def STEM(
             if conventional_STEM:
                 # broadcast detector and probe arrays to
                 # ndet x batch_size x Y x X and reduce final two dimensions
-
                 STEM_image[:ndet, it, scan_index] += detect(D, amp).cpu().numpy()
 
             # Store datacube
             if FourD_STEM:
-                datacube[it, scan_index] += resize(amp.cpu().numpy())
+                DPS = resize(amp.cpu().numpy())
+                ind = np.unravel_index(scan_index, scan_shape)
+                for idp, DP in enumerate(DPS):
+                    datacube[it][ind[0][idp], ind[1][idp]] += DP
 
-    # TODO return datacube and STEM image as a dictionary so that
     # Unflatten 4D-STEM datacube scan dimensions, use numpy squeeze to
     # remove superfluous dimensions (ones with length 1)
-    if FourD_STEM:
-        datacube = np.squeeze(
-            datacube.reshape(nthick, *scan_shape, *datacube.shape[-2:])
-        )
+    # if FourD_STEM:
+    # datacube = np.squeeze(
+    #     datacube.reshape(nthick, *scan_shape, *datacube.shape[-2:])
+    # )
 
     if conventional_STEM:
         STEM_image = np.squeeze(STEM_image.reshape(ndet, nthick, *scan_shape))
@@ -884,6 +938,7 @@ class scattering_matrix:
                 np.logical_and(inside_aperture, mody[:, None]), modx[None, :]
             )
         )
+        self.beams = [(x + y // 2) % y - y // 2 for x, y in zip(self.beams, gridshape)]
 
         self.nbeams = len(self.beams[0])
 
@@ -1406,11 +1461,12 @@ class scattering_matrix:
             FourD_STEM = [GS, GS / self.rsize[:2]]
 
         # Allocate diffraction pattern and STEM images if not already provided
-        if (datacube is None) and FourD_STEM:
-            gridout, resize = workout_4DSTEM_datacube_DP_size(
+        if FourD_STEM:
+            gridout = workout_4DSTEM_datacube_DP_size(
                 FourD_STEM, self.rsize, self.gridshape
-            )
-            datacube = np.zeros((nscan, *gridout))
+            )[0]
+        if (datacube is None) and FourD_STEM:
+            datacube = np.zeros((*scan_shape, *gridout))
         if not FourD_STEM:
             datacube = None
 
@@ -1443,33 +1499,21 @@ class scattering_matrix:
         Datacube_segment = None
         STEM_image_segment = None
         FlatS = self.S.reshape((self.nbeams, np.prod(self.stored_gridshape), 2))
-        # import matplotlib.pyplot as plt
-        # fig, ax = plt.subplots()
-        # ax.set_axis_off()
-        # ax.imshow(self.S[0, ..., 0].cpu().numpy())
-        # colors = ['r','w','b','orange']
-        # for c,cluster in zip(colors,clusters):
-        #     points = np.nonzero(yhat == cluster)
-        #     pix_posn = scan_posns[points]*np.asarray(self.stored_gridshape)
-        #     ax.plot(pix_posn[:,1], pix_posn[:,0], marker='o',lw=0.0,
-        # markersize=1.0,color=c)
+
         # Loop over probe positions clusters. This would be a good candidate
         # for multi-GPU work.
         for cluster in tqdm(
             clusters, desc="Probe position clusters", disable=not showProgress
         ):
-            # for c,cluster in zip(colors,clusters):
-
             # Get map of probe positions in cluster
-            points = np.nonzero(yhat == cluster)
-            # import matplotlib.pyplot as plt
+            points = np.nonzero(yhat == cluster)[0]
+            npoints = len(points)
 
             # Get segments of images to update
             if doConventionalSTEM:
                 STEM_image_segment = STEM_image[:, points]
             if FourD_STEM:
-                Datacube_segment = datacube[points]
-            # print(crop_)
+                Datacube_segment = np.zeros((1, npoints, 1, *gridout))
             pix_posn = scan_posns[points] * np.asarray(self.stored_gridshape)
 
             # Work out bounds of the rectangular region of the scattering
@@ -1482,55 +1526,7 @@ class scattering_matrix:
                 int(np.floor(np.amin(pix_posn[:, 1]) + crop_[1][0])),
                 int(np.ceil(np.amax(pix_posn[:, 1]) + crop_[1][-1])),
             ]
-            # print(xmin,xmax,ymin,ymax)
             size = np.asarray([(ymax - ymin), (xmax - xmin)])
-
-            # from matplotlib.patches import Rectangle
-
-            # ax.add_patch(
-            #     Rectangle(
-            #         [xmin, ymin],
-            #         *[xmax - xmin, ymax - ymin],
-            #         edgecolor=c,
-            #         linewidth=2.0,
-            #         linestyle='--',
-            #         facecolor=None,
-            #         fill = False,
-            #     )
-            # )
-            # ax.add_patch(
-            #     Rectangle(
-            #         [xmin, ymin+self.gridshape[0]],
-            #         *[xmax - xmin, ymax - ymin],
-            #         edgecolor=c,
-            #         linewidth=2.0,
-            #         linestyle='--',
-            #         facecolor=None,
-            #         fill = False,
-            #     )
-            # )
-            # ax.add_patch(
-            #     Rectangle(
-            #         [xmin, ymin+self.gridshape[0]],
-            #         *[xmax - xmin, ymax - ymin],
-            #         edgecolor=c,
-            #         linewidth=2.0,
-            #         linestyle='--',
-            #         facecolor=None,
-            #         fill = False,
-            #     )
-            # )
-            # ax.add_patch(
-            #     Rectangle(
-            #         [xmin+self.gridshape[1], ymin+self.gridshape[0]],
-            #         *[xmax - xmin, ymax - ymin],
-            #         edgecolor=c,
-            #         linewidth=2.0,
-            #         linestyle='--',
-            #         facecolor=None,
-            #         fill = False,
-            #     )
-            # )
 
             # Get indices of region of scattering matrix to stream to GPU
             window = [np.arange(a, b) for a, b in zip([ymin, xmin], [ymax, xmax])]
@@ -1567,7 +1563,7 @@ class scattering_matrix:
                 detectors=detectors,
                 FourD_STEM=FourD_STEM,
                 datacube=Datacube_segment,
-                scan_posn=scan_posns[points],
+                scan_posn=scan_posns[points].reshape((npoints, 1, 2)),
                 STEM_image=STEM_image_segment,
                 method_kwargs=kwargs,
                 showProgress=False,
@@ -1577,13 +1573,15 @@ class scattering_matrix:
             if doConventionalSTEM:
                 STEM_image[:, points] += STEM_image_segment
             if FourD_STEM:
-                datacube[points] += Datacube_segment
+                for point, Dp in zip(points, Datacube_segment[0]):
+                    y, x = np.unravel_index(point, scan_shape)
+                    datacube[y, x] += Dp[0]
         # plt.show(block=True)
 
         # Unflatten 4D-STEM datacube scan dimensions, use numpy squeeze to
         # remove superfluous dimensions (ones with length 1)
-        if FourD_STEM:
-            datacube = datacube.reshape(*scan_shape, *datacube.shape[-2:])
+        # if FourD_STEM:
+        #     datacube = datacube.reshape(*scan_shape, *datacube.shape[-2:])
 
         if doConventionalSTEM:
             STEM_image = np.squeeze(STEM_image.reshape(ndet, *scan_shape))

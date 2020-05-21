@@ -77,7 +77,7 @@ def bandwidth_limit_array(arrayin, limit=2 / 3):
                 + np.square(np.fft.fftfreq(pixelsize[1]))[np.newaxis, :]
             )
             * (2 / limit) ** 2
-            > 1
+            >= 1
         ] = 0
     else:
         pixelsize = array.size()[:2]
@@ -91,7 +91,7 @@ def bandwidth_limit_array(arrayin, limit=2 / 3):
                 )
             )
             * (2 / limit) ** 2
-            > 1
+            >= 1
         ] = 0
 
     return array
@@ -133,14 +133,55 @@ def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
     return maskin, maskout
 
 
-def renormalize(array, newmax=1.0, newmin=0.0):
+def renormalize(array, oldmin=None, oldmax=None, newmax=1.0, newmin=0.0):
     """Rescales the array such that its maximum is newmax and its minimum is newmin."""
-    max_, min_ = [array.max(), array.min()]
-    return (array - min_) / (max_ - min_) * (newmax - newmin)
+    if oldmin is not None:
+        min_ = oldmin
+    else:
+        min_ = array.min()
+
+    if oldmax is not None:
+        max_ = oldmax
+    else:
+        max_ = array.max()
+
+    return (
+        np.clip((array - min_) / (max_ - min_), 0.0, 1.0) * (newmax - newmin) + newmin
+    )
 
 
-def colorize(z):
-    """Map a complex number to the hsl scale and output in RGB format."""
+def convolve(array1, array2, axes=None):
+    """Fourier convolution of two arrays over specified axes."""
+    # input and output shape
+    s = array1.shape
+    # Axes of transformation
+    a = axes
+    if np.iscomplexobj(array1) or np.iscomplexobj(array2):
+        return np.fft.ifftn(np.fft.fftn(array1, s, a) * np.fft.fftn(array2, s, a), s, a)
+    else:
+        return np.fft.irfftn(
+            np.fft.rfftn(array1, s, a) * np.fft.rfftn(array2, s, a), s, a
+        )
+
+
+def colorize(z, saturation=0.8, minlightness=0.0, maxlightness=0.5):
+    """
+    Map a complex number to the hsl scale and output in RGB format.
+
+    Parameters
+    ----------
+    z : complex, array_like
+        Complex array to be plotted using hsl
+
+    Keyword arguments
+    -----------------
+    Saturation : float
+        (Uniform) saturation value of the hsl colormap
+    minlightness, maxlightness : float
+        The amplitude of the complex array z will be mapped to the lightness of
+        the output hsl map. These keyword arguments allow control over the range
+        of lightness values in the map
+    """
     from colorsys import hls_to_rgb
 
     # Get phase an amplitude of complex array
@@ -149,14 +190,15 @@ def colorize(z):
 
     # Calculate hue, lightness and saturation
     h = arg / (2 * np.pi)
-    ell = renormalize(r, newmax=0.5)
-    s = 0.8
+    ell = renormalize(r, newmin=minlightness, newmax=maxlightness)
+    s = saturation
 
     # Convert HLS format to RGB format
     c = np.vectorize(hls_to_rgb)(h, ell, s)  # --> tuple
     # Convert to numpy array
     c = np.array(c)  # -->
-    # Array has shape (3,n,m), but we need (n,m,3) for output
+    # Array has shape (3,n,m), but we need (n,m,3) for output, range needs to be
+    # from 0 to 256
     c = (c.swapaxes(0, 2) * 256).astype(np.uint8)
     return c
 
@@ -180,7 +222,7 @@ def fourier_interpolate_2d(ain, shapeout, norm="conserve_val"):
         'conserve_L1' L1 norm is conserved under interpolation
     """
     # Import required FFT functions
-    from numpy.fft import fft2, ifft2
+    from numpy.fft import fft2
 
     # Make input complex
     aout = np.zeros(np.shape(ain)[:-2] + tuple(shapeout), dtype=np.complex)
@@ -197,17 +239,18 @@ def fourier_interpolate_2d(ain, shapeout, norm="conserve_val"):
 
     # Fourier transform result with appropriate normalization
     if norm == "conserve_val":
-        aout = ifft2(aout) * (np.prod(shapeout) / np.prod(np.shape(ain)[-2:]))
+        aout = np.fft.ifftn(aout, axes=[-2, -1]) * (
+            np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
+        )
     elif norm == "conserve_norm":
-        aout = ifft2(aout) * np.sqrt(np.prod(shapeout) / np.prod(np.shape(ain)[-2:]))
+        aout = np.fft.ifftn(aout, axes=[-2, -1]) * np.sqrt(
+            np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
+        )
     else:
-        aout = ifft2(aout)
+        aout = np.fft.ifftn(aout, axes=[-2, -1])
 
     # Return correct array data type
-    if (
-        str(ain.dtype) in ["float64", "float32", "float", "f"]
-        or str(ain.dtype)[1] == "f"
-    ):
+    if not np.iscomplexobj(ain):
         return np.real(aout)
     else:
         return aout

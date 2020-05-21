@@ -124,21 +124,16 @@ def ensure_torch_array(array, dtype=torch.float, device=None):
         return array.to(device)
 
 
-def modulus_square(r):
-    """Calculate the sum of the modulus square for a tensor."""
-    return torch.sum(amplitude(r))
-
-
 def amplitude(r):
     """
     Calculate the amplitude of a complex tensor.
 
-    If the tensor is not complex then do nothing.
+    If the tensor is not complex then calculate square.
     """
     if r.size(-1) == 2:
         return r[..., 0] * r[..., 0] + r[..., 1] * r[..., 1]
     else:
-        return r
+        return r * r
 
 
 def roll_n(X, axis, n):
@@ -203,6 +198,12 @@ def fftfreq(n, dtype=torch.float, device=torch.device("cpu")):
     Same as numpy.fft.fftfreq(n)*n but for a torch array.
     """
     return (torch.arange(n, dtype=dtype, device=device) + n // 2) % n - n // 2
+
+
+def torch_dtype_to_numpy(dtype):
+    """Convert a torch datatype to a numpy datatype."""
+    scratch_array = torch.zeros(1, dtype=dtype)
+    return scratch_array.cpu().numpy().dtype
 
 
 def fourier_shift_array_1d(
@@ -327,7 +328,13 @@ def fourier_shift_array(
 
 def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
     """
-    Create indices for cropping windows.
+    Create (flattened) indices for a rectangular subset of a larger array.
+
+    Useful, for example for scattering matrix calculations where only a rectangular
+    subset of the array is used in the PRISM interpolation routine
+
+    Array indices exceeding the bounds of the array are wrapped to be consistent
+    with periodic boundary conditions.
 
     Parameters
     ----------
@@ -335,17 +342,29 @@ def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
         The centers of each of the cropping windows
     shape : array_like
         Size of the cropping windows
+
+    Examples
+    --------
+    >>> indices = torch.as_tensor([[2,3,4],[1,2,3]])
+    >>> gridshape = [4,4]
+    >>> win = [3,3]
+    >>> grid = torch.zeros(gridshape,dtype=torch.Long)
+    tensor([[0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0]])
+    >>> grid = grid.flatten()
+    >>> ind = pyms.utils.crop_window_to_flattened_indices_torch(indices,gridshape)
+    >>> grid[ind] = 1
+    >>> grid.view(gridshape)
+    tensor([[0, 1, 1, 1],
+            [0, 0, 0, 0],
+            [0, 1, 1, 1],
+            [0, 1, 1, 1]])
     """
-    yind = torch.as_tensor(indices[-1])
-    xind = torch.as_tensor(indices[-2])
-    return (
-        (
-            yind.view(1, yind.size(0)) % shape[-1]
-            + (xind.view(xind.size(0), 1) % shape[-2]) * shape[-1]
-        )
-        .flatten()
-        .type(torch.LongTensor)
-    )
+    yind = torch.as_tensor(indices[-1]).view(1, len(indices[-1])) % shape[-1]
+    xind = torch.as_tensor(indices[-2]).view(len(indices[-2]), 1) % shape[-2]
+    return (yind + xind * shape[-1]).flatten().type(torch.LongTensor)
 
 
 def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):

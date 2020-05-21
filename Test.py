@@ -6,6 +6,7 @@ import pyms
 import numpy as np
 import os
 import torch
+import matplotlib.pyplot as plt  # noqa
 
 required_accuracy = 1e-4
 scratch_cell_name = "test_cell.xyz"
@@ -77,7 +78,47 @@ def make_temp_structure(atoms=None, title="scratch", ucell=None, seed=0):
 
 
 class Test_util_Methods(unittest.TestCase):
-    """Test the utility functions for numpy and pytorch."""
+    """Test the utility functions for numpy and pytorch and some output functions."""
+
+    def test_h5_output(self):
+        """Test the hdf5 output by writing and then reading a file to it."""
+        import h5py
+        from pyms.utils import (
+            initialize_h5_datacube_object,
+            datacube_to_py4DSTEM_viewable,
+        )
+
+        # Make test dataset to write and then read from hdf5 files
+        shape = (5, 5, 5, 5)
+        test_dcube = np.random.random_sample(shape)
+
+        # Get hdf5 file objects for on-the-fly reading of arrays
+        dcube, f = initialize_h5_datacube_object(
+            shape, "test.h5", dtype=test_dcube.dtype
+        )
+
+        # Write datacube using object
+        dcube[:] = test_dcube
+        f.close()
+
+        # Read datacube back in
+        f = h5py.File("test.h5", "r")
+        dcubein = f["/4DSTEM_experiment/data/datacubes/datacube_0/datacube"]
+
+        # Check consistency
+        objwritepass = sumsqr_diff(dcubein, test_dcube) < 1e-10
+        f.close()
+
+        # Now test direct writing function
+        datacube_to_py4DSTEM_viewable(test_dcube, "test.h5")
+        f = h5py.File("test.h5")
+        dcubein = f["/4DSTEM_experiment/data/datacubes/datacube_0/datacube"]
+
+        funcwritepass = sumsqr_diff(dcubein, test_dcube) < 1e-10
+        f.close()
+        os.remove("test.h5")
+        # If both writing methods work then test is passed
+        self.assertTrue(objwritepass and funcwritepass)
 
     def test_torch_complex_matmul(self):
         """Test complex matmul against numpy complex matrix multiplication."""
@@ -135,6 +176,74 @@ class Test_util_Methods(unittest.TestCase):
         passtest = passreal and passcomplex
         self.assertTrue(passtest.item())
 
+    def test_torch_sinc(self):
+        """Test sinc function by calculating [sinc(0),sinc(pi/2),sinc(pi)]."""
+        x = torch.as_tensor([0, 1 / 2, 1, 3 / 2])
+        y = torch.as_tensor([1.0, 2 / np.pi, 0, -2 / 3 / np.pi])
+        self.assertTrue(sumsqr_diff(y, pyms.utils.sinc(x)) < 1e-7)
+
+    def test_amplitude(self):
+        """Test modulus square function by calculating a few known examples."""
+        # 1 + i, 1-i and i
+        x = torch.as_tensor([[1, 1], [1, -1], [0, 1]])
+        y = torch.as_tensor([2, 2, 1])
+        passcomplex = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
+        # 1,2,4 (test function for real numbers)
+        x = torch.as_tensor([1, 2, 4])
+        y = torch.as_tensor([1, 4, 16])
+        passreal = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
+        self.assertTrue(passcomplex and passreal)
+
+    def test_roll_n(self):
+        """Test the roll (circular shift of array) function."""
+        shifted = torch.zeros((5, 5))
+        shifted[0, 0] = 1
+        for a, n in zip([-1, -2], [2, 3]):
+            shifted = pyms.utils.roll_n(shifted, a, n)
+        test_array = torch.zeros((5, 5))
+        test_array[2, 3] = 1
+        self.assertTrue(sumsqr_diff(shifted, test_array).item() < 1e-10)
+
+    def test_cx_from_numpy(self):
+        """Test function for converting complex numpy arrays to complex tensors."""
+        in_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
+        out_ = torch.as_tensor([[1.0, 1.0], [2.0, -2.0]], device=torch.device("cpu"))
+        self.assertTrue(
+            sumsqr_diff(
+                out_, pyms.utils.cx_from_numpy(in_, device=torch.device("cpu"))
+            ).item()
+            < 1e-7
+        )
+
+    def test_cx_to_numpy(self):
+        """Test function for converting complex numpy arrays to complex tensors."""
+        out_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
+        in_ = torch.as_tensor([[1.0, 1.0], [2.0, -2.0]], device=torch.device("cpu"))
+        self.assertTrue(sumsqr_diff(out_, pyms.utils.cx_to_numpy(in_)).item() < 1e-7)
+
+    def test_fftfreq(self):
+        """Test function for calculating Fourier frequency grid."""
+        even = torch.as_tensor([0.0, 1.0, -2.0, -1.0])
+        odd = torch.as_tensor([0.0, 1.0, 2.0, -2.0, -1.0])
+        passeven = sumsqr_diff(pyms.utils.fftfreq(4), even) < 1e-8
+        passodd = sumsqr_diff(pyms.utils.fftfreq(5), odd) < 1e-8
+        self.assertTrue(passeven and passodd)
+
+    def test_crop_window(self):
+        """Test cropping window function on known result."""
+        indices = torch.as_tensor([[2, 3, 4], [1, 2, 3]])
+        gridshape = [4, 4]
+
+        grid = torch.zeros(gridshape, dtype=torch.long).flatten()
+        ind = pyms.utils.crop_window_to_flattened_indices_torch(indices, gridshape)
+        grid[ind] = 1
+        grid = grid.view(*gridshape)
+
+        reference = torch.as_tensor(
+            [[0, 1, 1, 1], [0, 0, 0, 0], [0, 1, 1, 1], [0, 1, 1, 1]]
+        )
+        self.assertTrue(sumsqr_diff(grid, reference).item() < 1e-7)
+
     def test_crop(self):
         """Test cropping method on scipy test image."""
         # Get astonaut image
@@ -165,6 +274,21 @@ class Test_util_Methods(unittest.TestCase):
             passTest = passTest and padPass
 
         self.assertTrue(passTest)
+
+    def test_convolution(self):
+        """Test Fourier convolution by convolving with shifted delta function."""
+        shape = [128, 128]
+        delta = np.zeros(shape)
+        delta[5, 5] = 1
+        # Make a circle
+        circle = pyms.make_contrast_transfer_function(shape, [20, 20], 3e5, 20)
+
+        convolved = pyms.utils.convolve(circle, delta)
+        shifted = np.roll(circle, [5, 5], axis=[-2, -1])
+        passcomplex = sumsqr_diff(convolved, shifted) < 1e-10
+        convolved = pyms.utils.convolve(np.abs(circle), delta)
+        passreal = sumsqr_diff(convolved, shifted) < 1e-10
+        self.assertTrue(passcomplex and passreal)
 
     def test_fourier_interpolation(self):
         """Test fourier interpolation of a cosine function."""
@@ -228,6 +352,139 @@ class Test_util_Methods(unittest.TestCase):
         pytorchVersionPass = passY.item() and passX.item() and passNorm.item()
 
         self.assertTrue(pytorchVersionPass and numpyVersionPass)
+
+    def test_bandwidth_limit_array(self):
+        """Test bandwidth limiting function by comparing to known result."""
+        grid = [7, 7]
+        testarray = np.ones(grid)
+        referencearray = np.asarray(
+            [
+                1,
+                1,
+                1,
+                0,
+                0,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                1,
+                1,
+            ]
+        ).reshape(grid)
+        bandlimited = pyms.utils.bandwidth_limit_array(testarray, 2 / 3)
+        passeven = np.all(bandlimited - referencearray == 0)
+        grid = [8, 8]
+        testarray = np.ones(grid)
+        referencearray = np.asarray(
+            [
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                1,
+                1,
+            ]
+        ).reshape(grid)
+        bandlimited = pyms.utils.bandwidth_limit_array(testarray, 2 / 3)
+        passodd = np.all(bandlimited - referencearray == 0)
+        self.assertTrue(passeven and passodd)
 
 
 class Test_Structure_Methods(unittest.TestCase):
@@ -529,7 +786,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         gridshape = im.shape
         # Check cropping only
         FourD_STEM = [[256, 256]]
-        gridout, resize = pyms.workout_4DSTEM_datacube_DP_size(
+        gridout, resize, Ksize = pyms.workout_4DSTEM_datacube_DP_size(
             FourD_STEM, rsize, gridshape
         )
 
@@ -540,11 +797,12 @@ class Test_py_multislice_Methods(unittest.TestCase):
             sumsqr_diff(pyms.utils.crop(np.fft.ifftshift(im), FourD_STEM[0]), imout1)
             < 1e-10
         )
+        passtest = sumsqr_diff(Ksize, [0.5, 0.5]) < 1e-10 and passtest
 
         # Check cropping  and interpolation
         FourD_STEM = [[512, 512], [1.5, 1.5]]
 
-        gridout, resize = pyms.workout_4DSTEM_datacube_DP_size(
+        gridout, resize, Ksize = pyms.workout_4DSTEM_datacube_DP_size(
             FourD_STEM, rsize, gridshape
         )
 
@@ -552,7 +810,84 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
         # Make sure that imout2 has the same normalisation as bfore
         passtest = sumsqr_diff(np.sum(imout2), np.sum(im)) < 1e-10 and passtest
+        passtest = (
+            sumsqr_diff(*[np.asarray(x) for x in [Ksize, FourD_STEM[1]]]) < 1e-10
+            and passtest
+        )
         self.assertTrue(passtest)
+
+    def test_STEM_routine(self):
+        """
+        Test  STEM multislice  by comparing result to weak phase object approximation.
+
+        For a thin and weakly scattering object the STEM image of a sample
+        is approximately equal to the convolution of the specimen potential
+        in radians with the "phase contrast transfer function" we use this to
+        test that the STEM routine is giving sensible results.
+        """
+        # Make random test object
+        atoms, ucell = make_temp_structure()
+
+        cell = pyms.structure(scratch_cell_name)
+        # Make it very thin
+        cell.unitcell[2] = 1
+        # Make all atoms lithium (a weakly scattering atom)
+        cell.atoms[:, 3] = 3
+
+        # Parameters for test
+        tiling = [4, 4]
+        sampling = 0.05
+        gridshape = np.ceil(cell.unitcell[:2] * np.asarray(tiling) / sampling).astype(
+            np.int
+        )
+        eV = 3e5
+        app = 20
+        df = 100
+
+        rsize = np.asarray(tiling) * cell.unitcell[:2]
+        probe = pyms.focused_probe(gridshape, rsize, eV, app, df=df, qspace=True)
+        detector = pyms.make_detector(gridshape, rsize, eV, app, app / 2)
+
+        # Get phase contrast transfer funciton in real space
+        PCTF = np.real(
+            np.fft.ifft2(pyms.STEM_phase_contrast_transfer_function(probe, detector))
+        )
+        P, T = pyms.multislice_precursor(
+            cell, gridshape, eV, tiling=tiling, displacements=False, showProgress=False
+        )
+
+        # Calculate phase of transmission function
+        phase = np.angle(pyms.utils.cx_to_numpy(T[0, 0]))
+
+        # Weak phase object approximation = meansignal + PCTF * phase
+        meansignal = np.sum(np.abs(probe) ** 2 * detector) / np.sum(np.abs(probe) ** 2)
+        WPOA = meansignal + np.real(pyms.utils.convolve(PCTF, phase))
+
+        # Perform Multislice calculation and then compare to weak phase object
+        # result
+        images = pyms.STEM_multislice(
+            cell,
+            gridshape,
+            eV,
+            app,
+            thicknesses=1.01,
+            df=df,
+            detector_ranges=[[app / 2, app]],
+            nfph=1,
+            P=P,
+            T=T,
+            tiling=tiling,
+            showProgress=False,
+        )["STEM images"]
+        images = pyms.utils.fourier_interpolate_2d(np.tile(images, tiling), gridshape)
+        # fig,ax = plt.subplots(nrows=2)
+        # ax[0].imshow(images)
+        # ax[1].imshow(WPOA)
+        # plt.show(block=True)
+
+        # Test is passed if sum squared difference with weak phase object
+        # approximation is within reason
+        self.assertTrue(sumsqr_diff(WPOA, images) < 1e-8)
 
     def test_Smatrix(self):
         """
@@ -646,7 +981,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
             df=df,
             PRISM_factor=PRISM_factor,
             FourD_STEM=True,
-            scan_posn=np.asarray(probe_posn).reshape((1, 2)) / np.asarray(tiling),
+            scan_posn=np.asarray(probe_posn).reshape((1, 1, 2)) / np.asarray(tiling),
             showProgress=False,
             S=S,
             nT=5,
@@ -713,24 +1048,15 @@ class Test_py_multislice_Methods(unittest.TestCase):
         # behaving as expected
         Smatrixtestpass = (
             sumsqr_diff(ms_CBED, S_CBED_amp) < 1e-10
-            and sumsqr_diff(S_CBED_amp, datacube) < 1e-10
+            and sumsqr_diff(S_CBED_amp, datacube[0, 0]) < 1e-10
         )
         self.assertTrue(Smatrixtestpass)
 
 
 if __name__ == "__main__":
-
-    # import matplotlib.pyplot as plt
-
-    # fig,ax = plt.subplots(nrows=3)
-    # ax[0].imshow(np.fft.fftshift(im))
-    # ax[1].imshow(imout1)
-    # ax[2].imshow(imout2)
-    # print([np.sum(x) for x in [im,imout1,imout2]])
-    # plt.show(block=True)
-    # sys.exit()
     unittest.main()
     clean_temp_structure()
+
     # sys.exit()
 
     # atoms, ucell = make_temp_structure()

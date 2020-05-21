@@ -10,6 +10,7 @@ setup(
     url="https://github.com/HamishGBrown/py_multislice/",
     packages=find_packages(),
     install_requires=[
+        "h5py >= 2.10",
         "ipython >= 4.0",
         "scipy >= 1.1",
         "matplotlib >= 3.0",

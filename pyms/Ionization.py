@@ -643,7 +643,7 @@ def transition_potential_multislice(
         trigger = np.zeros((ionization_potentials.size(0),))
         for i, ionization_potential in enumerate(ionization_potentials):
             print(modulus_square(ionization_potential))
-            trigger[i] = threshhold * modulus_square(ionization_potential)
+            trigger[i] = threshhold * torch.sum(amplitude(ionization_potential))
 
     # Ionization potentials must be in reciprocal space
     ionization_potentials = torch.fft(ionization_potentials, signal_ndim=2)
@@ -686,18 +686,11 @@ def transition_potential_multislice(
                     fourier_shift_torch(ionization_potential, posn, qspace_in=True),
                     probes,
                 )
-                print(
-                    modulus_square(psi_n),
-                    modulus_square(
-                        fourier_shift_torch(ionization_potential, posn, qspace_in=True)
-                    ),
-                    trigger[j],
-                )
                 # Only propagate this wave to the exit surface if it is deemed
                 # to contribute significantly (above a user-determined threshhold)
                 # to the image. Pass threshhold = None to disable this feature
                 if threshhold is not None:
-                    if modulus_square(psi_n) < trigger[j]:
+                    if torch.sum(torch.amplitude(psi_n)) < trigger[j]:
                         continue
 
                 # Propagate to exit surface

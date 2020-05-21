@@ -16,6 +16,8 @@ from .py_multislice import (
     make_detector,
     multislice,
     STEM,
+    workout_4DSTEM_datacube_DP_size,
+    nyquist_sampling,
 )
 from .utils.torch_utils import (
     cx_from_numpy,
@@ -25,6 +27,7 @@ from .utils.torch_utils import (
     get_device,
     crop_to_bandwidth_limit_torch,
     size_of_bandwidth_limited_array,
+    torch_dtype_to_numpy,
 )
 from .utils.numpy_utils import (
     fourier_shift,
@@ -32,7 +35,7 @@ from .utils.numpy_utils import (
     crop_to_bandwidth_limit,
     ensure_array,
 )
-
+from .utils.output import initialize_h5_datacube_object
 from .Ionization import get_transitions, tile_out_ionization_image
 from .Probe import (
     focused_probe,
@@ -68,6 +71,7 @@ def STEM_PRISM(
     aberrations=[],
     batch_size=5,
     FourD_STEM=False,
+    h5_filename=None,
     datacube=None,
     scan_posn=None,
     dtype=torch.float32,
@@ -75,6 +79,7 @@ def STEM_PRISM(
     showProgress=True,
     detector_ranges=None,
     stored_gridshape=None,
+    ROI=[0.0, 0.0, 1.0, 1.0],
     S=None,
     nT=5,
     GPU_streaming=True,
@@ -131,6 +136,11 @@ def STEM_PRISM(
         datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
         diffraction patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
         Angstroms.
+    h5_filename : string or array_like of strings
+        FourD-STEM images can be streamed directly to a hdf5 file output,
+        avoiding the need for them to be stored in intermediate memory. To take
+        advantage of this the user can provide a list of filenames to output
+        these result to.
     datacube :  (Ny, Nx, Y, X) array_like, optional
         datacube for 4D-STEM output, if None is passed (default) this will be
         initialized in the function. If a datacube is passed then the result
@@ -154,6 +164,11 @@ def STEM_PRISM(
         0 to 10 mrad and 10 to 20 mrad.
     D : (ndet x Y x X) array_like, optional
         A precomputed set of STEM detectors, overrides detector_ranges.
+    ROI : (4,) array_like
+        Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
+        where [x0,y0] and [x1,y1] are the bottom left and top right coordinates
+        of the region of interest (ROI) expressed as a fraction of the total
+        grid (or unit cell).
     S : (nbeams x Y x X)
         A precalculated scattering matrix (useful for calculating defocus series)
         if this is provided then nfph will be ignored since a new scattering
@@ -206,6 +221,7 @@ def STEM_PRISM(
     # If no instructions are passed regarding size of the 4D-STEM
     # datacube size then we will have to base this on the output size
     # of the scattering matrix
+    h5file = None
     if FourD_STEM and isinstance(FourD_STEM, (list, tuple)):
         if len(FourD_STEM) > 1:
             maxq = max(maxq, max(FourD_STEM[1]))
@@ -215,6 +231,29 @@ def STEM_PRISM(
         from .py_multislice import max_grid_resolution
 
         maxq = max(maxq, max_grid_resolution(gridshape, real_dim))
+
+        if h5_filename is None:
+            datacube = None
+        else:
+            DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
+                FourD_STEM, real_dim, gridshape
+            )
+            scanshape = generate_STEM_raster(
+                real_dim, eV, app, tiling=tiling, ROI=ROI
+            ).shape[:-1]
+            Rpix = nyquist_sampling(eV=eV, alpha=app)
+
+            # Make a datacube for each thickness of interest
+            datacube, h5file = initialize_h5_datacube_object(
+                scanshape + tuple(DPshape),
+                ensure_array(h5_filename),
+                dtype=torch_dtype_to_numpy(dtype),
+                Rpix=Rpix,
+                diffsize=Ksize,
+                eV=eV,
+                alpha=app,
+                sample=structure.Title,
+            )
 
     # Calculations can be expedited by only storing the scattering matrix out
     # to the maximum scattering angle of interest here we work out if the
@@ -288,7 +327,7 @@ def STEM_PRISM(
                 batch_size=batch_size,
                 detectors=D,
                 FourD_STEM=FourD_STEM,
-                datacube=datacube,
+                datacube=[datacube],
                 scan_posn=scan_posn,
                 device=S.device,
                 tiling=S.tiling,
@@ -297,6 +336,10 @@ def STEM_PRISM(
             )
         datacube = result["datacube"]
         STEM_images = result["STEM images"]
+
+    # Close all hdf5 files
+    if h5file is not None:
+        h5file.close()
 
     return {"STEM images": STEM_images, "datacube": datacube}
 
@@ -313,10 +356,12 @@ def STEM_multislice(
     aberrations=[],
     batch_size=5,
     FourD_STEM=False,
+    h5_filename=None,
     STEM_images=None,
     scan_posn=None,
     dtype=torch.float32,
     device_type=None,
+    ROI=[0.0, 0.0, 1.0, 1.0],
     tiling=[1, 1],
     seed=None,
     showProgress=True,
@@ -324,6 +369,8 @@ def STEM_multislice(
     D=None,
     fractional_occupancy=True,
     nT=5,
+    P=None,
+    T=None,
 ):
     """
     Perform a STEM simulation using only the multislice algorithm.
@@ -351,6 +398,11 @@ def STEM_multislice(
     device_type : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
+    ROI : (4,) array_like
+        Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
+        where [x0,y0] and [x1,y1] are the bottom left and top right coordinates
+        of the region of interest (ROI) expressed as a fraction of the total
+        grid (or unit cell).
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
@@ -373,6 +425,22 @@ def STEM_multislice(
         by shearing the propagator. Units given by input variable tilt_units.
     tilt_units : string, optional
         Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'
+    fourD_STEM : bool or array_like, optional
+        Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
+        space a tuple containing pixel size and diffraction space extent of the
+        datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
+        diffraction patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
+        Angstroms.
+    h5_filename : string or array_like of strings
+        FourD-STEM images can be streamed directly to a hdf5 file output,
+        avoiding the need for them to be stored in intermediate memory. To take
+        advantage of this the user can provide a list of filenames to output
+        these result to.
+    datacube :  (Ny, Nx, Y, X) array_like, optional
+        datacube for 4D-STEM output, if None is passed (default) this will be
+        initialized in the function. If a datacube is passed then the result
+        will be added by the STEM routine (useful for multiple frozen phonon
+        iterations)
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated probe.
@@ -384,6 +452,10 @@ def STEM_multislice(
         0 to 10 mrad and 10 to 20 mrad.
     D : (ndet x Y x X) array_like, optional
         A precomputed set of STEM detectors, overrides detector_ranges.
+    P : (n,Y,X) array_like, optional
+        Precomputed Fresnel free-space propagators
+    T : (n,Y,X) array_like
+        Precomputed transmission functions
     """
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -395,7 +467,7 @@ def STEM_multislice(
     )
 
     # Convert thicknesses into number of slices for multislice
-    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
+    nslices = np.ceil(ensure_array(thicknesses) / structure.unitcell[2]).astype(np.int)
 
     # Make STEM detectors
     if detector_ranges is not None:
@@ -420,7 +492,35 @@ def STEM_multislice(
         "output_to_bandwidth_limit": output_to_bandwidth_limit,
     }
 
-    datacube = None
+    if h5_filename is None:
+        datacubes = None
+    else:
+        DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
+            FourD_STEM, real_dim, gridshape
+        )
+        scanshape = generate_STEM_raster(
+            real_dim, eV, app, tiling=tiling, ROI=ROI
+        ).shape[:-1]
+        Rpix = nyquist_sampling(eV=eV, alpha=app)
+
+        # Make a datacube for each thickness of interest
+        nt = len(nslices)
+        datacubes = []
+        files = []
+        for i in range(nt):
+            datacube, f = initialize_h5_datacube_object(
+                scanshape + tuple(DPshape),
+                ensure_array(h5_filename)[i],
+                dtype=torch_dtype_to_numpy(dtype),
+                Rpix=Rpix,
+                diffsize=Ksize,
+                eV=eV,
+                alpha=app,
+                sample=structure.Title,
+            )
+            files.append(f)
+            datacubes.append(datacube)
+
     STEM_images = None
 
     for i in tqdm.tqdm(
@@ -428,17 +528,18 @@ def STEM_multislice(
     ):
 
         # Make propagators and transmission functions for multslice
-        P, T = multislice_precursor(
-            structure,
-            gridshape,
-            eV,
-            subslices=subslices,
-            tiling=tiling,
-            nT=nT,
-            device=device,
-            showProgress=False,
-            fractional_occupancy=fractional_occupancy,
-        )
+        if P is None and T is None:
+            P, T = multislice_precursor(
+                structure,
+                gridshape,
+                eV,
+                subslices=subslices,
+                tiling=tiling,
+                dtype=dtype,
+                nT=nT,
+                device=device,
+                showProgress=showProgress,
+            )
 
         # Put new transmission functions and propagators into arguments
         args = (P, T, tiling, device, seed)
@@ -460,18 +561,27 @@ def STEM_multislice(
             showProgress=showProgress,
             method_args=args,
             method_kwargs=kwargs,
-            datacube=datacube,
+            datacube=datacubes,
             STEM_image=STEM_images,
         )
         datacube = result["datacube"]
         STEM_images = result["STEM images"]
 
     if datacube is not None:
-        datacube /= nfph
+        if isinstance(datacube, (list, tuple)):
+            for i in range(len(datacube)):
+                datacube[i][:] = datacube[i][:] / nfph
+        else:
+            datacube /= nfph
     if STEM_images is not None:
         STEM_images /= nfph
 
-    return {"STEM images": STEM_images, "datacube": datacube}
+    # Close all hdf5 files
+    if h5_filename is not None:
+        for f in files:
+            f.close()
+
+    return {"STEM images": STEM_images, "datacube": datacubes}
 
 
 def multislice_precursor(
@@ -535,6 +645,16 @@ def multislice_precursor(
         The bandwidth limiting scheme. The propagator and transmission functions
         will be bandwidth limited up to the fraction given by the first and
         second entries of band_width_limiting respectively
+
+    Returns
+    -------
+    P : complex np.ndarray (len(subslices),Y,X) or (Y,X)
+        The Fresnel free-space propagators for multislice. If the slicing of the
+        specimen is even (ie. np.diff(subslices) are all the same) then a single
+        propagator will be returned otherwise different propagators for each slice
+        are returned
+    T : torch.Tensor (nT,len(subslices),Y,X,2)
+        The specimen transmission functions for multislice
     """
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
