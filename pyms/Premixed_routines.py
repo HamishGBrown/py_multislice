@@ -121,8 +121,10 @@ def STEM_PRISM(
         calculations see Ophus, Colin. "A fast image simulation algorithm
         for scanning transmission electron microscopy." Advanced structural
         and chemical imaging 3.1 (2017): 13 for details on this.
-    df : float
-        Probe defocus
+    df : float or (ndf,) array_like
+        Probe defocus, can be an array like object to perform a focal series. In
+        the latter case it would be expected that h5_filename is a list of
+        equal length to df
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated probe.
@@ -136,12 +138,12 @@ def STEM_PRISM(
         datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
         diffraction patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
         Angstroms.
-    h5_filename : string or array_like of strings
+    h5_filename : string or (ndf,) array_like of strings
         FourD-STEM images can be streamed directly to a hdf5 file output,
         avoiding the need for them to be stored in intermediate memory. To take
         advantage of this the user can provide a list of filenames to output
         these result to.
-    datacube :  (Ny, Nx, Y, X) array_like, optional
+    datacube :  (ndf, Ny, Nx, Y, X) array_like, optional
         datacube for 4D-STEM output, if None is passed (default) this will be
         initialized in the function. If a datacube is passed then the result
         will be added by the STEM routine (useful for multiple frozen phonon
@@ -196,14 +198,20 @@ def STEM_PRISM(
     else:
         nfph_ = nfph
 
-    Fourier_space_output = np.all([x == 1 for x in PRISM_factor])
+    Fourier_space_output = False
+    # Fourier_space_output = np.all([x == 1 for x in PRISM_factor])
+
+    # Work out the shape of the scan raster
+    scanshape = generate_STEM_raster(real_dim, eV, app, tiling=tiling, ROI=ROI).shape[
+        :-1
+    ]
+    ndf = len(ensure_array(df))
 
     # Make STEM detectors
     maxq = 0
     STEM_images = None
-    if detector_ranges is None:
-        D = None
-    else:
+    doconvSTEM = detector_ranges is not None
+    if doconvSTEM:
         D = np.stack(
             [
                 make_detector(gridshape, real_dim, eV, drange[1], drange[0])
@@ -217,6 +225,11 @@ def STEM_PRISM(
                 convert_tilt_angles(detector_ranges, "mrad", real_dim, eV, True), axis=0
             )[1],
         )
+        STEM_images = np.zeros(
+            (ndf, len(detector_ranges), *scanshape), dtype=torch_dtype_to_numpy(dtype)
+        )
+    else:
+        D = None
 
     # If no instructions are passed regarding size of the 4D-STEM
     # datacube size then we will have to base this on the output size
@@ -232,28 +245,38 @@ def STEM_PRISM(
 
         maxq = max(maxq, max_grid_resolution(gridshape, real_dim))
 
+    if FourD_STEM:
+        DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
+            FourD_STEM, real_dim, gridshape
+        )
         if h5_filename is None:
-            datacube = None
+            if datacube is None:
+                datacubes = np.zeros(
+                    (ndf,) + scanshape + tuple(DPshape),
+                    dtype=torch_dtype_to_numpy(dtype),
+                )
+            else:
+                datacubes = datacube
         else:
-            DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
-                FourD_STEM, real_dim, gridshape
-            )
-            scanshape = generate_STEM_raster(
-                real_dim, eV, app, tiling=tiling, ROI=ROI
-            ).shape[:-1]
+
             Rpix = nyquist_sampling(eV=eV, alpha=app)
 
-            # Make a datacube for each thickness of interest
-            datacube, h5file = initialize_h5_datacube_object(
-                scanshape + tuple(DPshape),
-                ensure_array(h5_filename),
-                dtype=torch_dtype_to_numpy(dtype),
-                Rpix=Rpix,
-                diffsize=Ksize,
-                eV=eV,
-                alpha=app,
-                sample=structure.Title,
-            )
+            datacubes = []
+            h5files = []
+            for h5_file in ensure_array(h5_filename):
+                # Make a datacube for each thickness of interest
+                datacube, h5file = initialize_h5_datacube_object(
+                    scanshape + tuple(DPshape),
+                    h5_file,
+                    dtype=torch_dtype_to_numpy(dtype),
+                    Rpix=Rpix,
+                    diffsize=Ksize,
+                    eV=eV,
+                    alpha=app,
+                    sample=structure.Title,
+                )
+                datacubes.append(datacube)
+                h5files.append(h5file)
 
     # Calculations can be expedited by only storing the scattering matrix out
     # to the maximum scattering angle of interest here we work out if the
@@ -301,47 +324,50 @@ def STEM_PRISM(
                 Fourier_space_output=Fourier_space_output,
                 GPU_streaming=GPU_streaming,
             )
-        if S.GPU_streaming:
-            result = S.STEM_with_GPU_streaming(
-                detectors=D,
-                FourD_STEM=FourD_STEM,
-                datacube=datacube,
-                STEM_image=STEM_images,
-                df=df,
-                aberrations=aberrations,
-                scan_posns=scan_posn,
-                showProgress=showProgress,
-            )
-        else:
-            # Make the STEM probe
-            probe = focused_probe(
-                gridshape, real_dim[:2], eV, app, df=df, aberrations=aberrations
-            )
-            result = STEM(
-                S.rsize,
-                probe,
-                S,
-                [1],
-                S.eV,
-                app,
-                batch_size=batch_size,
-                detectors=D,
-                FourD_STEM=FourD_STEM,
-                datacube=[datacube],
-                scan_posn=scan_posn,
-                device=S.device,
-                tiling=S.tiling,
-                showProgress=showProgress,
-                STEM_image=STEM_images,
-            )
-        datacube = result["datacube"]
-        STEM_images = result["STEM images"]
+        for idf, df_ in enumerate(ensure_array(df)):
+            if S.GPU_streaming:
+                result = S.STEM_with_GPU_streaming(
+                    detectors=D,
+                    FourD_STEM=FourD_STEM,
+                    datacube=datacubes[idf],
+                    STEM_image=STEM_images,
+                    df=df_,
+                    aberrations=aberrations,
+                    scan_posns=scan_posn,
+                    showProgress=showProgress,
+                )
+            else:
+                # Make the STEM probe
+                probe = focused_probe(
+                    gridshape, real_dim[:2], eV, app, df=df_, aberrations=aberrations
+                )
+                result = STEM(
+                    S.rsize,
+                    probe,
+                    S,
+                    [1],
+                    S.eV,
+                    app,
+                    batch_size=batch_size,
+                    detectors=D,
+                    FourD_STEM=FourD_STEM,
+                    datacube=[datacubes[idf]],
+                    scan_posn=scan_posn,
+                    device=S.device,
+                    tiling=S.tiling,
+                    showProgress=showProgress,
+                    STEM_image=STEM_images,
+                )
+            if FourD_STEM:
+                datacubes[idf] = result["datacube"]
+            if doconvSTEM:
+                STEM_images[idf] = result["STEM images"]
 
     # Close all hdf5 files
     if h5file is not None:
         h5file.close()
 
-    return {"STEM images": STEM_images, "datacube": datacube}
+    return {"STEM images": np.squeeze(STEM_images), "datacube": np.squeeze(datacubes)}
 
 
 def STEM_multislice(

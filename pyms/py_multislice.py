@@ -1144,11 +1144,6 @@ class scattering_matrix:
         if self.transposed:
             slices = slices[::-1]
 
-        # Initialize array that will be used as input to the multislice routine
-        psi = torch.zeros(
-            batch_size, *self.gridshape, 2, dtype=self.dtype, device=self.device
-        )
-
         # If streaming of Smatrix columns to the GPU is being used, ensure
         # that propagators and transmission functions for the multislice are
         # already on the GPU
@@ -1167,7 +1162,10 @@ class scattering_matrix:
             disable=not showProgress,
             desc="Calculating S-matrix",
         ):
-            psi[...] = 0.0
+            # Initialize array that will be used as input to the multislice routine
+            psi = torch.zeros(
+                batch_size, *self.gridshape, 2, dtype=self.dtype, device=self.device
+            )
             beams = np.arange(
                 i * batch_size, min((i + 1) * batch_size, self.nbeams), dtype=np.int
             )

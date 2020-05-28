@@ -231,20 +231,49 @@ class structure:
     Elements in a structure object:
     unitcell :
         An array containing the side lengths of the orthorhombic unit cell
-    atomtypes :
-        A string array containing the symbols of atomic elements in the cell
-    natoms :
-        Total number of atoms of each element within the cell
     atoms :
         An array of dimensions total number of atoms by 6 which for each atom
         contains the fractional cooordinates within the unit cell for each atom
         in the first three entries, the atomic number in the fourth entry,
         the atomic occupancy (not yet implemented in the multislice) in the
         fifth entry and mean squared atomic displacement in the sixth entry
+    Title :
+        Short description of the object of output purposes
     """
 
-    def __init__(
-        self,
+    def __init__(self, unitcell, atoms, dwf, occ, Title="", EPS=1e-2):
+        """Initialize a simulation object with necessary variables."""
+        self.unitcell = unitcell
+        natoms = atoms.shape[0]
+        self.atoms = np.concatenate(
+            [atoms, occ.reshape(natoms, 1), dwf.reshape(natoms, 1)], axis=1
+        )
+        self.Title = Title
+
+        # Up till now unitcell can be a 3 x 3 matrix with rows describing the
+        # unit cell edges. If this is the case we need to make sure that the
+        # unit cell is orthorhombic and find an orthorhombic tiling if this it
+        # is not orthorhombic
+        if unitcell.ndim > 1:
+            # Check to see if unit cell is orthorhombic
+            ortho = np.abs(np.sum(self.unitcell) - np.trace(self.unitcell)) < EPS
+
+            if ortho:
+                # If unit cell is orthorhombic then extract unit cell
+                # dimension
+                self.unitcell = np.diag(self.unitcell)
+            else:
+                # If not orthorhombic attempt psuedo rational tiling
+                # (only implemented for hexagonal structures)
+                self.orthorhombic_supercell(EPS=EPS)
+
+        # Check if there is any fractional occupancy of atom sites in
+        # the sample
+        self.fractional_occupancy = np.any(np.abs(self.atoms[:, 4] - 1.0) > 1e-3)
+
+    @classmethod
+    def fromfile(
+        cls,
         fnam,
         temperature_factor_units="ums",
         atomic_coordinates="fractional",
@@ -282,7 +311,7 @@ class structure:
         ext = splitext(fnam)[1]
 
         # Read title
-        self.Title = f.readline().strip()
+        Title = f.readline().strip()
 
         if ext == ".p1":
 
@@ -291,49 +320,40 @@ class structure:
             f.readline()
 
             # Get unit cell vector - WARNING assume an orthorhombic unit cell
-            self.unitcell = np.loadtxt(f, max_rows=3, dtype=np.float)
-
-            # Check to see if unit cell is orthorhombic
-            ortho = np.abs(np.sum(self.unitcell) - np.trace(self.unitcell)) < EPS
+            unitcell = np.loadtxt(f, max_rows=3, dtype=np.float)
 
             # Get the atomic symbol of each element
-            self.atomtypes = np.loadtxt(f, max_rows=1, dtype=str, ndmin=1)
+            atomtypes = np.loadtxt(f, max_rows=1, dtype=str, ndmin=1)  # noqa
 
             # Get the number of atoms of each type
-            self.natoms = np.loadtxt(f, max_rows=1, dtype=int, ndmin=1)
+            natoms = np.loadtxt(f, max_rows=1, dtype=int, ndmin=1)
 
             # Skip empty line
             f.readline()
 
             # Total number of atoms
-            totnatoms = np.sum(self.natoms)
+            totnatoms = np.sum(natoms)
             # Intialize array containing atomic information
-            self.atoms = np.zeros((totnatoms, 6))
+            atoms = np.zeros((totnatoms, 6))
+            dwf = np.zeros((totnatoms,))
+            occ = np.zeros((totnatoms,))
 
             for i in range(totnatoms):
                 atominfo = split(r"\s+", f.readline().strip())[:6]
                 # First three entries are the atomic coordinates
-                self.atoms[i, :3] = np.asarray(atominfo[:3], dtype=np.float)
+                atoms[i, :3] = np.asarray(atominfo[:3], dtype=np.float)
                 # Fourth entry is the atomic symbol
-                self.atoms[i, 3] = atomic_symbol.index(
+                atoms[i, 3] = atomic_symbol.index(
                     match("([A-Za-z]+)", atominfo[3]).group(0)
                 )
                 # Final entries are the fractional occupancy and the temperature
                 # (Debye-Waller) factor
-                self.atoms[i, 4:6] = np.asarray(atominfo[4:6], dtype=np.float)
-
-            if ortho:
-                # If unit cell is orthorhombic then extract unit cell
-                # dimension
-                self.unitcell = np.diag(self.unitcell)
-            else:
-                # If not orthorhombic attempt psuedo rational tiling
-                # (only implemented for hexagonal structures)
-                self.orthorhombic_supercell(EPS=EPS)
+                occ[i] = atominfo[4]
+                dwf[i] = atominfo[5]
 
         elif ext == ".xyz":
             # Read in unit cell dimensions
-            self.unitcell = np.asarray(
+            unitcell = np.asarray(
                 [float(x) for x in split(r"\s+", f.readline().strip())[:3]]
             )
 
@@ -349,17 +369,18 @@ class structure:
                 )
 
             # Now stack all atoms into numpy array
-            atoms = np.stack(atoms, axis=0)
+            atoms_ = np.stack(atoms, axis=0)
 
             # Rearrange columns of numpy array to match standard
-            totnatoms = atoms.shape[0]
-            self.atoms = np.zeros((totnatoms, 6))
+            totnatoms = atoms_.shape[0]
+            atoms = np.zeros((totnatoms, 4))
             # Atomic coordinates
-            self.atoms[:, :3] = atoms[:, 1:4]
+            atoms[:, :3] = atoms_[:, 1:4]
             # Atomic numbers (Z)
-            self.atoms[:, 3] = atoms[:, 0]
+            atoms[:, 3] = atoms_[:, 0]
             # Fractional occupancy and Debye-Waller (temperature) factor
-            self.atoms[:, 4:6] = atoms[:, 4:6]
+            dwf = atoms_[:, 5]
+            occ = atoms_[:, 4]
         else:
             print("File extension: {0} not recognized".format(ext))
             return None
@@ -371,17 +392,14 @@ class structure:
         # (ums) convert to mean square. Acceptable formats are crystallographic
         # temperature factor B and root mean square (urms) displacements
         if temperature_factor_units == "B":
-            self.atoms[:, 5] /= 8 * np.pi ** 2
+            dwf /= 8 * np.pi ** 2
         elif temperature_factor_units == "urms":
-            self.atoms[:, 5] = self.atoms[:, 5] ** 2
-
-        # Check if there is any fractional occupancy of atom sites in
-        # the sample
-        self.fractional_occupancy = np.any(np.abs(self.atoms[:, 4] - 1.0) > 1e-3)
+            dwf = dwf ** 2
 
         # If necessary, Convert atomic positions to fractional coordinates
         if atomic_coordinates == "cartesian":
-            self.atoms[:, :3] /= self.unitcell[:3][np.newaxis, :]
+            atoms[:, :3] /= unitcell[:3][np.newaxis, :]
+        return cls(unitcell, atoms[:, :4], dwf, occ, Title, EPS=EPS)
 
     def orthorhombic_supercell(self, EPS=1e-2):
         """

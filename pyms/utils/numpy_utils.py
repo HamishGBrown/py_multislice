@@ -6,10 +6,27 @@ import copy
 
 def ensure_array(input):
     """Force a (potentially scalar) input to be an array."""
-    if hasattr(input, "__len__"):
+    if hasattr(input, "__len__") and not isinstance(input, str):
         return input
     else:
         return np.asarray([input])
+
+
+def r_space_array(pixels, gridsize):
+    """
+    Return the appropriately scaled 2D real space coordinates.
+
+    Parameters
+    -----------
+    pixels : (2,) array_like
+        Pixels in each dimension of a 2D array
+    gridsize : (2,) array_like
+        Dimensions of the array in real space units
+    """
+    rspace = [np.fft.fftfreq(pixels[i], d=1 / gridsize[i]) for i in [0, 1]]
+    return [
+        np.broadcast_to(r, pixels) for r in [rspace[0][:, None], rspace[1][None, :]]
+    ]
 
 
 def q_space_array(pixels, gridsize):
@@ -365,3 +382,25 @@ def crop(arrayin, shapeout):
 
     arrayout[..., y1_:y2_, x1_:x2_] = arrayin[..., y1:y2, x1:x2]
     return arrayout
+
+
+def Gaussian(sigma, gridshape, rsize, theta=0):
+    """
+    Calculate a 2D Gaussian function.
+
+    Functional form 1/sqrt(2*pi)/sigma*exp(-(x**2+y**2)/2/sigma**2),
+    grid[0] contains y gridpoints and grid[1] contains x gridpoints.
+    """
+    if isinstance(sigma, (list, tuple, np.ndarray)):
+        sigmay, sigmax = sigma[:2]
+    else:
+        sigmax = sigma
+        sigmay = sigma
+    grid = r_space_array(gridshape, rsize)
+    a = np.cos(theta) ** 2 / (2 * sigmax ** 2) + np.sin(theta) ** 2 / (2 * sigmay ** 2)
+    b = -np.sin(2 * theta) / (4 * sigmax ** 2) + np.sin(2 * theta) / (4 * sigmay ** 2)
+    c = np.sin(theta) ** 2 / (2 * sigmax ** 2) + np.cos(theta) ** 2 / (2 * sigmay ** 2)
+    gaussian = np.exp(
+        -(a * grid[1] ** 2 + 2 * b * grid[0] * grid[1] + c * grid[0] ** 2)
+    )
+    return gaussian / np.sum(gaussian)

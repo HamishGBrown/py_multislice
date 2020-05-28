@@ -15,6 +15,8 @@ scratch_cell_name = "test_cell.xyz"
 def sumsqr(array):
     """Calculate the sum of squares for a single array."""
     if torch.is_tensor(array):
+        if array.ndim < 1:
+            return torch.abs(array) ** 2
         return torch.sum(pyms.utils.amplitude(array))
     return np.sum(np.square(np.abs(array)))
 
@@ -111,7 +113,7 @@ class Test_util_Methods(unittest.TestCase):
 
         # Now test direct writing function
         datacube_to_py4DSTEM_viewable(test_dcube, "test.h5")
-        f = h5py.File("test.h5")
+        f = h5py.File("test.h5", "r")
         dcubein = f["/4DSTEM_experiment/data/datacubes/datacube_0/datacube"]
 
         funcwritepass = sumsqr_diff(dcubein, test_dcube) < 1e-10
@@ -119,6 +121,13 @@ class Test_util_Methods(unittest.TestCase):
         os.remove("test.h5")
         # If both writing methods work then test is passed
         self.assertTrue(objwritepass and funcwritepass)
+
+    def test_r_space_array(self):
+        """Test the real space array function."""
+        r = pyms.utils.r_space_array([5, 5], [2, 2])
+        passx = sumsqr_diff(r[0][:, 0], np.asarray([0.0, 0.4, 0.8, -0.8, -0.4])) < 1e-10
+        passy = sumsqr_diff(r[1][0, :], np.asarray([0.0, 0.4, 0.8, -0.8, -0.4])) < 1e-10
+        self.assertTrue(passx and passy)
 
     def test_torch_complex_matmul(self):
         """Test complex matmul against numpy complex matrix multiplication."""
@@ -353,6 +362,54 @@ class Test_util_Methods(unittest.TestCase):
 
         self.assertTrue(pytorchVersionPass and numpyVersionPass)
 
+    def test_crop_tobandwidthlimit(self):
+        """Test the function that crops arrays to the maximum bandwidth limit."""
+        passtest = True
+        # refoutputshape = [85, 85]
+        gridshape = [128, 128]
+        in_ = np.ones(gridshape)
+        bwlimited = pyms.utils.bandwidth_limit_array(in_)
+        cropped = pyms.utils.crop_to_bandwidth_limit(bwlimited)
+        passtest = passtest and sumsqr_diff(np.sum(bwlimited), np.sum(cropped)) < 1e-10
+        gridshape = [127, 127]
+        in_ = np.ones(gridshape)
+        bwlimited = pyms.utils.bandwidth_limit_array(in_)
+        cropped = pyms.utils.crop_to_bandwidth_limit(bwlimited)
+        passtest = passtest and sumsqr_diff(np.sum(bwlimited), np.sum(cropped)) < 1e-10
+
+        # Now test torch version
+        gridshape = [128, 128]
+        in_ = np.ones(gridshape)
+        bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
+        cropped = pyms.utils.crop_to_bandwidth_limit_torch(bwlimited)
+        passtest = (
+            passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
+        )
+        gridshape = [127, 127]
+        in_ = np.ones(gridshape)
+        bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
+        cropped = pyms.utils.crop_to_bandwidth_limit(bwlimited)
+        passtest = (
+            passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
+        )
+
+        # pytorch test with complex numbers
+        gridshape = [128, 128]
+        in_ = np.ones(gridshape, dtype=np.complex64)
+        bwlimited = pyms.utils.bandwidth_limit_array(pyms.utils.cx_from_numpy(in_))
+        cropped = pyms.utils.crop_to_bandwidth_limit_torch(bwlimited)
+        passtest = (
+            passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
+        )
+        gridshape = [127, 127]
+        in_ = np.ones(gridshape)
+        bwlimited = pyms.utils.bandwidth_limit_array(pyms.utils.cx_from_numpy(in_))
+        cropped = pyms.utils.crop_to_bandwidth_limit(bwlimited)
+        passtest = (
+            passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
+        )
+        self.assertTrue(passtest)
+
     def test_bandwidth_limit_array(self):
         """Test bandwidth limiting function by comparing to known result."""
         grid = [7, 7]
@@ -484,7 +541,7 @@ class Test_util_Methods(unittest.TestCase):
         ).reshape(grid)
         bandlimited = pyms.utils.bandwidth_limit_array(testarray, 2 / 3)
         passodd = np.all(bandlimited - referencearray == 0)
-        self.assertTrue(passeven and passodd)
+        self.assertTrue(np.all([passeven, passodd]))
 
 
 class Test_Structure_Methods(unittest.TestCase):
@@ -623,7 +680,7 @@ class Test_Structure_Methods(unittest.TestCase):
         """Test by writing a scratch random unit cell and loading it again."""
         atoms, ucell = make_temp_structure()
 
-        cell = pyms.structure(scratch_cell_name)
+        cell = pyms.structure.fromfile(scratch_cell_name)
 
         atomspass = np.all(np.square(atoms - cell.atoms) < 1e-10)
         celldimpass = np.all(np.square(ucell - cell.unitcell) < 1e-10)
@@ -648,7 +705,7 @@ class Test_Structure_Methods(unittest.TestCase):
         )
         f.close()
 
-        graphene = pyms.structure(fnam)
+        graphene = pyms.structure.fromfile(fnam)
         os.remove(fnam)
         graphene.output_vesta_xtl("graphene.xtl")
 
@@ -690,7 +747,7 @@ class Test_Structure_Methods(unittest.TestCase):
     def test_make_potential(self):
         """Test the make potential function against a precomputed standard."""
         make_temp_structure(seed=0)
-        cell = pyms.structure(scratch_cell_name)
+        cell = pyms.structure.fromfile(scratch_cell_name)
         tiling = [2, 2]
         pot = (
             cell.make_potential([4, 4], subslices=[0.5, 1.0], tiling=tiling, seed=0)
@@ -741,7 +798,7 @@ class Test_Structure_Methods(unittest.TestCase):
         # Make random test object
         atoms, ucell = make_temp_structure()
 
-        cell = pyms.structure(scratch_cell_name)
+        cell = pyms.structure.fromfile(scratch_cell_name)
 
         newcell = copy.deepcopy(cell)
         newcell = newcell.rot90(k=1, axes=(0, 1))
@@ -828,7 +885,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         # Make random test object
         atoms, ucell = make_temp_structure()
 
-        cell = pyms.structure(scratch_cell_name)
+        cell = pyms.structure.fromfile(scratch_cell_name)
         # Make it very thin
         cell.unitcell[2] = 1
         # Make all atoms lithium (a weakly scattering atom)
@@ -902,7 +959,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         # Make random test object
         atoms, ucell = make_temp_structure()
 
-        cell = pyms.structure(scratch_cell_name)
+        cell = pyms.structure.fromfile(scratch_cell_name)
 
         # Parameters for test
         tiling = [4, 4]
@@ -1041,7 +1098,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         # fig,ax = plt.subplots(nrows=3)
         # ax[0].imshow(np.squeeze(ms_CBED))
         # ax[1].imshow(np.squeeze(S_CBED_amp))
-        # ax[2].imshow(datacube[0])
+        # ax[2].imshow(datacube[0, 0])
         # plt.show(block=True)
         # The test is passed if the result from multislice and S-matrix is
         # within numerical error and the S matrix wrapper routine is also
@@ -1054,6 +1111,23 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
 
 if __name__ == "__main__":
+
+    # import matplotlib.pyplot as plt
+    # sigma = 4
+    # gridshape = [128,128]
+    # rsize = [128,128]
+    # fig,ax = plt.subplots(nrows=2)
+    # Gaussian = pyms.utils.Gaussian(sigma,gridshape,rsize)
+    # r = pyms.utils.r_space_array(gridshape,rsize)
+    # rsqr = r[0]**2+r[1]**2
+    # print(np.sum(Gaussian),np.sqrt(np.sum(rsqr*Gaussian)))
+    # ax[0].imshow(np.fft.fftshift(Gaussian))
+    # ax[1].imshow(rsqr)
+    # from PIL import Image
+    # Image.fromarray(Gaussian).save('Gaussian.tif')
+    # plt.show(block=True)
+    # import sys;sys.exit()
+
     unittest.main()
     clean_temp_structure()
 

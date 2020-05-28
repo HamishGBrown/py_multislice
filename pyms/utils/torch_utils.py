@@ -398,15 +398,10 @@ def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
     newshape = tuple(array.size()[: -2 - int(complx)]) + newshape
 
     if complx:
-        flat_shape += (2,)
-        newshape += (2,)
-        return torch.gather(
-            array.view(flat_shape),
-            -2,
-            ind.to(array.device)
-            .view(1, ind.size(0), 1)
-            .repeat(flat_shape[0], 1, flat_shape[-1]),
-        ).view(newshape)
+        # Do real bit and complex bit seperately
+        real = array[re].view(flat_shape)[..., ind].view(newshape)
+        imag = array[im].view(flat_shape)[..., ind].view(newshape)
+        return torch.stack([real, imag], -1)
     return array.view(flat_shape)[..., ind].view(newshape)
 
 
