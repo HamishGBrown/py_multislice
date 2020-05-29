@@ -696,19 +696,6 @@ def STEM(
         # Check whether a datacube is already provided or not
         if datacube is None:
             datacube = np.zeros((nthick, nscantot, *gridout))
-        # else:
-        # If datacube is provided, flatten the scan dimensions of the array
-        # the reshape function `should` provide a new view of the object,
-        # not a copy of the whole array
-
-        # If we have a list or tuple of datacubes then we need to reshape
-        # them one by one (ie a list of hdf5 datacubes)
-        # if isinstance(datacube,(list,tuple)):
-        #     for i,dcube in enumerate(datacube):
-        #         datacube[i] = dcube[:].reshape((nscantot,*dcube.shape[-2:]))
-        # else:
-        #     # Otherwise we can reshape all the datacubes as a contiguous array
-        #     datacube = datacube.reshape((nthick, nscantot, *datacube.shape[-2:]))
 
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
@@ -1339,7 +1326,6 @@ class scattering_matrix:
                             crop_[i]
                             + (posn[k, i] * Sshape[-3 + i]).type(torch.LongTensor)
                         )
-                        % Sshape[-3 + i]
                         for i in range(2)
                     ],
                     Sshape[-3:-1],
@@ -1476,6 +1462,8 @@ class scattering_matrix:
             ndet = detectors.shape[0]
             if STEM_image is None:
                 STEM_image = np.zeros((ndet, nscan))
+            else:
+                STEM_image = STEM_image.reshape((ndet, nscan))
         else:
             STEM_image = None
 
@@ -1488,9 +1476,12 @@ class scattering_matrix:
         # distance
         from sklearn.cluster import Birch
 
-        model = Birch(threshold=0.01, n_clusters=nstreams)
-        yhat = model.fit_predict(scan_posns)
-        clusters = np.unique(yhat)
+        if nscan > 1:
+            model = Birch(threshold=0.01, n_clusters=nstreams)
+            yhat = model.fit_predict(scan_posns)
+            clusters = np.unique(yhat)
+        else:
+            yhat, clusters = [[0], [0]]
 
         # Now do STEM with each of the scan position clusters, streaming
         # only the necessary bits of the scattering matrix to the GPU.

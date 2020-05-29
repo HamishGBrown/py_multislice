@@ -936,15 +936,41 @@ class Test_py_multislice_Methods(unittest.TestCase):
             tiling=tiling,
             showProgress=False,
         )["STEM images"]
+
+        testPRISM = False
+        if testPRISM:
+            PRISMimages = pyms.STEM_PRISM(
+                cell,
+                gridshape,
+                eV,
+                app,
+                1.01,
+                df=df,
+                detector_ranges=[[app / 2, app]],
+                PRISM_factor=[1, 1],
+                nfph=1,
+                P=P,
+                T=T,
+                tiling=tiling,
+                showProgress=False,
+            )["STEM images"]
+            PRISMimages = pyms.utils.fourier_interpolate_2d(
+                np.tile(PRISMimages, tiling), gridshape
+            )
         images = pyms.utils.fourier_interpolate_2d(np.tile(images, tiling), gridshape)
-        # fig,ax = plt.subplots(nrows=2)
-        # ax[0].imshow(images)
-        # ax[1].imshow(WPOA)
+
+        # fig,ax = plt.subplots(nrows = 3)
+        # ax[0].imshow(WPOA)
+        # ax[1].imshow(images)
+        # ax[2].imshow(PRISMimages)
         # plt.show(block=True)
 
         # Test is passed if sum squared difference with weak phase object
         # approximation is within reason
-        self.assertTrue(sumsqr_diff(WPOA, images) < 1e-8)
+        passTest = sumsqr_diff(WPOA, images) < 1e-8
+        if testPRISM:
+            passTest = passTest and sumsqr_diff(PRISMimages, images) < 1e-8
+        self.assertTrue(passTest)
 
     def test_Smatrix(self):
         """
@@ -963,6 +989,9 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
         # Parameters for test
         tiling = [4, 4]
+        tiling = [1, 1]
+        # cell.unitcell[:2] = [15,15]
+
         gridshape = [128, 128]
         eV = 3e5
         app = 20
@@ -970,7 +999,10 @@ class Test_py_multislice_Methods(unittest.TestCase):
         subslices = [0.5, 1.0]
         df = -300
         probe_posn = [1.0, 1.0]
+        # probe_posn = [0.5, 0.5]
+
         PRISM_factor = [2, 2]
+        PRISM_factor = [1, 1]
         nT = 2
         # seed = np.random.randint(0, 10, size=2)
 
@@ -1003,7 +1035,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
             tiling=tiling,
             # seed=seed,
             showProgress=False,
-            GPU_streaming=True,
+            GPU_streaming=False,
         )
 
         # Calculate probe and shift it to required position
@@ -1042,7 +1074,8 @@ class Test_py_multislice_Methods(unittest.TestCase):
             showProgress=False,
             S=S,
             nT=5,
-            GPU_streaming=True,
+            GPU_streaming=False,
+            device_type=torch.device("cpu"),
         )["datacube"]
 
         # Remove every nth beam where n is the PRISM cropping factor
@@ -1094,12 +1127,11 @@ class Test_py_multislice_Methods(unittest.TestCase):
             np.squeeze(np.abs(pyms.utils.cx_to_numpy(probe)) ** 2)
         )
         # import matplotlib.pyplot as plt
-
-        # fig,ax = plt.subplots(nrows=3)
-        # ax[0].imshow(np.squeeze(ms_CBED))
-        # ax[1].imshow(np.squeeze(S_CBED_amp))
-        # ax[2].imshow(datacube[0, 0])
+        # fig,ax = plt.subplots(ncols=2)
+        # ax[0].imshow(ms_CBED)
+        # ax[1].imshow(datacube[0, 0])
         # plt.show(block=True)
+
         # The test is passed if the result from multislice and S-matrix is
         # within numerical error and the S matrix wrapper routine is also
         # behaving as expected

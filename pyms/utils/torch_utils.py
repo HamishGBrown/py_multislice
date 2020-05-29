@@ -362,9 +362,9 @@ def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
             [0, 1, 1, 1],
             [0, 1, 1, 1]])
     """
-    yind = torch.as_tensor(indices[-1]).view(1, len(indices[-1])) % shape[-1]
-    xind = torch.as_tensor(indices[-2]).view(len(indices[-2]), 1) % shape[-2]
-    return (yind + xind * shape[-1]).flatten().type(torch.LongTensor)
+    xind = torch.as_tensor(indices[-1]).view(1, len(indices[-1])) % shape[-1]
+    yind = torch.as_tensor(indices[-2]).view(len(indices[-2]), 1) % shape[-2]
+    return (xind + yind * shape[-1]).flatten().type(torch.LongTensor)
 
 
 def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):

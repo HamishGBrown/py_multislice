@@ -241,10 +241,14 @@ class structure:
         Short description of the object of output purposes
     """
 
-    def __init__(self, unitcell, atoms, dwf, occ, Title="", EPS=1e-2):
+    def __init__(self, unitcell, atoms, dwf, occ=None, Title="", EPS=1e-2):
         """Initialize a simulation object with necessary variables."""
         self.unitcell = unitcell
         natoms = atoms.shape[0]
+
+        if occ is None:
+            occ = np.ones(natoms)
+
         self.atoms = np.concatenate(
             [atoms, occ.reshape(natoms, 1), dwf.reshape(natoms, 1)], axis=1
         )

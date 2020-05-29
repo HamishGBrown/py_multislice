@@ -83,6 +83,8 @@ def STEM_PRISM(
     S=None,
     nT=5,
     GPU_streaming=True,
+    P=None,
+    T=None,
 ):
     """
     Perform a STEM simulation using the PRISM algorithm.
@@ -182,6 +184,10 @@ def STEM_PRISM(
         Choose whether to use GPU streaming or not for the scattering matrix,
         providing a scattering matrix to the routine will override whatever is
         selected for this option
+    P : (n,Y,X) array_like, optional
+        Precomputed Fresnel free-space propagators
+    T : (n,Y,X) array_like
+        Precomputed transmission functions
     """
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -209,7 +215,7 @@ def STEM_PRISM(
 
     # Make STEM detectors
     maxq = 0
-    STEM_images = None
+    STEM_images = [None for i in range(len(ensure_array(df)))]
     doconvSTEM = detector_ranges is not None
     if doconvSTEM:
         D = np.stack(
@@ -277,7 +283,8 @@ def STEM_PRISM(
                 )
                 datacubes.append(datacube)
                 h5files.append(h5file)
-
+    else:
+        datacubes = [None for i in range(len(ensure_array(df)))]
     # Calculations can be expedited by only storing the scattering matrix out
     # to the maximum scattering angle of interest here we work out if the
     # calculation would benefit from this
@@ -295,16 +302,17 @@ def STEM_PRISM(
         # none is given then we make our own
         if not S_provided:
             # Make propagators and transmission functions for multslice
-            P, T = multislice_precursor(
-                structure,
-                gridshape,
-                eV,
-                subslices=subslices,
-                tiling=tiling,
-                nT=nT,
-                device=device,
-                showProgress=showProgress,
-            )
+            if P is None and T is None:
+                P, T = multislice_precursor(
+                    structure,
+                    gridshape,
+                    eV,
+                    subslices=subslices,
+                    tiling=tiling,
+                    nT=nT,
+                    device=device,
+                    showProgress=showProgress,
+                )
 
             # Convert thicknesses into number of slices for multislice
             nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
@@ -330,7 +338,7 @@ def STEM_PRISM(
                     detectors=D,
                     FourD_STEM=FourD_STEM,
                     datacube=datacubes[idf],
-                    STEM_image=STEM_images,
+                    STEM_image=STEM_images[idf],
                     df=df_,
                     aberrations=aberrations,
                     scan_posns=scan_posn,
@@ -356,10 +364,10 @@ def STEM_PRISM(
                     device=S.device,
                     tiling=S.tiling,
                     showProgress=showProgress,
-                    STEM_image=STEM_images,
+                    STEM_image=STEM_images[idf],
                 )
             if FourD_STEM:
-                datacubes[idf] = result["datacube"]
+                datacubes[idf] = result["datacube"][0]
             if doconvSTEM:
                 STEM_images[idf] = result["STEM images"]
 
