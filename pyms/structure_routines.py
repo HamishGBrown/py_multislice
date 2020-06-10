@@ -11,7 +11,7 @@ from re import split, match
 from os.path import splitext
 from .atomic_scattering_params import e_scattering_factors, atomic_symbol
 from .Probe import wavev, relativistic_mass_correction
-from .utils.numpy_utils import bandwidth_limit_array, q_space_array
+from .utils.numpy_utils import bandwidth_limit_array, q_space_array, ensure_array
 from .utils.torch_utils import sinc, torch_c_exp, get_device
 
 
@@ -189,6 +189,11 @@ def interaction_constant(E, units="rad/VA"):
         return gamma / k0
 
 
+def change_of_basis(coords, newuc, olduc):
+    """Change of basis for structure unit cell."""
+    return np.mod(coords[:, :3] @ olduc @ np.linalg.inv(newuc), 1.0)
+
+
 def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
     """
     Generate a 3D rotational matrix.
@@ -204,7 +209,7 @@ def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
 
     c = cos(theta)
     s = sin(theta)
-    ux, uy, uz = u
+    ux, uy, uz = u / np.linalg.norm(u)
     R = np.zeros((3, 3))
     R[0, :] = [
         c + ux * ux * (1 - c),
@@ -243,14 +248,14 @@ class structure:
 
     def __init__(self, unitcell, atoms, dwf, occ=None, Title="", EPS=1e-2):
         """Initialize a simulation object with necessary variables."""
-        self.unitcell = unitcell
+        self.unitcell = np.asarray(unitcell)
         natoms = atoms.shape[0]
 
         if occ is None:
             occ = np.ones(natoms)
 
         self.atoms = np.concatenate(
-            [atoms, occ.reshape(natoms, 1), dwf.reshape(natoms, 1)], axis=1
+            [atoms, occ.reshape(natoms, 1), np.asarray(dwf).reshape(natoms, 1)], axis=1
         )
         self.Title = Title
 
@@ -258,7 +263,7 @@ class structure:
         # unit cell edges. If this is the case we need to make sure that the
         # unit cell is orthorhombic and find an orthorhombic tiling if this it
         # is not orthorhombic
-        if unitcell.ndim > 1:
+        if self.unitcell.ndim > 1:
             # Check to see if unit cell is orthorhombic
             ortho = np.abs(np.sum(self.unitcell) - np.trace(self.unitcell)) < EPS
 
@@ -268,7 +273,6 @@ class structure:
                 self.unitcell = np.diag(self.unitcell)
             else:
                 # If not orthorhombic attempt psuedo rational tiling
-                # (only implemented for hexagonal structures)
                 self.orthorhombic_supercell(EPS=EPS)
 
         # Check if there is any fractional occupancy of atom sites in
@@ -282,6 +286,7 @@ class structure:
         temperature_factor_units="ums",
         atomic_coordinates="fractional",
         EPS=1e-2,
+        T=None,
     ):
         """
         Read in a simulation object from a structure file.
@@ -309,6 +314,9 @@ class structure:
         EPS : float,optional
             Tolerance for procedures such as psuedo-rational tiling for
             non-orthorhombic crystal unit cells
+        T : (3,3) array_like or None
+            An optional transformation matrix to be applied to the unit cell
+            and the atomic coordinates
         """
         f = open(fnam, "r")
 
@@ -403,6 +411,18 @@ class structure:
         # If necessary, Convert atomic positions to fractional coordinates
         if atomic_coordinates == "cartesian":
             atoms[:, :3] /= unitcell[:3][np.newaxis, :]
+
+        if T is not None:
+            # Transform atoms to cartesian basis and then apply transformation
+            # matrix
+            atoms[:, :3] = (T @ unitcell @ atoms[:, :3].T).T
+
+            # Apply transformation matrix to unit-cell
+            unitcell = unitcell @ T.T
+
+            # Apply inverse of unit cell
+            atoms[:, :3] = (np.linalg.inv(unitcell) @ atoms[:, :3].T).T
+
         return cls(unitcell, atoms[:, :4], dwf, occ, Title, EPS=EPS)
 
     def orthorhombic_supercell(self, EPS=1e-2):
@@ -430,9 +450,7 @@ class structure:
             self.unitcell[1, 0] = 0.0
 
             # Now calculate fractional coordinates in new orthorhombic cell
-            self.atoms[:, :3] = np.mod(
-                self.atoms[:, :3] @ olduc @ np.linalg.inv(self.unitcell), 1.0
-            )
+            self.atoms[:, :3] = change_of_basis(self.atoms[:, :3], self.unitcell, olduc)
         else:
             self.unitcell[0, 1:] = 0.0
             self.unitcell[1, ::2] = 0.0
@@ -461,6 +479,12 @@ class structure:
             self.atoms[:, :3] @ olduc @ np.linalg.inv(self.unitcell), 1.0
         )
         self.unitcell = np.diag(self.unitcell)
+
+        # Check for negative values of self.unitcell and rectify
+        for i in range(3):
+            if self.unitcell[i] < 0:
+                self.atoms[:, i] = (1.0 - self.atoms[:, i]) % 1.0
+        self.unitcell = np.abs(self.unitcell)
 
     def quickplot(
         self, atomscale=None, cmap=plt.get_cmap("Dark2"), block=True, colors=None
@@ -854,18 +878,24 @@ class structure:
         """
         fig, ax = plt.subplots(ncols=2, figsize=(8, 4))
 
+        coords = self.atoms[:, :3] * self.unitcell[None, :]
         # Projection down the x-axis
         for i in range(2):
-            ax[i].plot(self.atoms[:, i], self.atoms[:, 2], "bo", label="Atoms")
+            ax[i].plot(coords[:, i], coords[:, 2], "bo", label="Atoms")
             for j, slice_ in enumerate(slices):
                 if j == 0:
                     label = "Slices"
                 else:
                     label = "_"
-                ax[i].plot([0, 1.0], [slice_, slice_], "r--", label=label)
-            ax[i].set_xlim([0, 1])
+                ax[i].plot(
+                    [0, self.unitcell[i]],
+                    [slice_ * self.unitcell[2], slice_ * self.unitcell[2]],
+                    "r--",
+                    label=label,
+                )
+            ax[i].set_xlim([0, self.unitcell[i]])
             ax[i].set_xlabel(["y", "x"][i])
-            ax[i].set_ylim([1, 0])
+            ax[i].set_ylim([self.unitcell[2], 0])
             ax[i].set_ylabel("z")
             ax[i].set_title("View down {0} axis".format(["x", "y"][i]))
         ax[0].legend()
@@ -1089,18 +1119,39 @@ class structure:
             self.atoms[:, ax] = 1 - self.atoms[:, ax]
         return self
 
-    def slice(self, slice_frac, axis):
+    def resize(self, fraction, axis):
         """
-        Make a slice of the simulation object.
+        Resize (either crop or pad with vacuum) the simulation object.
 
-        Make a slice of simulation object ranging from slice_frac[0] to
-        slice_frac[1] through specified axis, slice_frac is in units of
-        fractional coordinates.
+        Resize the simulation object ranging such that the new axis runs from
+        fraction[iax,0] to fraction[iax,1] on specified axis iax, slice_frac is
+        in units of fractional coordinates. If fraction[iax,0] is < 0 then
+        additional vacuum will be added, if > 0 then parts of the sample will
+        be removed for axis[iax]. Likewise if fraction[iax,1] is > 1 then
+        additional vacuum will be added, if < 1 then parts of the sample will
+        be removed for axis[iax].
+
+        Parameters
+        ----------
+        fraction : (nax,2) or (2,) array_like
+            Describes the size of the new simulation object as a fraction of
+            old simulation object dimensions.
+        axis : int or (nax,) array_like
+            The axes of the simulation object that wil lbe resized
+
+        Returns
+        -------
+        New structure : pyms.structure object
+            The resized structure object
         """
+        ax = ensure_array(axis)
+        frac = ensure_array(fraction)
+
         # Work out which atoms will stay in the sliced structure
-        mask = np.logical_and(
-            self.atoms[:, axis] >= slice_frac[0], self.atoms[:, axis] <= slice_frac[1]
-        )
+        mask = np.ones((self.atoms.shape[0],), dtype=np.bool)
+        for a, f in zip(ax, frac):
+            atomsin = np.logical_and(self.atoms[:, a] >= f[0], self.atoms[:, a] <= f[1])
+            mask = np.logical_and(atomsin, mask)
 
         # Make a copy of the structure
         new = copy.deepcopy(self)
@@ -1108,17 +1159,17 @@ class structure:
         # Put remaining atoms back in
         new.atoms = self.atoms[mask, :]
 
-        # Adjust unit cell dimensions
-        new.unitcell[axis] = (slice_frac[1] - slice_frac[0]) * self.unitcell[axis]
-
-        # Adjust origin of atomic coordinates
+        # Origin for atomic coordinates
         origin = np.zeros((3))
-        origin[axis] = slice_frac[0]
-        new.atoms[:, axis] = (
-            (new.atoms[:, axis] - slice_frac[0])
-            * self.unitcell[axis]
-            / new.unitcell[axis]
-        )
+
+        for a, f in zip(ax, frac):
+            # Adjust unit cell dimensions
+            new.unitcell[a] = (f[1] - f[0]) * self.unitcell[a]
+
+            # Adjust origin of atomic coordinates
+            origin[a] = f[0]
+
+        new.atoms[:, :3] = (new.atoms[:, :3] - origin) * self.unitcell / new.unitcell
 
         # Return modified structure
         return new

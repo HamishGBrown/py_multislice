@@ -1,4 +1,5 @@
 """Module containing functions for core multislice and PRISM algorithms."""
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -324,7 +325,7 @@ def STEM_phase_contrast_transfer_function(probe, detector):
 
     Returns
     -------
-    PCTF : complex (Y,X) np.ndarray
+    PCTF : (Y,X) np.ndarray
         The phase contrast transfer function
     """
     from .utils import convolve
@@ -466,7 +467,7 @@ def generate_STEM_raster(
             ROI[0 + i] * gridshape[i] / tiling[i],
             ROI[2 + i] * gridshape[i] / tiling[i],
             step=np.diff(ROI[i::2])[0] * gridshape[i] / nscan[i] / tiling[i],
-        )
+        )[: nscan[i]]
         / gridshape[i]
         for i in range(2)
     ]
@@ -542,6 +543,179 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
     return gridout, resize, Ksize
 
 
+def second_moment(array):
+    """Calculate the second moment of 2D array as a fraction of array size."""
+    grids = [np.fft.fftfreq(x) for x in array.shape]
+    mass = np.sum(array)
+    first_moment = [
+        np.sum(x) / mass for x in [grids[0][:, None] * array, grids[1][None, :] * array]
+    ]
+
+    y2 = ((grids[0] - first_moment[0] + 0.5) % 1.0 - 0.5) ** 2
+    x2 = ((grids[1] - first_moment[1] + 0.5) % 1.0 - 0.5) ** 2
+    grid = y2[:, None] + x2[None, :]
+
+    return np.sqrt(np.sum(grid * array) / mass)
+
+
+def generate_probe_spread_plot(
+    gridshape,
+    structure,
+    eV,
+    app,
+    thickness,
+    subslices=[1],
+    tiling=[1, 1],
+    showcrossection=True,
+    df=0,
+    probe_posn=[0, 0],
+    show=True,
+    device=None,
+):
+    """
+    Generate probe spread plot to assist with selection of appropriate multislice grid.
+
+    A multislice calculation assumes periodic boundary conditions. To avoid
+    artefacts associated with this the pixel grid must be chosen to have
+    sufficient size so that the probe does not artificially interfere with
+    itself through the periodic boundary (wrap around error). The grid sampling
+    must also be sufficient that electrons scattered to high angles are not
+    scattered beyond the band-width limit of the array.
+
+    The probe spread plot helps identify whenever these two events are happening.
+    If the probe intensity drops below 0.95 (as a fraction of initial intensity)
+    then the grid is not sampled finely enough, the pixel size of the array
+    (gridshape) needs to increased for finer sampling of the specimen potential.
+    If the probe spread exceeds 0.2 (as a fraction of the array) then too much
+    of the probe is spreading to the edges of the array, the real space size
+    of the array (usually controlled by the tiling of the unit cell) needs to
+    be increased.
+
+    Parameters
+    ----------
+    gridshape : (2,) array_like
+        Pixel dimensions of the 2D grid
+    structure : pyms.structure
+        The structure of interest
+    eV : float
+        Probe energy in electron volts
+    app : float
+        Probe-forming aperture in mrad
+    thickness : float
+        The maximum thickness of the simulation object in Angstrom
+
+    Keyword arguments
+    -----------------
+    subslices : array_like, optional
+        A one dimensional array-like object containing the depths (in fractional
+        coordinates) at which the object will be subsliced. The last entry
+        should always be 1.0. For example, to slice the object into four equal
+        sized slices pass [0.25,0.5,0.75,1.0]
+    tiling : (2,) array_like, optional
+        Tiling of a repeat unit cell on simulation grid
+    showcrossection : bool
+        Pass True to plot the projected cross section of the probe to inspect
+        the spread.
+    df : float
+        Probe defocus in Angstrom
+    probe_posn : array_like, optional
+        Probe position as a fraction of the unit-cell
+
+    Returns
+    -------
+    fig : matplotlib.figure object
+        The figure on which the probe spread is plotted
+    """
+    # Calculate multislice propagator and transmission functions
+    from .Premixed_routines import multislice_precursor
+
+    P, T = multislice_precursor(
+        structure,
+        gridshape,
+        eV,
+        subslices=subslices,
+        tiling=tiling,
+        device=device,
+        nT=1,
+        showProgress=False,
+    )
+
+    # Calculate focused STEM probe
+    probe = focused_probe(
+        gridshape, structure.unitcell[:2] * np.asarray(tiling), eV, app, df=df
+    )
+    pos = np.asarray(probe_posn) / np.asarray(tiling)
+    from .utils import fourier_shift, fourier_interpolate_2d
+
+    probe = fourier_shift(probe, pos, pixel_units=False)
+
+    ncols = 1 + showcrossection
+    fig, ax = plt.subplots(ncols=ncols, figsize=(ncols * 4, 4), squeeze=False)
+    maxslices = int(np.ceil(thickness / structure.unitcell[2]))
+
+    variances = np.zeros(maxslices)
+    intensity = np.zeros(maxslices)
+
+    crossection = np.zeros((maxslices, gridshape[0]))
+
+    # Array must be shifted to center probe position
+    shift = (pos * np.asarray(gridshape)).astype(np.int)
+
+    for i in range(maxslices):
+        probe = multislice(
+            probe,
+            [1],
+            P,
+            T,
+            tiling=tiling,
+            output_to_bandwidth_limit=False,
+            device_type=device,
+        )
+        mod = np.roll(np.abs(probe) ** 2, shift=-shift, axis=(-2, -1))
+        # Record probe intensity and spread
+        intensity[i] = np.sum(mod)
+        variances[i] = second_moment(mod)
+        if showcrossection:
+            crossection[i] = np.sum(mod, axis=-1)
+
+    thicknesses = np.arange(maxslices) * structure.unitcell[2]
+    ax[0, 0].set_xlim([0, thicknesses[-1]])
+    ax[0, 0].set_ylim([0, 1.1])
+
+    ax[0, 0].set_ylabel(
+        "$\\sqrt{\\int \\Psi^2 dx}$", color="red"
+    )  # we already handled the x-label with ax1
+    ax[0, 0].set_xlabel(r"Depth of propagation ($\AA$)")
+    ax[0, 0].tick_params(axis="y", labelcolor="red")
+    ax[0, 0].set_title("Probe intensity and spread")
+
+    ax2 = ax[0, 0].twinx()  # instantiate a second axes that shares the same x-axis
+
+    print(thicknesses.shape, variances.shape)
+    ax2.plot(thicknesses, variances, "b-")
+    ax2.tick_params(axis="y", labelcolor="b")
+    ax2.plot([0, thickness], [0.2, 0.2], "b--")
+    ax2.set_ylim([0, 0.5])
+    ax2.set_ylabel("$\\sqrt{\\int \\Psi^2 x^2 dx}$", color="blue")
+    ax[0, 0].plot(thicknesses, intensity, "r-")
+    ax[0, 0].plot([0, thicknesses[-1]], [0.95, 0.95], "r--")
+    nz, ny = crossection.shape
+    if showcrossection:
+        ax[0, 1].imshow(
+            fourier_interpolate_2d(
+                np.fft.fftshift(np.sqrt(crossection), axes=1), [ny, ny]
+            ),
+            extent=[0, gridshape[0], thickness, 0],
+            cmap=plt.get_cmap("gnuplot"),
+        )
+        ax[0, 1].set_ylabel(r"Depth of propagation ($\AA$)")
+        ax[0, 1].set_title("Probe depth cross-section")
+    fig.tight_layout()
+    if show:
+        plt.show(block=True)
+    return fig
+
+
 def STEM(
     rsize,
     probe,
@@ -590,9 +764,9 @@ def STEM(
     Keyword arguments
     -----------------
     batch_size : int, optional
-        The multislice algorithm can be performed on multiple scattering matrix
-        columns at once to parrallelize computation, this number is set by
-        batch_size.
+        The multislice algorithm can be performed on multiple probes columns
+        at once to parrallelize computation, the number of parrallel computations
+        is set by batch_size.
     detectors : (Ndet, Y, X) array_like, optional
         Diffraction plane detectors to perform conventional STEM imaging. If
         None is passed then no conventional STEM images will be returned.
@@ -1579,3 +1753,36 @@ class scattering_matrix:
         # objects were not calculated the dictionary will contain None for those
         # entries.
         return {"STEM images": STEM_image, "datacube": datacube}
+
+
+def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
+    """
+    Integrate 4D-STEM centre of mass (DPC) measurements to calculate object phase.
+
+    Assumes a three dimensional array com, with the final two dimensions
+    corresponding to the image and the first dimension of the array corresponding
+    to the y and x centre of mass respectively.
+    """
+    # Get shape of arrays
+    ny, nx = com.shape[1:]
+    s = (ny, nx)
+
+    d = np.asarray(rsize) / np.asarray([ny, nx])
+    # Calculate Fourier coordinates for array
+    ky = np.fft.fftfreq(ny, d=d[0])
+    kx = np.fft.rfftfreq(nx, d=d[1])
+    # ky,kx = [np.fft.fftfreq(x,d=d[i]) for i,x in enumerate([ny,nx])]
+
+    # Calculate numerator and denominator expressions for solution of
+    # phase from centre of mass measurements
+    numerator = ky[:, None] * np.fft.rfft2(com[0], s=s) + kx[None, :] * np.fft.rfft2(
+        com[1], s=s
+    )
+    denominator = 1j * ((kx ** 2)[None, :] + (ky ** 2)[:, None]) + reg
+
+    # Avoid a divide by zero for the origin of the Fourier coordinates
+    numerator[0, 0] = 0
+    denominator[0, 0] = 1
+
+    # Return real part of the inverse Fourier transform
+    return np.fft.irfft2(numerator / denominator, s=s)

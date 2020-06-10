@@ -18,6 +18,7 @@ from .py_multislice import (
     STEM,
     workout_4DSTEM_datacube_DP_size,
     nyquist_sampling,
+    phase_from_com,
 )
 from .utils.torch_utils import (
     cx_from_numpy,
@@ -34,6 +35,7 @@ from .utils.numpy_utils import (
     crop,
     crop_to_bandwidth_limit,
     ensure_array,
+    q_space_array,
 )
 from .utils.output import initialize_h5_datacube_object
 from .Ionization import get_transitions, tile_out_ionization_image
@@ -71,6 +73,7 @@ def STEM_PRISM(
     aberrations=[],
     batch_size=5,
     FourD_STEM=False,
+    DPC=False,
     h5_filename=None,
     datacube=None,
     scan_posn=None,
@@ -78,13 +81,16 @@ def STEM_PRISM(
     device_type=None,
     showProgress=True,
     detector_ranges=None,
+    D=None,
     stored_gridshape=None,
     ROI=[0.0, 0.0, 1.0, 1.0],
     S=None,
     nT=5,
     GPU_streaming=True,
+    Calculate_potential_on_CPU=False,
     P=None,
     T=None,
+    displacements=True,
 ):
     """
     Perform a STEM simulation using the PRISM algorithm.
@@ -148,20 +154,22 @@ def STEM_PRISM(
     datacube :  (ndf, Ny, Nx, Y, X) array_like, optional
         datacube for 4D-STEM output, if None is passed (default) this will be
         initialized in the function. If a datacube is passed then the result
-        will be added by the STEM routine (useful for multiple frozen phonon
+        will be added to by the STEM routine (useful for multiple frozen phonon
         iterations)
-    scan_posn :  tuple, optional
-        Tuple containing arrays of y and x scan positions, overrides internal
+    scan_posn :  (ny,nx,2) array_like, optional
+        An array containing y and x scan positions in the final dimension for
+        each scan position in the STEM raster, if provided overrides internal
         calculations of STEM sampling
     dtype : torch.dtype, optional
-        Datatype of the simulation arrays, by default 32-bit floating point
+        Datatype of the simulation arrays, by default 32-bit (single precision)
+        floating point
     device_type : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
     showProgress : bool, optional
         Pass False to disable progress readout
     stored_gridshape : int, array_like
-        The size of the stored array in the scattering matrix
+        The size of the stored array in the scattering matrix.
     detector_ranges : array_like, optional
         The acceptance angles of each of the stem detectors should be stored as
         a list of lists: ie [[0,10],[10,20]] will make two detectors spanning
@@ -184,6 +192,9 @@ def STEM_PRISM(
         Choose whether to use GPU streaming or not for the scattering matrix,
         providing a scattering matrix to the routine will override whatever is
         selected for this option
+    Calculate_potential_on_CPU : bool
+        Calculate the potential, which can sometimes be the most memory intensive
+        part of the calculation on the CPU and then stream to the GPU
     P : (n,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
@@ -216,23 +227,38 @@ def STEM_PRISM(
     # Make STEM detectors
     maxq = 0
     STEM_images = [None for i in range(len(ensure_array(df)))]
-    doconvSTEM = detector_ranges is not None
+    doconvSTEM = (detector_ranges is not None) or DPC
     if doconvSTEM:
-        D = np.stack(
-            [
-                make_detector(gridshape, real_dim, eV, drange[1], drange[0])
-                for drange in detector_ranges
-            ]
-        )
-        # Work out maximum angular value needed in calculation
-        maxq = max(
-            maxq,
-            np.amax(
-                convert_tilt_angles(detector_ranges, "mrad", real_dim, eV, True), axis=0
-            )[1],
-        )
+        if detector_ranges is not None:
+            if D is None:
+                D = np.stack(
+                    [
+                        make_detector(gridshape, real_dim, eV, drange[1], drange[0])
+                        for drange in detector_ranges
+                    ]
+                )
+                # Work out maximum angular value needed in calculation
+                maxq = max(
+                    maxq,
+                    np.amax(
+                        convert_tilt_angles(
+                            detector_ranges, "mrad", real_dim, eV, True
+                        ),
+                        axis=0,
+                    )[1],
+                )
+            else:
+                maxq = max(D.shape[-2:] / real_dim[-2:])
+        # Prepare DPC detectors if necessary
+        if DPC:
+            DPC_det = np.stack(q_space_array(gridshape, real_dim), axis=0)
+            if D is not None:
+                D = np.concatenate([D, DPC_det], axis=0)
+            else:
+                D = DPC_det
+        ndet = D.shape[0]
         STEM_images = np.zeros(
-            (ndf, len(detector_ranges), *scanshape), dtype=torch_dtype_to_numpy(dtype)
+            (ndf, ndet, *scanshape), dtype=torch_dtype_to_numpy(dtype)
         )
     else:
         D = None
@@ -293,6 +319,8 @@ def STEM_PRISM(
         size_of_bandwidth_limited_array(gridshape),
     )
 
+    PandTnotprovided = (P is None) and (T is None)
+
     for i in tqdm.tqdm(
         range(nfph_),
         desc="Frozen phonon iteration",
@@ -300,9 +328,15 @@ def STEM_PRISM(
     ):
         # Option to provide a precomputed scattering matrix (S), however if
         # none is given then we make our own
+
         if not S_provided:
             # Make propagators and transmission functions for multslice
-            if P is None and T is None:
+            torch.cuda.empty_cache()
+            if PandTnotprovided:
+                if Calculate_potential_on_CPU:
+                    potdevice = torch.device("cpu")
+                else:
+                    potdevice = device
                 P, T = multislice_precursor(
                     structure,
                     gridshape,
@@ -310,9 +344,12 @@ def STEM_PRISM(
                     subslices=subslices,
                     tiling=tiling,
                     nT=nT,
-                    device=device,
+                    device=potdevice,
                     showProgress=showProgress,
+                    displacements=displacements,
                 )
+                if Calculate_potential_on_CPU:
+                    T = T.to(device)
 
             # Convert thicknesses into number of slices for multislice
             nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
@@ -332,6 +369,9 @@ def STEM_PRISM(
                 Fourier_space_output=Fourier_space_output,
                 GPU_streaming=GPU_streaming,
             )
+            P = None
+            T = None
+            torch.cuda.empty_cache()
         for idf, df_ in enumerate(ensure_array(df)):
             if S.GPU_streaming:
                 result = S.STEM_with_GPU_streaming(
@@ -367,15 +407,21 @@ def STEM_PRISM(
                     STEM_image=STEM_images[idf],
                 )
             if FourD_STEM:
-                datacubes[idf] = result["datacube"][0]
+                datacubes[idf] = result["datacube"][0] / nfph_
             if doconvSTEM:
-                STEM_images[idf] = result["STEM images"]
+                STEM_images[idf] = result["STEM images"] / nfph_
+    result = {"STEM images": np.squeeze(STEM_images), "datacube": np.squeeze(datacubes)}
+    # Perform DPC reconstructions (requires py4DSTEM)
+    if DPC:
+        result["DPC"] = phase_from_com(
+            STEM_images[:, -2:] / nfph_, rsize=structure.unitcell
+        )
 
     # Close all hdf5 files
     if h5file is not None:
         h5file.close()
 
-    return {"STEM images": np.squeeze(STEM_images), "datacube": np.squeeze(datacubes)}
+    return result
 
 
 def STEM_multislice(
@@ -392,6 +438,7 @@ def STEM_multislice(
     FourD_STEM=False,
     h5_filename=None,
     STEM_images=None,
+    DPC=False,
     scan_posn=None,
     dtype=torch.float32,
     device_type=None,
@@ -402,6 +449,7 @@ def STEM_multislice(
     detector_ranges=None,
     D=None,
     fractional_occupancy=True,
+    displacements=True,
     nT=5,
     P=None,
     T=None,
@@ -429,6 +477,34 @@ def STEM_multislice(
         coordinates) at which the object will be subsliced. The last entry
         should always be 1.0. For example, to slice the object into four equal
         sized slices pass [0.25,0.5,0.75,1.0]
+    df : float, optional
+        Probe defocus, convention is that a negative defocus has the probe
+        focused "into" the specimen
+    nfph : int, optional
+        Number of iterations of the frozen phonon algorithm (25 by default, which
+        is a good rule of thumb for convergence)
+    aberrations : list, optional
+        A list of of probe aberrations of class pyms.Probe.aberration, pass an
+        empty list for an aberration free probe (the defocus aberration is also
+        controlled by the df parameter)
+    batch_size : int, optional
+        The multislice algorithm can be performed on multiple probes columns
+        at once to parrallelize computation, the number of parrallel computations
+        is set by batch_size.
+    fourD_STEM : bool or array_like, optional
+        Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
+        space a tuple containing pixel size and diffraction space extent of the
+        datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
+        diffraction patterns cropped and downsampled/interpolated to measure
+        64 x 64 pixels and 1.2 x 1.2 inverse Angstroms.
+    STEM_images : (nthick,ndet,ny,nx) array_like
+        An array containing the STEM images. If not provided but detector_ranges
+        is then this will be initialized in the function.
+    DPC : bool
+        Set to True to simulate centre-of-mass differential phase contrast (DPC)
+        STEM imaging. The centre of mass images will be added to the STEM_images
+        output and the differential phase contrast reconstrutions from these
+        images will be outputted seperately in the results dictionary
     device_type : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
@@ -486,10 +562,24 @@ def STEM_multislice(
         0 to 10 mrad and 10 to 20 mrad.
     D : (ndet x Y x X) array_like, optional
         A precomputed set of STEM detectors, overrides detector_ranges.
-    P : (n,Y,X) array_like, optional
+    fractional_occupancy: bool
+        Set to false to disable fracitonal occupancy of an atomic site by two
+        different atomic species.
+    nT : int, optional
+        Number of transmission functions calculated with independent atomic
+        displacements for frozen phonon iteration.
+    P : (nslices,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
-    T : (n,Y,X) array_like
+    T : (nT,nslices,Y,X) array_like
         Precomputed transmission functions
+
+    Returns
+    -------
+    result : dict
+        Can contain up to three entries with keys 'STEM images' which is the
+        conventional STEM images simulated, 'datacube' which is a 4D-STEM
+        datacube and 'DPC' which are the reconstructions of the specimen phase
+        from the centre-of-mass STEM images.
     """
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -511,6 +601,13 @@ def STEM_multislice(
                 for drange in detector_ranges
             ]
         )
+
+    if DPC:
+        DPC_det = np.stack(q_space_array(gridshape, real_dim), axis=0)
+        if D is not None:
+            D = np.concatenate([D, DPC_det], axis=0)
+        else:
+            D = DPC_det
 
     method = multislice
 
@@ -573,6 +670,7 @@ def STEM_multislice(
                 nT=nT,
                 device=device,
                 showProgress=showProgress,
+                displacements=displacements,
             )
 
         # Put new transmission functions and propagators into arguments
@@ -614,8 +712,13 @@ def STEM_multislice(
     if h5_filename is not None:
         for f in files:
             f.close()
+    result = {"STEM images": np.squeeze(STEM_images), "datacube": np.squeeze(datacubes)}
+    # Perform DPC reconstructions (requires py4DSTEM)
+    if DPC:
 
-    return {"STEM images": STEM_images, "datacube": datacubes}
+        result["DPC"] = phase_from_com(STEM_images[-2:], rsize=structure.unitcell[:2])
+
+    return result
 
 
 def multislice_precursor(

@@ -32,6 +32,24 @@ def clean_temp_structure():
         os.remove(scratch_cell_name)
 
 
+def make_graphene_file(fnam):
+    """Make a graphene structure file for various testing purposes."""
+    f = open(fnam, "w")
+    f.write(
+        "c4\n1.0\n 2.4672913551 0.0000000000 0.0000000000\n -1.2336456776 "
+        + "2.1367369921 0.0000000000\n 0.0000000000 0.0000000000 "
+        + "7.8030724525\n C\n 4\nDirect\n -0.000000000 -0.000000000 "
+        + "0.250000000 C0 1.00000 1.00000 0.00000 0.00000 0.00000 0.00000 "
+        + "0.00000 0.00000\n -0.000000000 -0.000000000 0.750000015 C1 "
+        + "1.00000 1.00000 0.00000 0.00000 0.00000 0.00000 0.00000"
+        + " 0.00000\n 0.333333014 0.666667038 0.250000000 C2 1.00000 1.00000"
+        + " 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000\n 0.666666992"
+        + " 0.333333017 0.750000015 C3 1.00000 1.00000 0.00000 0.00000 "
+        + "0.00000 0.00000 0.00000 0.00000\n\n"
+    )
+    f.close()
+
+
 def make_temp_structure(atoms=None, title="scratch", ucell=None, seed=0):
     """
     Make a random temporary structure to test routines on.
@@ -690,21 +708,7 @@ class Test_Structure_Methods(unittest.TestCase):
     def test_orthorhombic_supercell(self):
         """Test by opening graphene (which has a hexagonal unit cell)."""
         fnam = scratch_cell_name.replace(".xyz", ".p1")
-        f = open(fnam, "w")
-        f.write(
-            "c4\n1.0\n 2.4672913551 0.0000000000 0.0000000000\n -1.2336456776 "
-            + "2.1367369921 0.0000000000\n 0.0000000000 0.0000000000 "
-            + "7.8030724525\n C\n 4\nDirect\n -0.000000000 -0.000000000 "
-            + "0.250000000 C0 1.00000 1.00000 0.00000 0.00000 0.00000 0.00000 "
-            + "0.00000 0.00000\n -0.000000000 -0.000000000 0.750000015 C1 "
-            + "1.00000 1.00000 0.00000 0.00000 0.00000 0.00000 0.00000"
-            + " 0.00000\n 0.333333014 0.666667038 0.250000000 C2 1.00000 1.00000"
-            + " 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000\n 0.666666992"
-            + " 0.333333017 0.750000015 C3 1.00000 1.00000 0.00000 0.00000 "
-            + "0.00000 0.00000 0.00000 0.00000\n\n"
-        )
-        f.close()
-
+        make_graphene_file(fnam)
         graphene = pyms.structure.fromfile(fnam)
         os.remove(fnam)
         graphene.output_vesta_xtl("graphene.xtl")
@@ -792,6 +796,23 @@ class Test_Structure_Methods(unittest.TestCase):
         )
         within_spec = np.sum(np.square(precalc - pot.ravel())) < 1e-10
         self.assertTrue(within_spec)
+
+    def test_resize(self):
+        """Test the structure resize routine for cropping and padding with vaccuum."""
+        unitcell = [5.0, 5.0, 5.0]
+        atom = np.asarray([1 / 4, 1 / 4, 1 / 4]).reshape((1, 3))
+        dwf = [0]
+        cell = pyms.structure(unitcell, atom, dwf)
+        resize = [[0.0, 0.5], [-0.25, 1.25]]
+        axis = [0, 2]
+        newcell = cell.resize(resize, axis)
+
+        test_posn = (
+            sumsqr_diff(newcell.atoms[0, :3], np.asarray([0.5, 0.25, 1 / 3])) < 1e-10
+        )
+        test_cell = sumsqr_diff(newcell.unitcell, np.asarray([2.5, 5.0, 7.5])) < 1e-10
+
+        self.assertTrue(test_posn and test_cell)
 
     def testrot90(self):
         """Test of the rot90 function (under construction)."""
@@ -972,6 +993,58 @@ class Test_py_multislice_Methods(unittest.TestCase):
             passTest = passTest and sumsqr_diff(PRISMimages, images) < 1e-8
         self.assertTrue(passTest)
 
+    def test_DPC(self):
+        """Test DPC routine by comparing reconstruction to input potential."""
+        gridshape = [256, 256]
+        eV = 6e4
+        app = 30
+        tiling = [17 // 2, 10 // 2]
+
+        fnam = scratch_cell_name.replace(".xyz", ".p1")
+        make_graphene_file(fnam)
+
+        Graphene = pyms.structure.fromfile(fnam)
+        thicknesses = [Graphene.unitcell[2] - 0.1]
+
+        P, T = pyms.multislice_precursor(
+            Graphene,
+            gridshape,
+            eV,
+            tiling=tiling,
+            nT=1,
+            displacements=False,
+            showProgress=False,
+        )
+        result = pyms.STEM_multislice(
+            Graphene,
+            gridshape,
+            eV,
+            app,
+            thicknesses,
+            nfph=1,
+            displacements=False,
+            DPC=True,
+            tiling=tiling,
+            P=P,
+            T=T,
+            detector_ranges=[[0, app / 2]],
+            showProgress=False,
+        )
+
+        # fig, ax = plt.subplots(ncols=4)
+        rsize = Graphene.unitcell[:2] * np.asarray(tiling)
+        probe = pyms.focused_probe(gridshape, rsize, eV, app)
+        convolved_phase = pyms.utils.convolve(
+            np.abs(probe) ** 2, np.angle(pyms.utils.cx_to_numpy(T[0, 0]))
+        )
+        convolved_phase -= np.amin(convolved_phase)
+
+        reconstructed_phase = pyms.utils.fourier_interpolate_2d(
+            np.tile(result["DPC"], tiling), gridshape
+        )
+        reconstructed_phase -= np.amin(reconstructed_phase)
+        self.assertTrue(sumsqr_diff(convolved_phase, reconstructed_phase) < 1e-4)
+
     def test_Smatrix(self):
         """
         Testing scattering matrix and PRISM algorithms.
@@ -1144,6 +1217,9 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
 if __name__ == "__main__":
 
+    unittest.main()
+    clean_temp_structure()
+
     # import matplotlib.pyplot as plt
     # sigma = 4
     # gridshape = [128,128]
@@ -1159,9 +1235,6 @@ if __name__ == "__main__":
     # Image.fromarray(Gaussian).save('Gaussian.tif')
     # plt.show(block=True)
     # import sys;sys.exit()
-
-    unittest.main()
-    clean_temp_structure()
 
     # sys.exit()
 
