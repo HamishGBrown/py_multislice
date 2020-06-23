@@ -272,13 +272,12 @@ def focused_probe(
     )
 
     # Normalize the STEM probe so that its sum-squared intensity is unity
-    probe /= np.sqrt(np.sum(np.square(np.abs(probe))))
+    probe *= np.sqrt(np.prod(gridshape)) / np.sqrt(np.sum(np.square(np.abs(probe))))
 
     # Return real or diffraction space probe depending on user preference
-    if qspace:
-        return probe * np.sqrt(np.prod(gridshape))
-    else:
-        return np.fft.ifft2(probe, norm="ortho")
+    if not qspace:
+        return np.fft.ifft2(probe)
+    return probe
 
 
 def plane_wave_illumination(

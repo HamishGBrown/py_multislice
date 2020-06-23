@@ -3,6 +3,7 @@
 A collection of functions and classes for reading in and manipulating structures
 and creating potential arrays for multislice simulation.
 """
+import ase
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -411,6 +412,7 @@ class structure:
         # If necessary, Convert atomic positions to fractional coordinates
         if atomic_coordinates == "cartesian":
             atoms[:, :3] /= unitcell[:3][np.newaxis, :]
+            atoms[:, :3] = atoms[:, :3] % 1.0
 
         if T is not None:
             # Transform atoms to cartesian basis and then apply transformation
@@ -424,6 +426,34 @@ class structure:
             atoms[:, :3] = (np.linalg.inv(unitcell) @ atoms[:, :3].T).T
 
         return cls(unitcell, atoms[:, :4], dwf, occ, Title, EPS=EPS)
+
+    @classmethod
+    def from_ase_cluster(cls, asecell, occupancy=None, Title="", dwf=None):
+        """Initialize from Atomic Simulation Environment (ASE) cluster object."""
+        unitcell = asecell.cell[:]
+        natoms = asecell.numbers.shape[0]
+        atoms = np.concatenate(
+            [
+                asecell.cell.scaled_positions(asecell.positions),
+                asecell.numbers.reshape(natoms, 1),
+            ],
+            axis=1,
+        )
+        if occupancy is None:
+            occ = np.ones(natoms)
+        if dwf is None:
+            dwf = np.ones(natoms) * 1 / np.pi ** 2 / 8
+        return cls(unitcell, atoms, dwf, occ, Title)
+
+    def to_ase_atoms(self):
+        """Convert structure to Atomic SIulation Environment (ASE) atoms object."""
+        scaled_positions = self.atoms[:, :3]
+        numbers = self.atoms[:, 3].astype(np.int)
+        cell = self.unitcell
+        pbc = [True, True, True]
+        return ase.Atoms(
+            scaled_positions=scaled_positions, numbers=numbers, cell=cell, pbc=pbc
+        )
 
     def orthorhombic_supercell(self, EPS=1e-2):
         """

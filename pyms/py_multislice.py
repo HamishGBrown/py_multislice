@@ -651,7 +651,10 @@ def generate_probe_spread_plot(
 
     ncols = 1 + showcrossection
     fig, ax = plt.subplots(ncols=ncols, figsize=(ncols * 4, 4), squeeze=False)
-    maxslices = int(np.ceil(thickness / structure.unitcell[2]))
+    # Total number of slices (not including subslicing of structure)
+    nslices = int(np.ceil(thickness / structure.unitcell[2]))
+    # Total number of slices (including subslicing of structure)
+    maxslices = nslices * len(subslices)
 
     variances = np.zeros(maxslices)
     intensity = np.zeros(maxslices)
@@ -668,6 +671,7 @@ def generate_probe_spread_plot(
             P,
             T,
             tiling=tiling,
+            subslicing=True,
             output_to_bandwidth_limit=False,
             device_type=device,
         )
@@ -678,7 +682,10 @@ def generate_probe_spread_plot(
         if showcrossection:
             crossection[i] = np.sum(mod, axis=-1)
 
-    thicknesses = np.arange(maxslices) * structure.unitcell[2]
+    thicknesses = structure.unitcell[2] * (
+        np.broadcast_to(np.arange(nslices)[:, None], (nslices, len(subslices))).ravel()
+        + np.tile(subslices, nslices)
+    )
     ax[0, 0].set_xlim([0, thicknesses[-1]])
     ax[0, 0].set_ylim([0, 1.1])
 
@@ -869,7 +876,7 @@ def STEM(
 
         # Check whether a datacube is already provided or not
         if datacube is None:
-            datacube = np.zeros((nthick, nscantot, *gridout))
+            datacube = np.zeros((nthick, *scan_shape, *gridout))
 
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
@@ -932,13 +939,6 @@ def STEM(
                 ind = np.unravel_index(scan_index, scan_shape)
                 for idp, DP in enumerate(DPS):
                     datacube[it][ind[0][idp], ind[1][idp]] += DP
-
-    # Unflatten 4D-STEM datacube scan dimensions, use numpy squeeze to
-    # remove superfluous dimensions (ones with length 1)
-    # if FourD_STEM:
-    # datacube = np.squeeze(
-    #     datacube.reshape(nthick, *scan_shape, *datacube.shape[-2:])
-    # )
 
     if conventional_STEM:
         STEM_image = np.squeeze(STEM_image.reshape(ndet, nthick, *scan_shape))

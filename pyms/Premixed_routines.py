@@ -696,15 +696,15 @@ def STEM_multislice(
             datacube=datacubes,
             STEM_image=STEM_images,
         )
-        datacube = result["datacube"]
+        datacubes = result["datacube"]
         STEM_images = result["STEM images"]
 
-    if datacube is not None:
-        if isinstance(datacube, (list, tuple)):
-            for i in range(len(datacube)):
-                datacube[i][:] = datacube[i][:] / nfph
+    if datacubes is not None:
+        if isinstance(datacubes, (list, tuple)):
+            for i in range(len(datacubes)):
+                datacubes[i][:] = datacubes[i][:] / nfph
         else:
-            datacube /= nfph
+            datacubes /= nfph
     if STEM_images is not None:
         STEM_images /= nfph
 

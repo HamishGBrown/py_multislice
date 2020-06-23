@@ -147,114 +147,12 @@ class Test_util_Methods(unittest.TestCase):
         passy = sumsqr_diff(r[1][0, :], np.asarray([0.0, 0.4, 0.8, -0.8, -0.4])) < 1e-10
         self.assertTrue(passx and passy)
 
-    def test_torch_complex_matmul(self):
-        """Test complex matmul against numpy complex matrix multiplication."""
-        k, m, n = 2, 3, 4
-        a = np.random.randint(-5, 5, size=k * m).reshape(
-            (k, m)
-        ) + 1j * np.random.randint(-5, 5, size=k * m).reshape((k, m))
-        b = np.random.randint(-5, 5, size=m * n).reshape(
-            (m, n)
-        ) + 1j * np.random.randint(-5, 5, size=m * n).reshape((m, n))
-
-        c = sumsqr_diff(
-            a @ b,
-            pyms.utils.cx_to_numpy(
-                pyms.utils.complex_matmul(
-                    *[pyms.utils.cx_from_numpy(x) for x in [a, b]]
-                )
-            ),
-        )
-        self.assertTrue(c < 1e-10)
-
-    def test_torch_complex_mul(self):
-        """Multiply 1 + i and 3 + 4i to give -1 + 7 i."""
-        a = torch.as_tensor([1, 1])
-        b = torch.as_tensor([3, 4])
-        c = pyms.utils.complex_mul(a, b)
-        self.assertTrue(float(sumsqr_diff(c, torch.as_tensor([-1, 7]))) < 1e-10)
-
-    def test_numpy_fft_shift(self):
-        """Test to see if fourier shift correctly shifts a pixel 2 to the right."""
-        test_array = np.zeros((5, 5))
-        test_array[0, 0] = 1
-        shifted1 = pyms.utils.fourier_shift(test_array, [2, 3])
-        test_array[0, 0] = 0
-        test_array[2, 3] = 1
-        self.assertTrue(
-            sumsqr_diff(shifted1, test_array) < 1e-10
-            and sumsqr_diff(shifted1, test_array) < 1e-10
-        )
-
-    def test_torch_c_exp(self):
-        """Test exponential function by calculating e^{i pi} and e^{1 + i pi}."""
-        # Test e^{i pi} = -1
-        # Test complex input
-        arg = np.asarray(np.pi + 1j)
-        a = pyms.utils.torch_c_exp(pyms.utils.cx_from_numpy(arg))
-        passcomplex = (a.data[0] + 1 / np.exp(1.0)) ** 2 < 1e-10 and a.data[
-            1
-        ] ** 2 < 1e-10
-
-        # Test real input
-        arg = torch.as_tensor([np.pi])
-        a = pyms.utils.torch_c_exp(arg)
-        passreal = (a[0, 0] + 1) ** 2 < 1e-10
-        passtest = passreal and passcomplex
-        self.assertTrue(passtest.item())
-
-    def test_torch_sinc(self):
-        """Test sinc function by calculating [sinc(0),sinc(pi/2),sinc(pi)]."""
-        x = torch.as_tensor([0, 1 / 2, 1, 3 / 2])
-        y = torch.as_tensor([1.0, 2 / np.pi, 0, -2 / 3 / np.pi])
-        self.assertTrue(sumsqr_diff(y, pyms.utils.sinc(x)) < 1e-7)
-
-    def test_amplitude(self):
-        """Test modulus square function by calculating a few known examples."""
-        # 1 + i, 1-i and i
-        x = torch.as_tensor([[1, 1], [1, -1], [0, 1]])
-        y = torch.as_tensor([2, 2, 1])
-        passcomplex = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
-        # 1,2,4 (test function for real numbers)
-        x = torch.as_tensor([1, 2, 4])
-        y = torch.as_tensor([1, 4, 16])
-        passreal = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
-        self.assertTrue(passcomplex and passreal)
-
-    def test_roll_n(self):
-        """Test the roll (circular shift of array) function."""
-        shifted = torch.zeros((5, 5))
-        shifted[0, 0] = 1
-        for a, n in zip([-1, -2], [2, 3]):
-            shifted = pyms.utils.roll_n(shifted, a, n)
-        test_array = torch.zeros((5, 5))
-        test_array[2, 3] = 1
-        self.assertTrue(sumsqr_diff(shifted, test_array).item() < 1e-10)
-
-    def test_cx_from_numpy(self):
-        """Test function for converting complex numpy arrays to complex tensors."""
-        in_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
-        out_ = torch.as_tensor([[1.0, 1.0], [2.0, -2.0]], device=torch.device("cpu"))
-        self.assertTrue(
-            sumsqr_diff(
-                out_, pyms.utils.cx_from_numpy(in_, device=torch.device("cpu"))
-            ).item()
-            < 1e-7
-        )
-
-    def test_cx_to_numpy(self):
-        """Test function for converting complex numpy arrays to complex tensors."""
-        out_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
-        in_ = torch.as_tensor([[1.0, 1.0], [2.0, -2.0]], device=torch.device("cpu"))
-        self.assertTrue(sumsqr_diff(out_, pyms.utils.cx_to_numpy(in_)).item() < 1e-7)
-
-    def test_fftfreq(self):
-        """Test function for calculating Fourier frequency grid."""
-        even = torch.as_tensor([0.0, 1.0, -2.0, -1.0])
-        odd = torch.as_tensor([0.0, 1.0, 2.0, -2.0, -1.0])
-        passeven = sumsqr_diff(pyms.utils.fftfreq(4), even) < 1e-8
-        passodd = sumsqr_diff(pyms.utils.fftfreq(5), odd) < 1e-8
-        self.assertTrue(passeven and passodd)
+    def test_q_space_array(self):
+        """Test the reciprocal space array function."""
+        q = pyms.utils.q_space_array([3, 5], [1, 1])
+        passx = sumsqr_diff(q[0][:, 0], np.asarray([0, 1, -1])) < 1e-10
+        passy = sumsqr_diff(q[1][0, :], np.asarray([0, 1, 2, -2, -1])) < 1e-10
+        self.assertTrue(passx and passy)
 
     def test_crop_window(self):
         """Test cropping window function on known result."""
@@ -270,115 +168,6 @@ class Test_util_Methods(unittest.TestCase):
             [[0, 1, 1, 1], [0, 0, 0, 0], [0, 1, 1, 1], [0, 1, 1, 1]]
         )
         self.assertTrue(sumsqr_diff(grid, reference).item() < 1e-7)
-
-    def test_crop(self):
-        """Test cropping method on scipy test image."""
-        # Get astonaut image
-        from skimage.data import astronaut
-
-        im = np.sum(astronaut(), axis=2).astype(np.float32)
-
-        passTest = True
-
-        for c_func, img in zip(
-            [pyms.utils.crop, pyms.utils.crop_torch],
-            [im, torch.as_tensor(copy.deepcopy(im))],
-        ):
-            # Check that normal cropping works
-            cropPass = (
-                sumsqr_diff(
-                    c_func(img, [256, 256]), img[128 : 512 - 128, 128 : 512 - 128]
-                )
-                < 1e-10
-            )
-            passTest = passTest and cropPass
-
-            # If an output size larger than that of the input is requested then the
-            # input array should be padded instead, check that this is working too.
-            pad = c_func(img, [700, 700])
-            pad[350 - 256 : 350 + 256, 350 - 256 : 350 + 256] -= img
-            padPass = sumsqr(pad) < 1e-10
-            passTest = passTest and padPass
-
-        self.assertTrue(passTest)
-
-    def test_convolution(self):
-        """Test Fourier convolution by convolving with shifted delta function."""
-        shape = [128, 128]
-        delta = np.zeros(shape)
-        delta[5, 5] = 1
-        # Make a circle
-        circle = pyms.make_contrast_transfer_function(shape, [20, 20], 3e5, 20)
-
-        convolved = pyms.utils.convolve(circle, delta)
-        shifted = np.roll(circle, [5, 5], axis=[-2, -1])
-        passcomplex = sumsqr_diff(convolved, shifted) < 1e-10
-        convolved = pyms.utils.convolve(np.abs(circle), delta)
-        passreal = sumsqr_diff(convolved, shifted) < 1e-10
-        self.assertTrue(passcomplex and passreal)
-
-    def test_fourier_interpolation(self):
-        """Test fourier interpolation of a cosine function."""
-        a = np.zeros((4, 4), dtype=np.float32)
-
-        # Put in one full period of a cosine function (a checkerboard 1,0,-1,0)
-        a[0, :] = 1
-        a[2, :] = -1
-
-        # In the fourier interpolated version we should recover the value of
-        # cos(pi/2) = 1/sqrt(2) at the interpolated intermediate points
-        passY = (
-            pyms.utils.fourier_interpolate_2d(a, (8, 8))[1, 0] - 1 / np.sqrt(2) < 1e-10
-        )
-
-        # Test in x direction for completeness
-        passX = (
-            pyms.utils.fourier_interpolate_2d(a.T, (8, 8)).T[1, 0] - 1 / np.sqrt(2)
-            < 1e-10
-        )
-
-        # Test that the option 'conserve_norm' works too.
-        passNorm = (
-            np.sum(
-                pyms.utils.fourier_interpolate_2d(a, (8, 8), norm="conserve_L2") ** 2
-            )
-            - np.sum(a ** 2)
-            < 1e-10
-        )
-
-        numpyVersionPass = (passY and passX) and passNorm
-
-        # test pytorch versions
-        passY = (
-            pyms.utils.fourier_interpolate_2d_torch(
-                pyms.utils.cx_from_numpy(a), (8, 8)
-            )[1, 0, 0]
-            - 1 / np.sqrt(2)
-            < 1e-10
-        )
-        # print(pyms.utils.fourier_interpolate_2d_torch(pyms.utils.cx_from_numpy(a.T),(8,8)).shape)
-        passX = (
-            pyms.utils.fourier_interpolate_2d_torch(
-                pyms.utils.cx_from_numpy(a.T), (8, 8)
-            )[0, 1, 0]
-            - 1 / np.sqrt(2)
-            < 1e-10
-        )
-
-        # Test that the option 'conserve_norm' works too.
-        passNorm = (
-            torch.sum(
-                pyms.utils.fourier_interpolate_2d_torch(
-                    pyms.utils.cx_from_numpy(a.T), (8, 8), correct_norm=False
-                )
-                ** 2
-            )
-            - torch.sum(pyms.utils.cx_from_numpy(a) ** 2)
-            < 1e-10
-        )
-        pytorchVersionPass = passY.item() and passX.item() and passNorm.item()
-
-        self.assertTrue(pytorchVersionPass and numpyVersionPass)
 
     def test_crop_tobandwidthlimit(self):
         """Test the function that crops arrays to the maximum bandwidth limit."""
@@ -560,6 +349,239 @@ class Test_util_Methods(unittest.TestCase):
         bandlimited = pyms.utils.bandwidth_limit_array(testarray, 2 / 3)
         passodd = np.all(bandlimited - referencearray == 0)
         self.assertTrue(np.all([passeven, passodd]))
+
+    def test_convolution(self):
+        """Test Fourier convolution by convolving with shifted delta function."""
+        shape = [128, 128]
+        delta = np.zeros(shape)
+        delta[5, 5] = 1
+        # Make a circle
+        circle = pyms.make_contrast_transfer_function(shape, [20, 20], 3e5, 20)
+
+        convolved = pyms.utils.convolve(circle, delta)
+        shifted = np.roll(circle, [5, 5], axis=[-2, -1])
+        passcomplex = sumsqr_diff(convolved, shifted) < 1e-10
+        convolved = pyms.utils.convolve(np.abs(circle), delta)
+        passreal = sumsqr_diff(convolved, shifted) < 1e-10
+        self.assertTrue(passcomplex and passreal)
+
+    def test_fourier_interpolation(self):
+        """Test fourier interpolation of a cosine function."""
+        a = np.zeros((4, 4), dtype=np.float32)
+
+        # Put in one full period of a cosine function (a checkerboard 1,0,-1,0)
+        a[0, :] = 1
+        a[2, :] = -1
+
+        # In the fourier interpolated version we should recover the value of
+        # cos(pi/2) = 1/sqrt(2) at the interpolated intermediate points
+        passY = (
+            pyms.utils.fourier_interpolate_2d(a, (8, 8))[1, 0] - 1 / np.sqrt(2) < 1e-10
+        )
+
+        # Test in x direction for completeness
+        passX = (
+            pyms.utils.fourier_interpolate_2d(a.T, (8, 8)).T[1, 0] - 1 / np.sqrt(2)
+            < 1e-10
+        )
+
+        # Test that the option 'conserve_norm' works too.
+        passNorm = (
+            np.sum(
+                pyms.utils.fourier_interpolate_2d(a, (8, 8), norm="conserve_L2") ** 2
+            )
+            - np.sum(a ** 2)
+            < 1e-10
+        )
+
+        numpyVersionPass = (passY and passX) and passNorm
+
+        # test pytorch versions
+        passY = (
+            pyms.utils.fourier_interpolate_2d_torch(
+                pyms.utils.cx_from_numpy(a), (8, 8)
+            )[1, 0, 0]
+            - 1 / np.sqrt(2)
+            < 1e-10
+        )
+        # print(pyms.utils.fourier_interpolate_2d_torch(pyms.utils.cx_from_numpy(a.T),(8,8)).shape)
+        passX = (
+            pyms.utils.fourier_interpolate_2d_torch(
+                pyms.utils.cx_from_numpy(a.T), (8, 8)
+            )[0, 1, 0]
+            - 1 / np.sqrt(2)
+            < 1e-10
+        )
+
+        # Test that the option 'conserve_norm' works too.
+        passNorm = (
+            torch.sum(
+                pyms.utils.fourier_interpolate_2d_torch(
+                    pyms.utils.cx_from_numpy(a.T), (8, 8), correct_norm=False
+                )
+                ** 2
+            )
+            - torch.sum(pyms.utils.cx_from_numpy(a) ** 2)
+            < 1e-10
+        )
+        pytorchVersionPass = passY.item() and passX.item() and passNorm.item()
+
+        self.assertTrue(pytorchVersionPass and numpyVersionPass)
+
+    def test_numpy_fft_shift(self):
+        """Test to see if fourier shift correctly shifts a pixel 2 to the right."""
+        test_array = np.zeros((5, 5))
+        test_array[0, 0] = 1
+        shifted1 = pyms.utils.fourier_shift(test_array, [2, 3])
+        test_array[0, 0] = 0
+        test_array[2, 3] = 1
+        self.assertTrue(
+            sumsqr_diff(shifted1, test_array) < 1e-10
+            and sumsqr_diff(shifted1, test_array) < 1e-10
+        )
+
+    def test_crop(self):
+        """Test cropping method on scipy test image."""
+        # Get astonaut image
+        from skimage.data import astronaut
+
+        im = np.sum(astronaut(), axis=2).astype(np.float32)
+
+        passTest = True
+
+        for c_func, img in zip(
+            [pyms.utils.crop, pyms.utils.crop_torch],
+            [im, torch.as_tensor(copy.deepcopy(im))],
+        ):
+            # Check that normal cropping works
+            cropPass = (
+                sumsqr_diff(
+                    c_func(img, [256, 256]), img[128 : 512 - 128, 128 : 512 - 128]
+                )
+                < 1e-10
+            )
+            passTest = passTest and cropPass
+
+            # If an output size larger than that of the input is requested then the
+            # input array should be padded instead, check that this is working too.
+            pad = c_func(img, [700, 700])
+            pad[350 - 256 : 350 + 256, 350 - 256 : 350 + 256] -= img
+            padPass = sumsqr(pad) < 1e-10
+            passTest = passTest and padPass
+
+        self.assertTrue(passTest)
+
+    def test_Gaussian(self):
+        """Test the 2D Gaussian function (check standard deviation of result)."""
+        sigma = [4, 8]
+        gridshape = [128, 128]
+        rsize = [128, 128]
+
+        Gaussian = pyms.utils.Gaussian(sigma, gridshape, rsize)
+        r = pyms.utils.r_space_array(gridshape, rsize)
+        sigmayout = np.sqrt(np.sum((r[0] ** 2) * Gaussian))
+        sigmaxout = np.sqrt(np.sum((r[1] ** 2) * Gaussian))
+        passTest = (
+            sumsqr_diff(np.asarray(sigma), np.asarray([sigmayout, sigmaxout])) < 1e-10
+        )
+        self.assertTrue(passTest)
+
+    def test_torch_complex_matmul(self):
+        """Test complex matmul against numpy complex matrix multiplication."""
+        k, m, n = 2, 3, 4
+        a = np.random.randint(-5, 5, size=k * m).reshape(
+            (k, m)
+        ) + 1j * np.random.randint(-5, 5, size=k * m).reshape((k, m))
+        b = np.random.randint(-5, 5, size=m * n).reshape(
+            (m, n)
+        ) + 1j * np.random.randint(-5, 5, size=m * n).reshape((m, n))
+
+        c = sumsqr_diff(
+            a @ b,
+            pyms.utils.cx_to_numpy(
+                pyms.utils.complex_matmul(
+                    *[pyms.utils.cx_from_numpy(x) for x in [a, b]]
+                )
+            ),
+        )
+        self.assertTrue(c < 1e-10)
+
+    def test_torch_complex_mul(self):
+        """Multiply 1 + i and 3 + 4i to give -1 + 7 i."""
+        a = torch.as_tensor([1, 1])
+        b = torch.as_tensor([3, 4])
+        c = pyms.utils.complex_mul(a, b)
+        self.assertTrue(float(sumsqr_diff(c, torch.as_tensor([-1, 7]))) < 1e-10)
+
+    def test_torch_c_exp(self):
+        """Test exponential function by calculating e^{i pi} and e^{1 + i pi}."""
+        # Test e^{i pi} = -1
+        # Test complex input
+        arg = np.asarray(np.pi + 1j)
+        a = pyms.utils.torch_c_exp(pyms.utils.cx_from_numpy(arg))
+        passcomplex = (a.data[0] + 1 / np.exp(1.0)) ** 2 < 1e-10 and a.data[
+            1
+        ] ** 2 < 1e-10
+
+        # Test real input
+        arg = torch.as_tensor([np.pi])
+        a = pyms.utils.torch_c_exp(arg)
+        passreal = (a[0, 0] + 1) ** 2 < 1e-10
+        passtest = passreal and passcomplex
+        self.assertTrue(passtest.item())
+
+    def test_torch_sinc(self):
+        """Test sinc function by calculating [sinc(0),sinc(pi/2),sinc(pi)]."""
+        x = torch.as_tensor([0, 1 / 2, 1, 3 / 2])
+        y = torch.as_tensor([1.0, 2 / np.pi, 0, -2 / 3 / np.pi])
+        self.assertTrue(sumsqr_diff(y, pyms.utils.sinc(x)) < 1e-7)
+
+    def test_amplitude(self):
+        """Test modulus square function by calculating a few known examples."""
+        # 1 + i, 1-i and i
+        x = torch.as_tensor([[1, 1], [1, -1], [0, 1]])
+        y = torch.as_tensor([2, 2, 1])
+        passcomplex = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
+        # 1,2,4 (test function for real numbers)
+        x = torch.as_tensor([1, 2, 4])
+        y = torch.as_tensor([1, 4, 16])
+        passreal = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
+        self.assertTrue(passcomplex and passreal)
+
+    def test_roll_n(self):
+        """Test the roll (circular shift of array) function."""
+        shifted = torch.zeros((5, 5))
+        shifted[0, 0] = 1
+        for a, n in zip([-1, -2], [2, 3]):
+            shifted = pyms.utils.roll_n(shifted, a, n)
+        test_array = torch.zeros((5, 5))
+        test_array[2, 3] = 1
+        self.assertTrue(sumsqr_diff(shifted, test_array).item() < 1e-10)
+
+    def test_cx_from_numpy(self):
+        """Test function for converting complex numpy arrays to complex tensors."""
+        in_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
+        out_ = torch.as_tensor([[1.0, 1.0], [2.0, -2.0]], device=torch.device("cpu"))
+        self.assertTrue(
+            sumsqr_diff(
+                out_, pyms.utils.cx_from_numpy(in_, device=torch.device("cpu"))
+            ).item()
+            < 1e-7
+        )
+
+    def test_cx_to_numpy(self):
+        """Test function for converting complex numpy arrays to complex tensors."""
+        out_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
+        in_ = torch.as_tensor([[1.0, 1.0], [2.0, -2.0]], device=torch.device("cpu"))
+        self.assertTrue(sumsqr_diff(out_, pyms.utils.cx_to_numpy(in_)).item() < 1e-7)
+
+    def test_fftfreq(self):
+        """Test function for calculating Fourier frequency grid."""
+        even = torch.as_tensor([0.0, 1.0, -2.0, -1.0])
+        odd = torch.as_tensor([0.0, 1.0, 2.0, -2.0, -1.0])
+        passeven = sumsqr_diff(pyms.utils.fftfreq(4), even) < 1e-8
+        passodd = sumsqr_diff(pyms.utils.fftfreq(5), odd) < 1e-8
+        self.assertTrue(passeven and passodd)
 
 
 class Test_Structure_Methods(unittest.TestCase):
@@ -1219,22 +1241,6 @@ if __name__ == "__main__":
 
     unittest.main()
     clean_temp_structure()
-
-    # import matplotlib.pyplot as plt
-    # sigma = 4
-    # gridshape = [128,128]
-    # rsize = [128,128]
-    # fig,ax = plt.subplots(nrows=2)
-    # Gaussian = pyms.utils.Gaussian(sigma,gridshape,rsize)
-    # r = pyms.utils.r_space_array(gridshape,rsize)
-    # rsqr = r[0]**2+r[1]**2
-    # print(np.sum(Gaussian),np.sqrt(np.sum(rsqr*Gaussian)))
-    # ax[0].imshow(np.fft.fftshift(Gaussian))
-    # ax[1].imshow(rsqr)
-    # from PIL import Image
-    # Image.fromarray(Gaussian).save('Gaussian.tif')
-    # plt.show(block=True)
-    # import sys;sys.exit()
 
     # sys.exit()
 

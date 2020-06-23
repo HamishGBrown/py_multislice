@@ -386,7 +386,7 @@ def crop(arrayin, shapeout):
 
 def Gaussian(sigma, gridshape, rsize, theta=0):
     """
-    Calculate a 2D Gaussian function.
+    Calculate a normalized 2D Gaussian function.
 
     Functional form 1/sqrt(2*pi)/sigma*exp(-(x**2+y**2)/2/sigma**2),
     grid[0] contains y gridpoints and grid[1] contains x gridpoints.
