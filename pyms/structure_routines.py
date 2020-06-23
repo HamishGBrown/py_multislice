@@ -655,19 +655,22 @@ class structure:
         # Initialize device cuda if available, CPU if no cuda is available
         device = get_device(device)
 
+        #Ensure pixels is integer
+        pixels_ = [int(x) for x in pixels]
+
         # Seed random number generator for displacements
         if seed is not None:
             torch.manual_seed(seed)
 
         tiling_ = np.asarray(tiling[:2])
         gsize = np.asarray(self.unitcell[:2]) * tiling_
-        psize = np.asarray(pixels)
+        psize = np.asarray(pixels_)
 
-        pixperA = np.asarray(pixels) / np.asarray(self.unitcell[:2]) / tiling_
+        pixperA = np.asarray(pixels_) / np.asarray(self.unitcell[:2]) / tiling_
 
         # Get a list of unique atomic elements
         elements = list(set(np.asarray(self.atoms[:, 3], dtype=np.int)))
-
+        
         # Get number of unique atomic elements
         nelements = len(elements)
         nsubslices = len(subslices)
@@ -679,25 +682,25 @@ class structure:
         # FDES method
         # Intialize potential array
         P = torch.zeros(
-            np.prod([nelements, nsubslices, *pixels, 2]), device=device, dtype=dtype
+            np.prod([nelements, nsubslices, *pixels_, 2]), device=device, dtype=dtype
         )
 
         # Construct a map of which atom corresponds to which slice
         islice = np.zeros((self.atoms.shape[0]), dtype=np.int)
-        slice_stride = np.prod(pixels) * 2
-        if nsubslices > 1:
-            # Finds which slice atom can be found in
-            # WARNING Assumes that the slices list ends with 1.0 and is in
-            # ascending order
-            for i in range(nsubslices):
-                zmin = 0 if i == 0 else subslices[i - 1]
-                atoms_in_slice = (self.atoms[:, 2] % 1.0 >= zmin) & (
-                    self.atoms[:, 2] % 1.0 < subslices[i]
-                )
-                islice[atoms_in_slice] = i * slice_stride
-            islice = torch.from_numpy(islice).type(torch.long).to(device)
-        else:
-            islice = 0
+        slice_stride = np.prod(pixels_) * 2
+        # if nsubslices > 1:
+        # Finds which slice atom can be found in
+        # WARNING Assumes that the slices list ends with 1.0 and is in
+        # ascending order
+        for i in range(nsubslices):
+            zmin = 0 if i == 0 else subslices[i - 1]
+            atoms_in_slice = (self.atoms[:, 2] % 1.0 >= zmin) & (
+                self.atoms[:, 2] % 1.0 < subslices[i]
+            )
+            islice[atoms_in_slice] = i * slice_stride
+        islice = torch.from_numpy(islice).type(torch.long).to(device)
+        # else:
+        #     islice = 0
         # Make map a pytorch Tensor
 
         # Construct a map of which atom corresponds to which element
@@ -752,18 +755,18 @@ class structure:
                 posn[:, :2] += disp
 
             yc = (
-                torch.remainder(torch.ceil(posn[:, 0]).type(torch.long), pixels[0])
-                * pixels[1]
+                torch.remainder(torch.ceil(posn[:, 0]).type(torch.long), pixels_[0])
+                * pixels_[1]
                 * 2
             )
             yf = (
-                torch.remainder(torch.floor(posn[:, 0]).type(torch.long), pixels[0])
-                * pixels[1]
+                torch.remainder(torch.floor(posn[:, 0]).type(torch.long), pixels_[0])
+                * pixels_[1]
                 * 2
             )
-            xc = torch.remainder(torch.ceil(posn[:, 1]).type(torch.long), pixels[1]) * 2
+            xc = torch.remainder(torch.ceil(posn[:, 1]).type(torch.long), pixels_[1]) * 2
             xf = (
-                torch.remainder(torch.floor(posn[:, 1]).type(torch.long), pixels[1]) * 2
+                torch.remainder(torch.floor(posn[:, 1]).type(torch.long), pixels_[1]) * 2
             )
 
             yh = torch.remainder(posn[:, 0], 1.0)
@@ -783,7 +786,7 @@ class structure:
             P.scatter_add_(0, ielement + islice + yf + xf, yl * xl)
 
         # Now view potential as a 4D array for next bit
-        P = P.view(nelements, nsubslices, *pixels, 2)
+        P = P.view(nelements, nsubslices, *pixels_, 2)
 
         # FFT potential to reciprocal space
         for i in range(P.shape[0]):
@@ -791,16 +794,16 @@ class structure:
                 P[i, j] = torch.fft(P[i, j], signal_ndim=2)
 
         # Make sinc functions with appropriate singleton dimensions for pytorch
-        # broadcasting /gridsize[0]*pixels[0] /gridsize[1]*pixels[1]
+        # broadcasting /gridsize[0]*pixels_[0] /gridsize[1]*pixels_[1]
         sincy = (
-            sinc(torch.from_numpy(np.fft.fftfreq(pixels[0])))
-            .view([1, 1, pixels[0], 1, 1])
+            sinc(torch.from_numpy(np.fft.fftfreq(pixels_[0])))
+            .view([1, 1, pixels_[0], 1, 1])
             .to(device)
             .type(P.dtype)
         )
         sincx = (
-            sinc(torch.from_numpy(np.fft.fftfreq(pixels[1])))
-            .view([1, 1, 1, pixels[1], 1])
+            sinc(torch.from_numpy(np.fft.fftfreq(pixels_[1])))
+            .view([1, 1, 1, pixels_[1], 1])
             .to(device)
             .type(P.dtype)
         )
@@ -816,9 +819,9 @@ class structure:
             fe_ = fe
 
         # Convolve with electron scattering factors using Fourier convolution theorem
-        P *= torch.from_numpy(fe_).view(nelements, 1, *pixels, 1).to(device)
+        P *= torch.from_numpy(fe_).view(nelements, 1, *pixels_, 1).to(device)
 
-        norm = np.prod(pixels) / np.prod(self.unitcell[:2]) / np.prod(tiling)
+        norm = np.prod(pixels_) / np.prod(self.unitcell[:2]) / np.prod(tiling)
         # Add atoms together
         P = norm * torch.sum(P, dim=0)
 
