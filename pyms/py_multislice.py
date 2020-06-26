@@ -734,6 +734,7 @@ def STEM(
     detectors=None,
     FourD_STEM=False,
     datacube=None,
+    PACBED=False,
     scan_posn=None,
     dtype=torch.float32,
     device=None,
@@ -878,6 +879,11 @@ def STEM(
         if datacube is None:
             datacube = np.zeros((nthick, *scan_shape, *gridout))
 
+    if PACBED:
+        PACBED_pattern = torch.zeros((nthick, *gridshape), device=device)
+    else:
+        PACBED_pattern = None
+
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
     # probes in memory
@@ -940,9 +946,14 @@ def STEM(
                 for idp, DP in enumerate(DPS):
                     datacube[it][ind[0][idp], ind[1][idp]] += DP
 
+            if PACBED:
+                PACBED_pattern[it] += torch.sum(amp, axis=0) / nscantot
+
     if conventional_STEM:
         STEM_image = np.squeeze(STEM_image.reshape(ndet, nthick, *scan_shape))
-    return {"STEM images": STEM_image, "datacube": datacube}
+    if PACBED:
+        PACBED_pattern = np.fft.fftshift(PACBED_pattern.cpu().numpy(), axes=(-2, -1))
+    return {"STEM images": STEM_image, "datacube": datacube, "PACBED": PACBED_pattern}
 
 
 def unit_cell_shift(array, axis, shift, tiles):
@@ -1771,7 +1782,6 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     # Calculate Fourier coordinates for array
     ky = np.fft.fftfreq(ny, d=d[0])
     kx = np.fft.rfftfreq(nx, d=d[1])
-    # ky,kx = [np.fft.fftfreq(x,d=d[i]) for i,x in enumerate([ny,nx])]
 
     # Calculate numerator and denominator expressions for solution of
     # phase from centre of mass measurements

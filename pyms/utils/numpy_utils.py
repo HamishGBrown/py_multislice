@@ -48,7 +48,10 @@ def q_space_array(pixels, gridsize):
 
 def crop_window_to_flattened_indices(indices, shape):
     """Map  y and x indices describing a cropping window to a flattened 1d array."""
-    return (indices[-1][None, :] + indices[-2][:, None] * shape[-1]).ravel()
+    return (
+        indices[-1][None, :] % shape[-1]
+        + (indices[-2][:, None] % shape[-2]) * shape[-1]
+    ).ravel()
 
 
 def crop_to_bandwidth_limit(array, limit=2 / 3):

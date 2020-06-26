@@ -159,7 +159,8 @@ class Test_util_Methods(unittest.TestCase):
         indices = torch.as_tensor([[2, 3, 4], [1, 2, 3]])
         gridshape = [4, 4]
 
-        grid = torch.zeros(gridshape, dtype=torch.long).flatten()
+        # Test torch function
+        grid = torch.zeros(*gridshape, dtype=torch.long).flatten()
         ind = pyms.utils.crop_window_to_flattened_indices_torch(indices, gridshape)
         grid[ind] = 1
         grid = grid.view(*gridshape)
@@ -167,7 +168,18 @@ class Test_util_Methods(unittest.TestCase):
         reference = torch.as_tensor(
             [[0, 1, 1, 1], [0, 0, 0, 0], [0, 1, 1, 1], [0, 1, 1, 1]]
         )
-        self.assertTrue(sumsqr_diff(grid, reference).item() < 1e-7)
+        torchpass = sumsqr_diff(grid, reference).item() < 1e-7
+
+        # Test numpy function
+        grid = np.zeros(gridshape, dtype=np.int).ravel()
+        ind = pyms.utils.crop_window_to_flattened_indices(
+            indices.cpu().numpy(), gridshape
+        )
+        grid[ind] = 1
+        grid = grid.reshape(*gridshape)
+        numpypass = sumsqr_diff(grid, reference.cpu().numpy()).item() < 1e-7
+
+        self.assertTrue(numpypass and torchpass)
 
     def test_crop_tobandwidthlimit(self):
         """Test the function that crops arrays to the maximum bandwidth limit."""
@@ -836,6 +848,23 @@ class Test_Structure_Methods(unittest.TestCase):
 
         self.assertTrue(test_posn and test_cell)
 
+    def test_rotate(self):
+        """Test rotation routine on synthetic structure."""
+        orig_posn = np.asarray(
+            [[0.5, 0.5, 0.5], [0.5, 0.5, 0.0], [0.0, 0.5, 0.5], [0.5, 0.0, 0.5]]
+        )
+        teststruc = pyms.structure(
+            [2, 2, 2], copy.deepcopy(orig_posn), [0.0, 0.0, 0.0, 0.0]
+        )
+        struc = copy.deepcopy(teststruc)
+        struc.rot90(1, (0, 2))
+        teststruc = teststruc.rotate(np.pi / 2, [0, 1, 0])
+        orig_posn[1:3] = orig_posn[2:0:-1]
+        self.assertTrue(
+            sumsqr_diff(orig_posn, teststruc.atoms[:, :3]) < 1e-10
+            and sumsqr_diff(orig_posn, struc.atoms[:, :3]) < 1e-10
+        )
+
     def testrot90(self):
         """Test of the rot90 function (under construction)."""
         # Make random test object
@@ -849,6 +878,19 @@ class Test_Structure_Methods(unittest.TestCase):
 
 class Test_py_multislice_Methods(unittest.TestCase):
     """Tests for functions inside of the py_multislice.py file."""
+
+    def test_propagator(self):
+        """Test propagator against analytic result."""
+        # Test of propagator function
+        gridshape = [256, 256]
+        rsize = [75, 75, 250]
+        eV = 3e5
+
+        P = pyms.make_propagators(gridshape, rsize, eV)
+        k = np.fft.fftfreq(gridshape[1], d=rsize[1] / gridshape[1])
+        ref = np.sin(-np.pi * k ** 2 * rsize[2] / pyms.wavev(eV))
+        ref[np.abs(P[0, 0]) < 1e-6] = 0
+        self.assertTrue(sumsqr_diff(ref, np.imag(P[0, 0])) < 1e-10)
 
     def test_nyquist_and_probe_raster(self):
         """Test probe positions and Nyquist routine."""
@@ -1241,31 +1283,3 @@ if __name__ == "__main__":
 
     unittest.main()
     clean_temp_structure()
-
-    # sys.exit()
-
-    # atoms, ucell = make_temp_structure()
-
-    # cell = pyms.structure(scratch_cell_name)
-
-    # oldatoms = np.asarray(cell.atoms[:,:3]).T
-    # oldcell = np.asarray(cell.unitcell)
-    # print(cell.atoms[:,:3])
-
-    # cell = cell.rot90(k=1, axes=(0, 1))
-
-    # atoms = (cell.atoms[:,:3]).T
-
-    # print(cell.atoms[:,:3])
-    # atomspass = np.all(atoms.T[:2]==oldatoms.T[:2][::-1])
-    # print(atomspass)
-    # unitCellPass = np.all(oldcell[:2] == cell.unitcell[:2][::-1])
-    # sys.exit()
-    # newcell = copy.deepcopy(cell)
-    # newcell = newcell.rot90(k=1, axes=(0, 2))
-    # unitCellPass = unitCellPass and np.all(cell.unitcell[::2] ==
-    # newcell.unitcell[::2][::-1])
-    # print(newcell.unitcell,cell.unitcell,unitCellPass)
-
-    # unittest.main()
-    # clean_temp_structure()

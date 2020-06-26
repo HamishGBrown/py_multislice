@@ -250,7 +250,7 @@ class structure:
     def __init__(self, unitcell, atoms, dwf, occ=None, Title="", EPS=1e-2):
         """Initialize a simulation object with necessary variables."""
         self.unitcell = np.asarray(unitcell)
-        natoms = atoms.shape[0]
+        natoms = np.asarray(atoms).shape[0]
 
         if occ is None:
             occ = np.ones(natoms)
@@ -446,7 +446,7 @@ class structure:
         return cls(unitcell, atoms, dwf, occ, Title)
 
     def to_ase_atoms(self):
-        """Convert structure to Atomic SIulation Environment (ASE) atoms object."""
+        """Convert structure to Atomic Simulation Environment (ASE) atoms object."""
         scaled_positions = self.atoms[:, :3]
         numbers = self.atoms[:, 3].astype(np.int)
         cell = self.unitcell
@@ -535,7 +535,7 @@ class structure:
 
         if colors is None:
             colors = cmap(self.atoms[:, 3] / np.amax(self.atoms[:, 3]))
-        sizes = self.atoms[:, 3] ** (4) * atomscale
+        sizes = self.atoms[:, 3] * atomscale
 
         ax.scatter(
             *[self.atoms[:, i] * self.unitcell[i] for i in [1, 0, 2]], c=colors, s=sizes
@@ -544,9 +544,9 @@ class structure:
         ax.set_xlim3d(0.0, self.unitcell[1])
         ax.set_ylim3d(top=0.0, bottom=self.unitcell[0])
         ax.set_zlim3d(top=0.0, bottom=self.unitcell[2])
-        ax.set_xlabel("x ($\\A$)")
-        ax.set_ylabel("y ($\\A$)")
-        ax.set_zlabel("z ($\\A$)")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
 
         plt.show(block=block)
         return fig
@@ -655,7 +655,7 @@ class structure:
         # Initialize device cuda if available, CPU if no cuda is available
         device = get_device(device)
 
-        #Ensure pixels is integer
+        # Ensure pixels is integer
         pixels_ = [int(x) for x in pixels]
 
         # Seed random number generator for displacements
@@ -670,7 +670,7 @@ class structure:
 
         # Get a list of unique atomic elements
         elements = list(set(np.asarray(self.atoms[:, 3], dtype=np.int)))
-        
+
         # Get number of unique atomic elements
         nelements = len(elements)
         nsubslices = len(subslices)
@@ -764,9 +764,12 @@ class structure:
                 * pixels_[1]
                 * 2
             )
-            xc = torch.remainder(torch.ceil(posn[:, 1]).type(torch.long), pixels_[1]) * 2
+            xc = (
+                torch.remainder(torch.ceil(posn[:, 1]).type(torch.long), pixels_[1]) * 2
+            )
             xf = (
-                torch.remainder(torch.floor(posn[:, 1]).type(torch.long), pixels_[1]) * 2
+                torch.remainder(torch.floor(posn[:, 1]).type(torch.long), pixels_[1])
+                * 2
             )
 
             yh = torch.remainder(posn[:, 0], 1.0)
@@ -938,7 +941,7 @@ class structure:
 
     def rotate(self, theta, axis, origin=[0.5, 0.5, 0.5]):
         """
-        Rotate simulation object an amount an angle theta about axis.
+        Rotate simulation object an amount an angle theta (in radians) about axis.
 
         Parameters
         ----------
@@ -957,22 +960,27 @@ class structure:
 
         # Make rotation matrix, R, and  the point about which we rotate, O
         R = rot_matrix(theta, axis)
-        origin_ = np.asarray(origin)
+        origin_ = np.asarray(origin) * self.unitcell
 
         # Get atomic coordinates in cartesian (not fractional coordinates)
         new.atoms[:, :3] = self.atoms[:, :3] * self.unitcell[np.newaxis, :]
 
         # Apply rotation matrix to each atom coordinate
-        new.atoms[:, :3] = (
-            R @ (new.atoms[:, :3].T - origin_[:, np.newaxis]) + origin_[:, np.newaxis]
-        ).T
+        new.atoms[:, :3] = (new.atoms[:, :3] - origin_) @ R + origin_
 
-        # Get new unit cell (assume vacuum padding)
-        origin_ = np.amin(new.atoms, axis=0)
-        new.unitcell = np.amax(new.atoms, axis=0) - origin_
-        new.atoms[:, :3] = (new.atoms[:, :3] - origin_[np.newaxis, :3]) / new.unitcell[
-            np.newaxis, :3
-        ]
+        # Apply rotation matrix to cell vertices
+        vertices = (
+            np.asarray([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 1]])
+            * self.unitcell
+            - origin_
+        ) @ R + origin_
+
+        # Get new unit cell from maximum range of unit cell vertices
+        origin_ = np.amin(vertices, axis=0)
+        new.unitcell = np.ptp(vertices, axis=0)
+
+        # Convert atoms back into fractional coordinates in new unit cell
+        new.atoms[:, :3] = ((new.atoms[:, :3] - origin_) / new.unitcell) % 1.0
 
         # Return rotated structure
         return new
@@ -1045,25 +1053,23 @@ class structure:
         self.unitcell = self.unitcell * np.asarray([x, y, z])
 
         # tile out the integer amounts
-        for j in range(int(x)):
-            for k in range(int(y)):
-                for l in range(int(z)):
+        from itertools import product
 
-                    # Calculate origin of this particular tile
-                    origin = np.asarray([j, k, l])
+        for j, k, l in product(*[np.arange(int(i)) for i in [x, y, z]]):
 
-                    # Calculate index of this particular tile
-                    indx = j * int(y) * int(z) + k * int(z) + l
+            # Calculate origin of this particular tile
+            origin = np.asarray([j, k, l])
 
-                    # Add new atoms to unit cell
-                    newatoms[indx * natoms : (indx + 1) * natoms, :3] = (
-                        self.atoms[:, :3] + origin[np.newaxis, :]
-                    ) / tiling[np.newaxis, :]
+            # Calculate index of this particular tile
+            indx = j * int(y) * int(z) + k * int(z) + l
 
-                    # Copy other information about atoms
-                    newatoms[indx * natoms : (indx + 1) * natoms, 3:] = self.atoms[
-                        :, 3:
-                    ]
+            # Add new atoms to unit cell
+            newatoms[indx * natoms : (indx + 1) * natoms, :3] = (
+                self.atoms[:, :3] + origin[np.newaxis, :]
+            ) / tiling[np.newaxis, :]
+
+            # Copy other information about atoms
+            newatoms[indx * natoms : (indx + 1) * natoms, 3:] = self.atoms[:, 3:]
         self.atoms = newatoms
         return self
 
@@ -1149,7 +1155,7 @@ class structure:
     def reflect(self, axes):
         """Reflect structure in each of the axes enumerated in list axes."""
         for ax in axes:
-            self.atoms[:, ax] = 1 - self.atoms[:, ax]
+            self.atoms[:, ax] = (1 - self.atoms[:, ax]) % 1.0
         return self
 
     def resize(self, fraction, axis):

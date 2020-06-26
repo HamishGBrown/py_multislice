@@ -407,7 +407,7 @@ def STEM_PRISM(
                     STEM_image=STEM_images[idf],
                 )
             if FourD_STEM:
-                datacubes[idf] = result["datacube"][0] / nfph_
+                datacubes[idf] = result["datacube"][0][:] / nfph_
             if doconvSTEM:
                 STEM_images[idf] = result["STEM images"] / nfph_
     result = {"STEM images": np.squeeze(STEM_images), "datacube": np.squeeze(datacubes)}
@@ -424,6 +424,42 @@ def STEM_PRISM(
     return result
 
 
+def PACBED(
+    structure,
+    gridshape,
+    eV,
+    app,
+    thicknesses,
+    subslices,
+    nfph,
+    tiling=[1, 1],
+    device=None,
+    nT=5,
+):
+    """Calculate position averaged convergent electron diffraction (PACBED) patterns."""
+    # Sampling of PACBED is half that required for a STEM image
+    scan_posn = generate_STEM_raster(
+        structure.unitcell[:2] * np.asarray(tiling) / 2, eV, app, tiling=tiling
+    )
+
+    result = STEM_multislice(
+        structure,
+        gridshape,
+        eV,
+        app,
+        thicknesses,
+        subslices,
+        nfph=nfph,
+        PACBED=True,
+        scan_posn=scan_posn,
+        tiling=tiling,
+        device_type=device,
+        nT=nT,
+    )["PACBED"]
+
+    return result
+
+
 def STEM_multislice(
     structure,
     gridshape,
@@ -436,6 +472,7 @@ def STEM_multislice(
     aberrations=[],
     batch_size=5,
     FourD_STEM=False,
+    PACBED=False,
     h5_filename=None,
     STEM_images=None,
     DPC=False,
@@ -654,6 +691,9 @@ def STEM_multislice(
 
     STEM_images = None
 
+    if PACBED:
+        PACBED_pattern = np.zeros((len(nslices), *gridshape))
+
     for i in tqdm.tqdm(
         range(nfph), desc="Frozen phonon iteration", disable=not showProgress
     ):
@@ -686,6 +726,7 @@ def STEM_multislice(
             batch_size=batch_size,
             detectors=D,
             FourD_STEM=FourD_STEM,
+            PACBED=PACBED,
             scan_posn=scan_posn,
             device=device,
             tiling=tiling,
@@ -698,6 +739,8 @@ def STEM_multislice(
         )
         datacubes = result["datacube"]
         STEM_images = result["STEM images"]
+        if result["PACBED"] is not None:
+            PACBED_pattern += result["PACBED"]
 
     if datacubes is not None:
         if isinstance(datacubes, (list, tuple)):
@@ -707,12 +750,17 @@ def STEM_multislice(
             datacubes /= nfph
     if STEM_images is not None:
         STEM_images /= nfph
+    if PACBED is not None:
+        PACBED /= nfph
 
     # Close all hdf5 files
     if h5_filename is not None:
         for f in files:
             f.close()
     result = {"STEM images": np.squeeze(STEM_images), "datacube": np.squeeze(datacubes)}
+
+    if PACBED:
+        result["PACBED"] = np.squeeze(PACBED_pattern)
     # Perform DPC reconstructions (requires py4DSTEM)
     if DPC:
 
