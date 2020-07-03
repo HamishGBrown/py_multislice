@@ -281,7 +281,7 @@ def focused_probe(
 
 
 def plane_wave_illumination(
-    gridshape, gridsize, tilt=[0, 0], eV=None, tilt_units="mrad", qspace=False
+    gridshape, gridsize, eV, tilt=[0, 0], tilt_units="mrad", qspace=False
 ):
     """
     Generate plane wave illumination for input to multislice.
@@ -294,6 +294,8 @@ def plane_wave_illumination(
         Pixel dimensions of the 2D grid
     gridsize : (2,) array_like
         Size of the grid in real space
+    eV : float
+        Probe energy in electron volts (irrelevant for untilted illumination)
 
     Keyword arguments
     -----------------
@@ -301,8 +303,6 @@ def plane_wave_illumination(
         Allows the user to simulate a (small < 50 mrad) beam tilt, To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
         to the nearest pixel value.
-    eV : float
-        Probe energy in electron volts
     tilt_units : string, optional
         Units of beam tilt, can be 'mrad','pixels' or 'invA'
     qspace : bool, optional

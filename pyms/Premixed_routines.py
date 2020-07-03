@@ -1362,7 +1362,7 @@ def HRTEM(
         range(nfph), desc="Frozen phonon iteration", disable=not showProgress
     ):
         probe = plane_wave_illumination(
-            gridshape, rsize, beam_tilt, eV, tilt_units, qspace=True
+            gridshape, rsize, eV, beam_tilt, tilt_units, qspace=True
         )
         # Run multislice iterating over different thickness outputs
         for it, t in enumerate(np.diff(nslices, prepend=0)):
@@ -1500,7 +1500,7 @@ def EFTEM(
     defocii = ensure_array(df)
 
     # Construct our (plane wave) illuminating probe
-    probe = plane_wave_illumination(gridshape, rsize, beam_tilt, eV, tilt_units)
+    probe = plane_wave_illumination(gridshape, rsize, eV, beam_tilt, tilt_units)
 
     # Calculate the size of the grid after band-width limiting
     bw_limit_size = size_of_bandwidth_limited_array(gridshape)

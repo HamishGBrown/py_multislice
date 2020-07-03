@@ -137,10 +137,10 @@ def multislice(
         Electron wave functions for a set of input probes
     nslices : int, array_like
         The number of slices (iterations) to perform multislice over
-    propagators : (N,Y,X,2) torch.array
+    propagators : (Z,Y,X,2) or (Y,X,2) torch.array
         Fresnel free space operators required for the multislice algorithm
         used to propagate the scattering matrix
-    transmission_functions : (N,Y,X,2)
+    transmission_functions : (nT,Z,Y,X,2)
         The transmission functions describing the electron's interaction
         with the specimen for the multislice algorithm
 
@@ -200,7 +200,7 @@ def multislice(
     P = ensure_torch_array(propagators, dtype=T.dtype, device=device)
     psi = ensure_torch_array(probes, dtype=T.dtype, device=device)
 
-    nT, nsubslices, nopiy, nopix = T.size()[:4]
+    nT, nsubslices, nopiy, nopix = T.shape[:4]
 
     # Probe needs to start multislice algorithm in real space
     if qspace_in:
@@ -1260,6 +1260,7 @@ class scattering_matrix:
                     plane_wave_illumination(
                         self.gridshape,
                         self.rsize[:2],
+                        self.eV,
                         tilt=[self.beams[0][ibeam], self.beams[1][ibeam]],
                         tilt_units="pixels",
                         qspace=True,

@@ -32,6 +32,34 @@ def clean_temp_structure():
         os.remove(scratch_cell_name)
 
 
+def SrTiO3():
+    """Generate a SrTiO3 object for testing purposes."""
+    atoms = np.asarray(
+        [
+            [0.000000, 0.000000, 0.000000, 38, 1.0, 0.7870e-2],
+            [0.500000, 0.500000, 0.500000, 22, 1.0, 0.5570e-2],
+            [0.500000, 0.500000, 0.000000, 8, 1.0, 0.9275e-2],
+            [0.500000, 0.000000, 0.500000, 8, 1.0, 0.9275e-2],
+            [0.000000, 0.500000, 0.500000, 8, 1.0, 0.9275e-2],
+        ]
+    )
+    return pyms.structure([3.905, 3.905, 3.905], atoms[:, :4], dwf=atoms[:, 5])
+
+
+def BaTiO3():
+    """Generate a BaTiO3 object for testing purposes."""
+    atoms = np.asarray(
+        [
+            [0.000000, 0.000000, 0.000000, 56, 1.0, 0.7870e-2],
+            [0.500000, 0.500000, 0.500000, 22, 1.0, 0.5570e-2],
+            [0.500000, 0.500000, 0.000000, 8, 1.0, 0.9275e-2],
+            [0.500000, 0.000000, 0.500000, 8, 1.0, 0.9275e-2],
+            [0.000000, 0.500000, 0.500000, 8, 1.0, 0.9275e-2],
+        ]
+    )
+    return pyms.structure([4.01, 4.01, 4.01], atoms[:, :4], dwf=atoms[:, 5])
+
+
 def make_graphene_file(fnam):
     """Make a graphene structure file for various testing purposes."""
     f = open(fnam, "w")
@@ -875,6 +903,52 @@ class Test_Structure_Methods(unittest.TestCase):
         newcell = copy.deepcopy(cell)
         newcell = newcell.rot90(k=1, axes=(0, 1))
 
+    def test_multilayer_objects(self):
+        """Ensure multislice of a multilayer object against equivalent calculation."""
+        gridshape = [64, 64]
+        eV = 3e5
+        nslices = [3, 2]
+        tiling = [1, 1]
+        kwargs = {"displacements": False}
+        subslices = 2 * [[0.5, 1.0]]
+        nT = 2
+
+        STO = SrTiO3()
+        BTO = BaTiO3()
+        BTO.unitcell = STO.unitcell
+        rsize = STO.unitcell[:2] * np.asarray(tiling)
+
+        # Make multilayer object
+        T = pyms.layered_structure_transmission_function(
+            gridshape, eV, [STO, BTO], nslices, subslices, nT=nT, kwargs=kwargs
+        )
+
+        # Make explicit equivalent multislice transmission functions and
+        # propagators
+        P1, T1 = pyms.multislice_precursor(
+            STO, gridshape, eV, subslices[0], **kwargs, showProgress=False
+        )
+        P2, T2 = pyms.multislice_precursor(
+            BTO, gridshape, eV, subslices[0], **kwargs, showProgress=False
+        )
+
+        # Multislice with equivalent multislice objects
+        illum = pyms.plane_wave_illumination(gridshape, rsize, eV)
+        exit_wave = pyms.multislice(
+            illum, nslices[0], P1, T1, tiling=tiling, output_to_bandwidth_limit=False
+        )
+        exit_wave = pyms.multislice(exit_wave, nslices[1], P2, T2, tiling=tiling)
+
+        # Multislice with multilayer object
+        illum = pyms.plane_wave_illumination(gridshape, rsize, eV)
+        exit_wave2 = pyms.multislice(illum, 1, T.Propagator, T, tiling=tiling)
+        # fig,ax = plt.subplots(ncols=3)
+        # ax[0].imshow(np.angle(exit_wave))
+        # ax[1].imshow(np.angle(exit_wave2))
+        # ax[2].imshow(np.angle(exit_wave) - np.angle(exit_wave2))
+        # plt.show(block=True)
+        self.assertTrue(sumsqr_diff(exit_wave, exit_wave2) < 1e-10)
+
 
 class Test_py_multislice_Methods(unittest.TestCase):
     """Tests for functions inside of the py_multislice.py file."""
@@ -1280,6 +1354,5 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
 
 if __name__ == "__main__":
-
     unittest.main()
     clean_temp_structure()

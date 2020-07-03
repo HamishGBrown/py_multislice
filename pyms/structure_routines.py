@@ -3,6 +3,7 @@
 A collection of functions and classes for reading in and manipulating structures
 and creating potential arrays for multislice simulation.
 """
+import itertools
 import ase
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ from os.path import splitext
 from .atomic_scattering_params import e_scattering_factors, atomic_symbol
 from .Probe import wavev, relativistic_mass_correction
 from .utils.numpy_utils import bandwidth_limit_array, q_space_array, ensure_array
-from .utils.torch_utils import sinc, torch_c_exp, get_device
+from .utils.torch_utils import sinc, torch_c_exp, get_device, cx_from_numpy
 
 
 def remove_common_factors(nums):
@@ -1240,3 +1241,206 @@ class structure:
             self.atoms = _cshift(self.atoms, shift, axis)
 
         return self
+
+
+class layered_structure_transmission_function:
+    """
+    A class that mimics multislice transmission functions for a layered object.
+
+    Useful for performing multislice calculations of heterostructures (epitaxially
+    layered cystalline structures).
+    """
+
+    def __init__(
+        self,
+        gridshape,
+        eV,
+        structures,
+        nslices,
+        subslices,
+        tilings=None,
+        kwargs={},
+        nT=5,
+        dtype=torch.float32,
+        device=None,
+    ):
+        """
+        Generate a layered structure transmission function object.
+
+        This function assumes that the lateral (x and y) cell sizes of the
+        structures are identical,
+
+        Input
+        -----
+        structures : (N,) array_like of pyms.Structure objects
+            The input structures for which the transmission functions for a
+            layered structure will be calculated.
+        nslices : int (N,) array_like
+            The number of units of each structure in the multilayer
+        subslices : array_like (N,) of array_like
+            Multislice subslicing for each object in the multilayer structure
+
+        Returns
+        -----
+        self : layered_structure_transmission_function object
+            This will behave like a normal transmission function array, if
+            T = layered_structure_transmission_function(...,[structure1,structure2 etc])
+            then T[0,islice,...] will return a transmission function from whichever
+            structure islice happens to be in. T.Propagator[islice] returns the
+            relevant multislice propagator
+        """
+        self.dtype = dtype
+        self.device = get_device(device)
+        self.nslicestot = np.sum(nslices)
+        self.structures = structures
+
+        if tilings is None:
+            tilings = len(structures) * [[1, 1]]
+
+        self.Ts = []
+        self.nT = nT
+        self.gridshape = gridshape
+        self.tilings = tilings
+        self.subslices = subslices
+        self.eV = eV
+        args = [gridshape, eV]
+
+        for structure, subslices_, tiling in zip(structures, subslices, tilings):
+            self.Ts.append(
+                torch.stack(
+                    [
+                        structure.make_transmission_functions(
+                            *args,
+                            subslices=subslices_,
+                            tiling=tiling,
+                            **kwargs,
+                            device=self.device,
+                            dtype=self.dtype,
+                        )
+                        for i in range(nT)
+                    ]
+                )
+            )
+
+        self.slicemap = list(
+            itertools.chain(
+                *[len(subslices[i]) * n * [i] for i, n in enumerate(nslices)]
+            )
+        )
+        nsubslices = [len(subslice) for subslice in subslices]
+        self.subslicemap = list(
+            itertools.chain(
+                *[
+                    (np.arange(nsubslices[i] * n) % nsubslices[i]).tolist()
+                    for i, n in enumerate(nslices)
+                ]
+            )
+        )
+        self.N = len(self.slicemap)
+        # Mimics the shape property of a numpy array
+        self.shape = (self.nT, self.N, *self.gridshape, 2)
+        self.Propagator = layered_structure_propagators(self)
+
+    def dim(self):
+        """Return the array dimension of the synthetic array."""
+        return 4
+
+    def __getitem__(self, ind):
+        """
+        __getitem__ method for the transmission function synthetic array.
+
+        This enables the transmission function object to mimic a standard
+        transmission function numpy or torch.Tensor array
+        """
+        it, islice = ind[:2]
+
+        if isinstance(islice, int) or np.issubdtype(
+            np.asarray(islice).dtype, np.integer
+        ):
+            T = self.Ts[self.slicemap[islice]][:, self.subslicemap[islice]]
+        elif isinstance(islice, slice):
+            islice_ = np.arange(*islice.indices(self.N))
+            T = torch.stack(
+                [self.Ts[self.slicemap[j]][:, self.subslicemap[j]] for j in islice_],
+                axis=1,
+            )
+        else:
+            raise TypeError("Invalid argument type.")
+
+        if isinstance(it, int) or np.issubdtype(np.asarray(it).dtype, np.integer):
+            return T[it]
+        elif isinstance(it, slice):
+            it_ = np.arange(*it.indices(self.nT))
+            return T[it_]
+        else:
+            raise TypeError("Invalid argument type.")
+
+
+class layered_structure_propagators:
+    """
+    A class that mimics multislice propagators for a layered object.
+
+    Complements layered_transmission_function
+    """
+
+    def __init__(self, layered_T, propkwargs={}):
+        """
+        Generate a layered structure multislice propagator function object.
+
+        This function assumes that the lateral (x and y) cell sizes of the
+        structures are identical,
+
+        Input
+        -----
+        T : layered_structure_transmission_function object
+            This should contain all the neccessary information about the layered
+            object to generate the propagators
+
+        Returns
+        -----
+        self : layered_structure_propagators object
+            This will behave like a normal propagator array, if
+            P = layered_structure_propagators(T)
+            then P[islice,...] will return a transmission function from whichever
+            structure islice happens to be in.
+        """
+        from .py_multislice import make_propagators
+
+        rsize = layered_T.structures[0].unitcell
+        rsize[:2] *= np.asarray(layered_T.tilings[0])
+
+        self.Ps = [
+            make_propagators(
+                layered_T.gridshape, rsize, layered_T.eV, subslices, **propkwargs
+            )
+            for subslices in layered_T.subslices
+        ]
+
+        self.Ps = list(itertools.chain(*self.Ps))
+        self.Ps = [cx_from_numpy(P, layered_T.dtype, layered_T.device) for P in self.Ps]
+        self.slicemap = layered_T.slicemap
+        self.subslicemap = layered_T.subslicemap
+        # Mimics the shape property of a numpy array
+        self.shape = (layered_T.nslicestot, *layered_T.gridshape, 2)
+        self.ndim = 4
+
+    def dim(self):
+        """Return the array dimension of the synthetic array."""
+        return 3
+
+    def __getitem__(self, islice):
+        """
+        __getitem__ method for the propagator synthetic array.
+
+        This enables the propagator object to mimic a standard propagator numpy
+        or torch.Tensor array
+        """
+        if isinstance(islice, int) or np.issubdtype(
+            np.asarray(islice).dtype, np.integer
+        ):
+            return self.Ps[self.slicemap[islice]]
+        elif isinstance(islice, slice):
+            islice_ = np.arange(*islice.indices(self.N))
+            return torch.stack([self.Ps[self.slicemap[j]] for j in islice_])
+        else:
+            raise TypeError("Invalid argument type.")

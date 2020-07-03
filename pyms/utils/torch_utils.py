@@ -113,15 +113,28 @@ def ensure_torch_array(array, dtype=torch.float, device=None):
     Converts to a pytorch array if input is a numpy array and do nothing if the
     input is a pytorch tensor
     """
+    from .. import (
+        layered_structure_propagators,
+        layered_structure_transmission_function,
+    )
+
     if device is None:
         device = get_device(device)
-    if not isinstance(array, torch.Tensor):
-        if np.iscomplexobj(array):
-            return cx_from_numpy(array, dtype=dtype, device=device)
-        else:
-            return torch.from_numpy(array).type(dtype).to(device)
-    else:
+    if isinstance(array, torch.Tensor):
         return array.to(device)
+    elif isinstance(array, layered_structure_transmission_function):
+        for i in range(len(array.Ts)):
+            array.Ts[i] = array.Ts[i].to(device)
+        return array
+    elif isinstance(array, layered_structure_propagators):
+        for i in range(len(array.Ps)):
+            array.Ps[i] = array.Ps[i].to(device)
+        return array
+    else:
+        if np.iscomplexobj(np.asarray(array)):
+            return cx_from_numpy(np.asarray(array), dtype=dtype, device=device)
+        else:
+            return torch.from_numpy(np.asarray(array)).type(dtype).to(device)
 
 
 def amplitude(r):
