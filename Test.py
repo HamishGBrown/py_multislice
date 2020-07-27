@@ -907,10 +907,10 @@ class Test_Structure_Methods(unittest.TestCase):
         """Ensure multislice of a multilayer object against equivalent calculation."""
         gridshape = [64, 64]
         eV = 3e5
-        nslices = [3, 2]
+        nslices = [3, 0]
         tiling = [1, 1]
         kwargs = {"displacements": False}
-        subslices = 2 * [[0.5, 1.0]]
+        subslices = [[0.5, 1.0], [0.25, 1.0]]
         nT = 2
 
         STO = SrTiO3()
@@ -929,13 +929,18 @@ class Test_Structure_Methods(unittest.TestCase):
             STO, gridshape, eV, subslices[0], **kwargs, showProgress=False
         )
         P2, T2 = pyms.multislice_precursor(
-            BTO, gridshape, eV, subslices[0], **kwargs, showProgress=False
+            BTO, gridshape, eV, subslices[1], **kwargs, showProgress=False
         )
 
         # Multislice with equivalent multislice objects
         illum = pyms.plane_wave_illumination(gridshape, rsize, eV)
         exit_wave = pyms.multislice(
-            illum, nslices[0], P1, T1, tiling=tiling, output_to_bandwidth_limit=False
+            illum,
+            nslices[0],
+            P1,
+            T1,
+            tiling=tiling,
+            output_to_bandwidth_limit=nslices[1] < 1,
         )
         exit_wave = pyms.multislice(exit_wave, nslices[1], P2, T2, tiling=tiling)
 
@@ -948,6 +953,60 @@ class Test_Structure_Methods(unittest.TestCase):
         # ax[2].imshow(np.angle(exit_wave) - np.angle(exit_wave2))
         # plt.show(block=True)
         self.assertTrue(sumsqr_diff(exit_wave, exit_wave2) < 1e-10)
+
+
+class Test_probe_methods(unittest.TestCase):
+    """Test functions inside the Probe.py file."""
+
+    def test_Cc_methods(self):
+        """Test the chromatic aberration functions."""
+        eV = 3e5
+        deltaE = 0.8  # 1.2
+        Cc = 1.2e7
+        deltaEconv = "FWHM"
+        npoints = 55
+        defocii = pyms.Cc_integration_points(
+            Cc, deltaE, eV, npoints=npoints, deltaEconv=deltaEconv
+        )
+        passintegrationpoints = (
+            np.abs(
+                np.std(defocii)
+                - Cc * pyms.convert_deltaE(deltaE, deltaEconv) / eV / np.sqrt(2)
+            )
+            < 0.1
+        )
+
+        npoints = 3
+        gridshape = [128, 128]
+        app = 20
+        thicknesses = [12]
+        args = [SrTiO3(), gridshape, eV, app, thicknesses]
+        kwargs = {"tiling": [4, 4], "showProgress": False}
+        pyms.simulation_result_with_Cc(
+            pyms.HRTEM,
+            Cc,
+            deltaE,
+            eV,
+            args=args,
+            kwargs=kwargs,
+            npoints=npoints,
+            deltaEconv=deltaEconv,
+        )
+
+        args = [SrTiO3(), gridshape, eV, app, thicknesses]
+        kwargs = {"tiling": [4, 4], "showProgress": False, "FourD_STEM": True}
+        pyms.simulation_result_with_Cc(
+            pyms.STEM_multislice,
+            Cc,
+            deltaE,
+            eV,
+            args=args,
+            kwargs=kwargs,
+            npoints=npoints,
+            deltaEconv=deltaEconv,
+        )
+
+        self.assertTrue(passintegrationpoints)
 
 
 class Test_py_multislice_Methods(unittest.TestCase):

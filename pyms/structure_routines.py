@@ -406,9 +406,13 @@ class structure:
         # (ums) convert to mean square. Acceptable formats are crystallographic
         # temperature factor B and root mean square (urms) displacements
         if temperature_factor_units == "B":
-            dwf /= 8 * np.pi ** 2
+            dwf *= 1 / (8 * np.pi ** 2)
         elif temperature_factor_units == "urms":
             dwf = dwf ** 2
+        elif temperature_factor_units == "ums":
+            pass
+        else:
+            raise ValueError("Unrecognized temperature factor units")
 
         # If necessary, Convert atomic positions to fractional coordinates
         if atomic_coordinates == "cartesian":
@@ -443,7 +447,7 @@ class structure:
         if occupancy is None:
             occ = np.ones(natoms)
         if dwf is None:
-            dwf = np.ones(natoms) * 1 / np.pi ** 2 / 8
+            dwf = np.ones(natoms) * 3 / np.pi ** 2 / 8
         return cls(unitcell, atoms, dwf, occ, Title)
 
     def to_ase_atoms(self):
@@ -558,6 +562,8 @@ class structure:
         See K. Momma and F. Izumi, "VESTA 3 for three-dimensional visualization
         of crystal, volumetric and morphology data," J. Appl. Crystallogr., 44,
         1272-1276 (2011).
+
+        Warning: Vesta xtl files do not contain fractional occupancy information
         """
         f = open(splitext(fnam)[0] + ".xtl", "w")
         f.write("TITLE " + self.Title + "\n CELL \n")
@@ -1263,6 +1269,7 @@ class layered_structure_transmission_function:
         nT=5,
         dtype=torch.float32,
         device=None,
+        specimen_tilt=[0, 0],
     ):
         """
         Generate a layered structure transmission function object.
@@ -1303,6 +1310,7 @@ class layered_structure_transmission_function:
         self.tilings = tilings
         self.subslices = subslices
         self.eV = eV
+        self.specimen_tilt = specimen_tilt
         args = [gridshape, eV]
 
         for structure, subslices_, tiling in zip(structures, subslices, tilings):
@@ -1339,7 +1347,9 @@ class layered_structure_transmission_function:
         self.N = len(self.slicemap)
         # Mimics the shape property of a numpy array
         self.shape = (self.nT, self.N, *self.gridshape, 2)
-        self.Propagator = layered_structure_propagators(self)
+        self.Propagator = layered_structure_propagators(
+            self, propkwargs={"tilt": specimen_tilt}
+        )
 
     def dim(self):
         """Return the array dimension of the synthetic array."""
@@ -1396,6 +1406,11 @@ class layered_structure_propagators:
             This should contain all the neccessary information about the layered
             object to generate the propagators
 
+        Keyword arguements:
+        -------------------
+        propkwargs : dict
+            Keyword arguements to pass onto make_propagator function
+
         Returns
         -----
         self : layered_structure_propagators object
@@ -1406,12 +1421,12 @@ class layered_structure_propagators:
         """
         from .py_multislice import make_propagators
 
-        rsize = layered_T.structures[0].unitcell
-        rsize[:2] *= np.asarray(layered_T.tilings[0])
+        self.rsize = copy.deepcopy(layered_T.structures[0].unitcell)
+        self.rsize[:2] *= np.asarray(layered_T.tilings[0])
 
         self.Ps = [
             make_propagators(
-                layered_T.gridshape, rsize, layered_T.eV, subslices, **propkwargs
+                layered_T.gridshape, self.rsize, layered_T.eV, subslices, **propkwargs
             )
             for subslices in layered_T.subslices
         ]
@@ -1426,7 +1441,7 @@ class layered_structure_propagators:
 
     def dim(self):
         """Return the array dimension of the synthetic array."""
-        return 3
+        return 4
 
     def __getitem__(self, islice):
         """

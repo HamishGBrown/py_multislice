@@ -450,6 +450,12 @@ def generate_STEM_raster(
     invA : bool
         If True, alpha is taken to be in units of inverse Angstrom, not mrad.
         This also means that the value of eV no longer matters
+
+    Returns
+    -------
+    probe_posns : (nY,nX,2) np.ndarray
+        The probe positions in fractions of the array gridshape is [1,1] and in
+        pixel units if gridshape is the size of the pixel array.
     """
     # Field of view in Angstrom
     FOV = np.asarray([rsize[0] * (ROI[2] - ROI[0]), rsize[1] * (ROI[3] - ROI[1])])
@@ -538,7 +544,7 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
 
         # Define a resampling function that does nothing
         def resize(array):
-            return np.fft.fftshift(array, axes=(-1, -2))
+            return crop(np.fft.fftshift(array, axes=(-1, -2)), gridout)
 
     return gridout, resize, Ksize
 
@@ -571,6 +577,9 @@ def generate_probe_spread_plot(
     probe_posn=[0, 0],
     show=True,
     device=None,
+    P=None,
+    T=None,
+    nslices=None,
 ):
     """
     Generate probe spread plot to assist with selection of appropriate multislice grid.
@@ -620,6 +629,10 @@ def generate_probe_spread_plot(
         Probe defocus in Angstrom
     probe_posn : array_like, optional
         Probe position as a fraction of the unit-cell
+    P : (n,Y,X) array_like, optional
+        Precomputed Fresnel free-space propagators
+    T : (n,Y,X) array_like
+        Precomputed transmission functions
 
     Returns
     -------
@@ -629,16 +642,17 @@ def generate_probe_spread_plot(
     # Calculate multislice propagator and transmission functions
     from .Premixed_routines import multislice_precursor
 
-    P, T = multislice_precursor(
-        structure,
-        gridshape,
-        eV,
-        subslices=subslices,
-        tiling=tiling,
-        device=device,
-        nT=1,
-        showProgress=False,
-    )
+    if P is None or T is None:
+        P, T = multislice_precursor(
+            structure,
+            gridshape,
+            eV,
+            subslices=subslices,
+            tiling=tiling,
+            device=device,
+            nT=1,
+            showProgress=False,
+        )
 
     # Calculate focused STEM probe
     probe = focused_probe(
@@ -652,7 +666,8 @@ def generate_probe_spread_plot(
     ncols = 1 + showcrossection
     fig, ax = plt.subplots(ncols=ncols, figsize=(ncols * 4, 4), squeeze=False)
     # Total number of slices (not including subslicing of structure)
-    nslices = int(np.ceil(thickness / structure.unitcell[2]))
+    if nslices is None:
+        nslices = int(np.ceil(thickness / structure.unitcell[2]))
     # Total number of slices (including subslicing of structure)
     maxslices = nslices * len(subslices)
 
@@ -1079,7 +1094,7 @@ class scattering_matrix:
             computational accuracy.
         """
         # Get size of grid
-        gridshape = transmission_functions.size()[-3:-1]
+        gridshape = transmission_functions.shape[-3:-1]
 
         # Datatype (precision) is inferred from transmission functions
         self.dtype = transmission_functions.dtype
@@ -1145,7 +1160,7 @@ class scattering_matrix:
 
         else:
             self.stored_gridshape = size_of_bandwidth_limited_array(
-                transmission_functions.size()[-3:-1]
+                transmission_functions.shape[-3:-1]
             )
 
             # We will only store output of the scattering matrix up to the band
@@ -1167,7 +1182,7 @@ class scattering_matrix:
         self.PRISM_factor, self.tiling = [PRISM_factor, tiling]
         self.doPRISM = np.any([self.PRISM_factor[i] > 1 for i in [0, 1]])
         self.Fourier_space_output = Fourier_space_output
-        self.nsubslices = transmission_functions.size()[1]
+        self.nsubslices = transmission_functions.shape[1]
         slices = generate_slice_indices(nslice, self.nsubslices, subslicing=subslicing)
         self.GPU_streaming = GPU_streaming
         self.transposed = transposed

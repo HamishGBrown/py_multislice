@@ -201,7 +201,7 @@ class orbital:
         else:
             # Continuum wave function case
             # Title in the format "Ag e = 10 eV l'=2" etc..
-            self.title = "{0} \\varepsilon = {1} l' = {2}".format(
+            self.title = "{0} e = {1} l' = {2}".format(
                 pfac.fac.ATOMICSYMBOL[Z], epsilon, ell
             )
 
@@ -319,16 +319,19 @@ class orbital:
         else:
             return wvfn[0]
 
-    def plot(self, grid=None, show=True, ylim=None):
+    def plot(self, grid=None, show=True, ylim=None, fig=None, plotkwargs={}):
         """Plot wavefunction at positions given by grid r in Bohr radii."""
-        fig, ax = plt.subplots(figsize=(4, 4))
+        if fig is None:
+            fig, ax = plt.subplots(figsize=(4, 4))
+        else:
+            ax = fig.get_axes()[0]
         if grid is None:
             rmax = max(2.0, self.r[self.ilast - 1])
             grid = np.linspace(0.0, rmax, num=50)
 
         wavefunction = self(grid)
-        ax.plot(grid, wavefunction)
-        ax.set_title(self.title)
+        ax.plot(grid, wavefunction, **plotkwargs, label=self.title)
+        # ax.set_title(self.title)
         if ylim is None:
             ylim_ = [1.2 * np.amin(wavefunction), 1.2 * np.amax(wavefunction)]
         else:

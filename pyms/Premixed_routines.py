@@ -435,6 +435,8 @@ def PACBED(
     tiling=[1, 1],
     device=None,
     nT=5,
+    T=None,
+    P=None,
 ):
     """Calculate position averaged convergent electron diffraction (PACBED) patterns."""
     # Sampling of PACBED is half that required for a STEM image
@@ -455,6 +457,8 @@ def PACBED(
         tiling=tiling,
         device_type=device,
         nT=nT,
+        T=T,
+        P=P,
     )["PACBED"]
 
     return result
@@ -748,8 +752,11 @@ def STEM_multislice(
                 datacubes[i][:] = datacubes[i][:] / nfph
         else:
             datacubes /= nfph
+        datacubes = np.squeeze(datacubes)
+
     if STEM_images is not None:
-        STEM_images /= nfph
+        STEM_images = np.squeeze(STEM_images) / nfph
+
     if PACBED is not None:
         PACBED /= nfph
 
@@ -757,7 +764,7 @@ def STEM_multislice(
     if h5_filename is not None:
         for f in files:
             f.close()
-    result = {"STEM images": np.squeeze(STEM_images), "datacube": np.squeeze(datacubes)}
+    result = {"STEM images": STEM_images, "datacube": datacubes}
 
     if PACBED:
         result["PACBED"] = np.squeeze(PACBED_pattern)
@@ -1671,10 +1678,15 @@ def STEM_EELS_PRISM(
     rsize[:3] = structure.unitcell[:3]
     rsize[:2] *= np.asarray(tiling)
 
+    # Generate scan positions in pixels
+    scan = generate_STEM_raster(rsize[:2], eV, app, tiling=tiling, gridshape=gridshape)
+    scan_shape = scan.shape[:2]
+    nprobe_posn = np.prod(scan_shape)
+
     # TODO enable a thickness series
     nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
     P = make_propagators(gridshape, rsize, eV, subslices)
-    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device)
+    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
 
     # Make the transmission functions for multislice
     for i in range(nT):
@@ -1696,7 +1708,6 @@ def STEM_EELS_PRISM(
         batch_size=5,
         subslicing=True,
         PRISM_factor=PRISM_factor,
-        dtype=dtype,
     )
 
     # Scattering matrix 2 propagates probe from slice of ionization to exit surface
@@ -1711,7 +1722,6 @@ def STEM_EELS_PRISM(
         subslicing=True,
         transposed=True,
         PRISM_factor=PRISM_factor,
-        dtype=dtype,
     )
     # Link the slices and seeds of both scattering matrices
     S1.seed = S2.seed
@@ -1738,23 +1748,19 @@ def STEM_EELS_PRISM(
         np.fft.fftfreq(gridshape[-2 + i], d=1 / gridshape[-2 + i]) for i in range(2)
     ]
 
-    # Generate scan positions in pixels
-    scan = generate_STEM_raster(S1.S.shape[-2:], rsize[:2], eV, app)
-    nprobe_posn = len(scan[0]) * len(scan[1])
-
     scan_array = np.zeros((nprobe_posn, S1.S.shape[0]), dtype=np.complex)
 
     # TODO implement aberrations and defocii
     for i in range(S1.nbeams):
         scan_array[:, i] = (
-            np.exp(-2 * np.pi * 1j * ky[S1.beams[i, 0]] * scan[0])[:, None]
-            * np.exp(-2 * np.pi * 1j * kx[S1.beams[i, 1]] * scan[1])[None, :]
+            np.exp(-2 * np.pi * 1j * ky[S1.beams[0][i]] * scan[..., 0].ravel())
+            * np.exp(-2 * np.pi * 1j * kx[S1.beams[1][i]] * scan[..., 1].ravel())
         ).ravel()
 
     scan_array = cx_from_numpy(scan_array, dtype=S1.dtype, device=device)
 
     # Initialize Image
-    EELS_image = torch.zeros(len(scan[0]) * len(scan[1]), dtype=S1.dtype, device=device)
+    EELS_image = torch.zeros(nprobe_posn, dtype=S1.dtype, device=device)
 
     total_slices = nslices * len(subslices)
     for islice in tqdm.tqdm(range(total_slices), desc="Slice"):
@@ -1828,13 +1834,13 @@ def STEM_EELS_PRISM(
                 # cropping region about the probe are evaluated
                 scan_mask = np.logical_and(
                     (
-                        np.abs((atom[0] - scan[0] + 0.5) % 1.0 - 0.5)
+                        np.abs((atom[0] - scan[..., 0].ravel() + 0.5) % 1.0 - 0.5)
                         <= 1 / PRISM_factor[0] / 2
-                    )[:, None],
+                    ),
                     (
-                        np.abs((atom[1] - scan[1] + 0.5) % 1.0 - 0.5)
+                        np.abs((atom[1] - scan[..., 1].ravel() + 0.5) % 1.0 - 0.5)
                         <= 1 / PRISM_factor[1] / 2
-                    )[None, :],
+                    ),
                 ).ravel()
 
                 EELS_image[scan_mask] += torch.sum(
@@ -1845,4 +1851,4 @@ def STEM_EELS_PRISM(
         S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape, 2))
 
     # Move EELS_image to cpu and numpy and then reshape to rectangular grid
-    return EELS_image.cpu().numpy().reshape(len(scan[0]), len(scan[1]))
+    return EELS_image.cpu().numpy().reshape(scan_shape)

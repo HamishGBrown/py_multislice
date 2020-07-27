@@ -171,17 +171,24 @@ def renormalize(array, oldmin=None, oldmax=None, newmax=1.0, newmin=0.0):
 
 
 def convolve(array1, array2, axes=None):
-    """Fourier convolution of two arrays over specified axes."""
+    """
+    Fourier convolution of two arrays over specified axes.
+
+    array2 is broadcast to match array1 so axes refers to the dimensions of
+    array1
+    """
     # input and output shape
     s = array1.shape
+    # Broadcast array2 to match array1
+    a2 = np.broadcast_to(array2, s)
     # Axes of transformation
     a = axes
-    if np.iscomplexobj(array1) or np.iscomplexobj(array2):
-        return np.fft.ifftn(np.fft.fftn(array1, s, a) * np.fft.fftn(array2, s, a), s, a)
+    if a is not None:
+        s = [s[i] for i in a]
+    if np.iscomplexobj(array1) or np.iscomplexobj(a2):
+        return np.fft.ifftn(np.fft.fftn(array1, s, a) * np.fft.fftn(a2, s, a), s, a)
     else:
-        return np.fft.irfftn(
-            np.fft.rfftn(array1, s, a) * np.fft.rfftn(array2, s, a), s, a
-        )
+        return np.fft.irfftn(np.fft.rfftn(array1, s, a) * np.fft.rfftn(a2, s, a), s, a)
 
 
 def colorize(z, saturation=0.8, minlightness=0.0, maxlightness=0.5):

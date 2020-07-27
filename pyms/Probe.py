@@ -1,6 +1,7 @@
 """Functions for emulating electron optics of a TEM."""
 
 import numpy as np
+import copy
 from .utils.numpy_utils import q_space_array
 
 
@@ -360,7 +361,9 @@ def relativistic_mass_correction(E):
     return (m0c2 + E) / m0c2
 
 
-def simulation_result_with_Cc(func, Cc, deltaE, eV, args=[], kwargs={}, npoints=7):
+def simulation_result_with_Cc(
+    func, Cc, deltaE, eV, args=[], kwargs={}, npoints=7, deltaEconv="1/e"
+):
     """
     Perform a simulation using function, taking into account chromatic aberration.
 
@@ -401,7 +404,7 @@ def simulation_result_with_Cc(func, Cc, deltaE, eV, args=[], kwargs={}, npoints=
         nominal_df = 0
 
     # Get defocii to integrate over
-    defocii = Cc_integration_points(Cc, deltaE, eV, npoints) + nominal_df
+    defocii = Cc_integration_points(Cc, deltaE, eV, npoints, deltaEconv) + nominal_df
     ndf = len(defocii)
 
     # Initialise the average result to None
@@ -420,6 +423,16 @@ def simulation_result_with_Cc(func, Cc, deltaE, eV, args=[], kwargs={}, npoints=
                 average = result / ndf
             else:
                 average += result / ndf
+        elif isinstance(result, dict):
+            if average is None:
+                average = copy.deepcopy(result)
+                for key in average.keys():
+                    if average[key] is not None:
+                        average[key] /= ndf
+            else:
+                for key in average.keys():
+                    if average[key] is not None:
+                        average[key] += result[key] / ndf
         else:
             if average is None:
                 average = [x / ndf for x in result]
@@ -428,7 +441,7 @@ def simulation_result_with_Cc(func, Cc, deltaE, eV, args=[], kwargs={}, npoints=
     return average
 
 
-def Cc_integration_points(Cc, deltaE, eV, npoints=7):
+def Cc_integration_points(Cc, deltaE, eV, npoints=7, deltaEconv="1/e"):
     """
     Calculate the defocus integration points for simulating chromatic aberration.
 
@@ -451,6 +464,11 @@ def Cc_integration_points(Cc, deltaE, eV, npoints=7):
     -----------------
     npoints : int,optional
         Number of integration points in the Cc numerical integration
+    deltaEconv : float,optional
+        The convention for deltaE, the energy spread, acceptable inputs are '1/e'
+        the energy point that the probability density function drops to 1/e times
+        its maximum value, 'std' for standard deviation and 'FWHM' for the full
+        width at half maximum of the energy spread.
     """
     # Import the error function (integral of Gaussian) and inverse error function
     # from scipy's special functions library
@@ -473,22 +491,69 @@ def Cc_integration_points(Cc, deltaE, eV, npoints=7):
     x[-1] = prefactor * np.exp(-partitions[-1] ** 2) / (1 - erf(partitions[-1])) * 2
 
     # Multiply by 1/e spread of defocus values
-    return x * Cc * deltaE / eV
+    return x * Cc * convert_deltaE(deltaE, deltaEconv) / eV
 
 
-def Cc_defocus_spread(df, Cc, deltaE, eV):
+def Cc_defocus_spread(df, Cc, deltaE, eV, deltaEconv):
     """
     Calculate the defocus spread for chromatic aberration.
 
     Evaluates the probability density function at defocus df for the defocus
     spread of a chromatic aberration (Cc) for (1/e) energy spread deltaE and
     beam energy eV in electron volts.
+
+
+    Parameters
+    ----------
+    Cc : float
+        Chromatic aberration coefficient in Angstroms
+    deltaE : float
+        Energy spread in electron volts using the measure given by deltaEconv
+        (1/e measure of spread is default)
+    eV : float
+        (Mean) beam energy in electron volts
+
+    Keyword arguments
+    -----------------
+    deltaEconv : string,optional
+        The convention for deltaE, the energy spread, acceptable inputs are '1/e'
+        the energy point that the probability density function drops to 1/e times
+        its maximum value, 'std' for standard deviation and 'FWHM' for the full
+        width at half maximum of the energy spread
     """
     # Calculate defocus spread
-    df_spread = Cc * deltaE / eV
+    df_spread = Cc * convert_deltaE(deltaE, deltaEconv) / eV
 
     # Evaluate probability density function for given defocus df
     return np.exp(-df * df / df_spread / df_spread) / np.sqrt(np.pi) / df_spread
+
+
+def convert_deltaE(deltaE, deltaEconv):
+    """
+    Convert the energy spread input to a 1/e spread.
+
+    Parameters
+    ----------
+    deltaE : float
+        Energy spread in electron volts using the measure given by deltaEconv
+    deltaEconv : string
+        The convention for deltaE, the energy spread, acceptable inputs are '1/e'
+        the energy point that the probability density function drops to 1/e times
+        its maximum value, 'std' for standard deviation and 'FWHM' for the full
+        width at half maximum of the energy spread
+    """
+    if deltaEconv == "1/e":
+        return deltaE
+    elif deltaEconv == "FWHM":
+        return deltaE / 2 / np.sqrt(np.log(2))
+    elif deltaEconv == "std":
+        return deltaE * np.sqrt(2)
+    else:
+        raise AttributeError(
+            "detlaEconv "
+            + deltaEconv
+            + " input not recognized, needs to be one of '1/e', 'FWHM' or 'std'"
+        )
 
 
 def convert_tilt_angles(tilt, tilt_units, rsize, eV, invA_out=False):
