@@ -5,6 +5,7 @@ import torch
 from tqdm import tqdm
 from .Probe import wavev, focused_probe
 from .utils.numpy_utils import (
+    ensure_array,
     bandwidth_limit_array,
     q_space_array,
     fourier_interpolate_2d,
@@ -24,8 +25,34 @@ from .utils.torch_utils import (
     size_of_bandwidth_limited_array,
     fourier_interpolate_2d_torch,
     crop_window_to_flattened_indices_torch,
+    crop_window_to_periodic_indices,
     crop_torch,
 )
+
+
+def thickness_to_slices(
+    thicknesses, slice_thickness, subslicing=False, subslices=[1.0]
+):
+    """Convert thickness in Angstroms to number of multislice slices."""
+    t = np.asarray(ensure_array(thicknesses))
+    if subslicing:
+        # Work out how many slice of the structure is closest to the desired
+        # output thicknesses
+        m = len(subslices)
+        nslices = (t // slice_thickness).astype(np.int) * m
+        from scipy.spatial.distance import cdist
+
+        # Work out which subslices of the structure
+        remainder = (t % slice_thickness) / slice_thickness
+        n = len(remainder)
+        dist = cdist(
+            remainder.reshape((n, 1)),
+            np.concatenate(([0], subslices[:-1])).reshape((m, 1)),
+        )
+        z = [0] + (nslices + np.asarray([i for i in np.argmin(dist, axis=1)])).tolist()
+        return [np.arange(z[i], z[i + 1]) for i in range(len(z) - 1)]
+    else:
+        return np.ceil(t / slice_thickness).astype(np.int)
 
 
 def make_propagators(
@@ -74,11 +101,11 @@ def make_propagators(
 
     # Intitialize array
     prop = np.zeros((len(subslices), *gridshape), dtype=np.complex)
-    for islice, slice in enumerate(subslices):
+    for islice, s_ in enumerate(subslices):
         if islice == 0:
-            deltaz = slice * gridsize[2]
+            deltaz = s_ * gridsize[2]
         else:
-            deltaz = (slice - subslices[islice - 1]) * gridsize[2]
+            deltaz = (s_ - subslices[islice - 1]) * gridsize[2]
 
         # Calculate propagator
         prop[islice, :, :] = bandwidth_limit_array(
@@ -116,7 +143,7 @@ def multislice(
     nslices,
     propagators,
     transmission_functions,
-    tiling=None,
+    tiling=[1, 1],
     device_type=None,
     seed=None,
     return_numpy=True,
@@ -133,19 +160,16 @@ def multislice(
 
     Parameters
     ----------
-    probes : (n,Y,X) complex array_like
-        Electron wave functions for a set of input probes
+    probes : (n,Y,X) or (Y,X) complex array_like
+        Electron probe wave function(s)
     nslices : int, array_like
-        The number of slices (iterations) to perform multislice over
+        The number of slices (iterations) to perform multislice over, if an
     propagators : (Z,Y,X,2) or (Y,X,2) torch.array
         Fresnel free space operators required for the multislice algorithm
         used to propagate the scattering matrix
-    transmission_functions : (nT,Z,Y,X,2)
+    transmission_functions : (Z,nT,Y,X,2)
         The transmission functions describing the electron's interaction
         with the specimen for the multislice algorithm
-
-    Keyword arguments
-    -----------------
     tiling : (2,) array_like
         Tiling of a repeat unit cell on simulation grid.
     device_type : torch.device, optional
@@ -159,10 +183,10 @@ def multislice(
         user to control how the output is returned
     qspace_in : bool, optional
         Should be set to True if the input wavefunction is in momentum (q) space
-        and False otherwise
+        and False otherwise (this is the default)
     qspace_out : bool, optional
         Should be set to True if the output wavefunction is desired in momentum
-        (q) space and False otherwise
+        (q) space and False otherwise (this is the default)
     posn :
         Does nothing, included to match calling signature for STEM function
     subslicing : bool, optional
@@ -182,6 +206,12 @@ def multislice(
     transpose : bool, optional
         Reverse the order of the multislice operations, ie. apply propagator
         first and then transmission function
+    Returns
+    -------
+    psi : (Y,X) or (n,Y,X) complex torch.tensor or np.ndarray
+        Exit surface wave functions as a pytorch tensor or numpy array (default)
+        depending on whether return_numpy is True or False. If the input `probes`
+        is two dimensional then n = 1
     """
     # If a single integer is passed to the routine then Seed random number generator,
     # , if None then np.random.RandomState will use the system clock as a seed
@@ -229,19 +259,20 @@ def multislice(
 
         # If the transmission function is from a tiled unit cell then
         # there is the option of randomly shifting it around to
-        # generate "more" transmission functions
-        if tiling is None or (tiling[0] == 1 & tiling[1] == 1):
+        # generate "more" psuedo-random transmission functions
+        if tiling[0] == 1 & tiling[1] == 1:
             T_ = T[it, subslice]
         elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
-            # Shift an integer number of pixels in y
-            T_ = roll_n(
-                T[it, subslice], 0, r.randint(0, tiling[0]) * (nopiy // tiling[0])
-            )
 
-            # Shift an integer number of pixels in x
-            T_ = roll_n(T_, 1, r.randint(1, tiling[1]) * (nopix // tiling[1]))
+            T_ = T[it, subslice]
+            if tiling[0] > 1:
+                # Shift an integer number of pixels in y
+                T_ = roll_n(T_, 0, r.randint(0, tiling[0]) * (nopiy // tiling[0]))
+            if tiling[1] > 1:
+                # Shift an integer number of pixels in x
+                T_ = roll_n(T_, 1, r.randint(1, tiling[1]) * (nopix // tiling[1]))
         else:
-            # Case of a non-integer shifting of the unit cell
+            # Case of a non-integer pixel shifting of the unit cell
             yshift = r.randint(0, tiling[0]) * (nopiy / tiling[0])
             xshift = r.randint(0, tiling[1]) * (nopix / tiling[1])
             shift = torch.tensor([yshift, xshift])
@@ -263,6 +294,8 @@ def multislice(
             # Reverse multislice complex conjugates the transmission and
             # propagation. Both reverse and transpose multislice reverse
             # the order of the transmission and conjugation operations
+            # probe should start in real space and finish this iteration in
+            # real space
             psi = complex_mul(
                 torch.ifft(
                     complex_mul(torch.fft(psi, signal_ndim=2), P_, reverse),
@@ -272,36 +305,29 @@ def multislice(
                 reverse,
             )
         else:
+            # Standard multislice iteration - probe should start in real space
+            # and finish this iteration in reciprocal space
             psi = complex_mul(torch.fft(complex_mul(psi, T_), signal_ndim=2), P_)
 
-        if i == len(slices) - 1 and output_to_bandwidth_limit:
-            if transpose or reverse:
-                psi = torch.fft(psi, signal_ndim=2)
-            # The probe can be cropped to the bandwidth limit, this removes
-            # superfluous array entries in reciprocal space that are zero
-            # Since the next inverse FFT will apply a factor equal to the
-            # square root number of pixels we have to adjust the values
-            # of the array to compensate
-            psi /= torch.sqrt(
-                torch.prod(torch.tensor(psi.size()[-3:-1], dtype=T.dtype))
+        # The probe can be cropped to the bandwidth limit, this removes
+        # superfluous array entries in reciprocal space that are zero
+        # Since the next inverse FFT will apply a factor equal to the
+        # square root number of pixels we have to adjust the values
+        # of the array to compensate
+        if i == len(slices) - 1:
+            lim = 2 / 3 if output_to_bandwidth_limit else 1
+            psi = crop_to_bandwidth_limit_torch(
+                psi,
+                qspace_in=not (transpose or reverse),
+                qspace_out=qspace_out,
+                limit=lim,
+                norm="conserve_norm",
             )
-            psi = crop_to_bandwidth_limit_torch(psi)
-            psi *= torch.sqrt(
-                torch.prod(torch.tensor(psi.size()[-3:-1], dtype=T.dtype))
-            )
-            if (transpose or reverse) and not qspace_out:
-                psi = torch.ifft(psi, signal_ndim=2)
-
-        # This logic statement allows for the probe to be returned
-        # in reciprocal space
-        # TODO the not (transpose or reverse) is a quick fix needs to be better
-        # thought out long term for predictable behaviour
-        if not np.all([qspace_out, i == len(slices) - 1]) and (
-            not (transpose or reverse)
-        ):
+        elif not (transpose or reverse):
+            # Inverse Fourier transform back to real space for next iteration
             psi = torch.ifft(psi, signal_ndim=2)
 
-    if (transpose or reverse) and qspace_out:
+    if len(slices) < 1 and qspace_out:
         psi = torch.fft(psi, signal_ndim=2)
 
     if return_numpy:
@@ -604,7 +630,7 @@ def generate_probe_spread_plot(
     ----------
     gridshape : (2,) array_like
         Pixel dimensions of the 2D grid
-    structure : pyms.structure
+    structure : pyms.structure_routines.structure
         The structure of interest
     eV : float
         Probe energy in electron volts
@@ -836,6 +862,11 @@ def STEM(
     # Get number of thicknesses in the series
     nthick = len(nslices)
 
+    if isinstance(nslices[0], int):
+        nslices_ = np.diff(nslices, prepend=0)
+    else:
+        nslices_ = nslices
+
     if device is None:
         device = get_device(device)
 
@@ -935,7 +966,7 @@ def STEM(
 
         # Thickness series
         #  - need to take the difference between sequential thickness variations
-        for it, t in enumerate(np.diff(nslices, prepend=0)):
+        for it, t in enumerate(nslices_):
 
             # Evaluate exit surface wave function from input probes
             probes = method(
@@ -1110,6 +1141,7 @@ class scattering_matrix:
         self.alpha_ = wavev(eV) * alpha * 1e-3
 
         self.PRISM_factor = PRISM_factor
+        self.doPRISM = np.any(np.asarray(PRISM_factor) > 1)
 
         # Make a list of beams in the scattering matrix
         # Take beams inside the aperture and every nth beam where n is the
@@ -1293,7 +1325,11 @@ class scattering_matrix:
                     self.S[ibeam] = psi[self.bw_mapping[:, 0], self.bw_mapping[:, 1], :]
                 else:
                     self.S[ibeam] = fourier_interpolate_2d_torch(
-                        psi, self.stored_gridshape, qspace_in=True, correct_norm=False
+                        psi,
+                        self.stored_gridshape,
+                        qspace_in=True,
+                        qspace_out=False,
+                        norm="conserve_norm",
                     )
             self.initialized = True
 
@@ -1366,7 +1402,9 @@ class scattering_matrix:
             else:
                 # Fourier interpolate stored real space S-matrix column onto
                 # multislice grid
-                psi = fourier_interpolate_2d_torch(self.S[beams], self.gridshape, False)
+                psi = fourier_interpolate_2d_torch(
+                    self.S[beams], self.gridshape, norm="conserve_norm"
+                )
 
             if self.GPU_streaming:
                 psi = ensure_torch_array(psi, dtype=self.dtype).to("cuda")
@@ -1397,7 +1435,7 @@ class scattering_matrix:
                 ] * np.sqrt(np.prod(self.stored_gridshape) / np.prod(self.gridshape))
             else:
                 output = fourier_interpolate_2d_torch(
-                    output, self.stored_gridshape, correct_norm=False
+                    output, self.stored_gridshape, norm="conserve_norm"
                 )
                 self.S[beams] = output
 
@@ -1442,7 +1480,7 @@ class scattering_matrix:
 
         if Smat is None:
             Smat = self.S
-        Sshape = Smat.shape
+        Sshape = [int(x) for x in Smat.shape]
 
         device = Smat.device
         crop_ = self.PRISM_crop_window(device=device)
@@ -1512,31 +1550,48 @@ class scattering_matrix:
             return probes
         else:
             # Flatten the array dimensions
-            flattened_shape = [Smat.size(-3) * Smat.size(-2), 2]
+            Smatshape = Smat.shape
+            flattened_shape = [Smatshape[0], Smatshape[-3] * Smatshape[-2], 2]
+            N = probes.shape[0]
             output = torch.zeros(
-                probes.size(0), *flattened_shape, dtype=self.dtype, device=Smat.device
+                N, *Smat.shape[-3:-1], 2, dtype=self.dtype, device=Smat.device
             )
 
             # For evaluating the probes in real space we only want to perform the matrix
             # multiplication and summation within the real space PRISM cropping region
-            for k in range(probes.size(0)):
 
-                window = crop_window_to_flattened_indices_torch(
-                    [
-                        (
-                            crop_[i]
-                            + (posn[k, i] * Sshape[-3 + i]).type(torch.LongTensor)
-                        )
+            stride = [x // y for x, y in zip(self.stored_gridshape, self.PRISM_factor)]
+            halfstride = [x // 2 for x in stride]
+
+            # for k in range(probes.size(0)):
+            for probe, pos, out in zip(probes, posn, output):
+
+                if self.doPRISM:
+                    start = [
+                        int(torch.round(pos[i] * Sshape[-3 + i])) - halfstride[i]
                         for i in range(2)
-                    ],
-                    Sshape[-3:-1],
-                )
+                    ]
+                    windows = crop_window_to_periodic_indices(
+                        [start[0], stride[0], start[1], stride[1]], Sshape[-3:-1]
+                    )
 
-                output[k, window] += complex_matmul(
-                    probes[k, self.beams[0], self.beams[1]],
-                    Smat.view(self.nbeams, *flattened_shape)[:, window],
-                ) / np.sqrt(np.prod(probes.size()[-3:-1]))
+                    for wind in windows:
+                        outview = out.narrow(-3, wind[1][0], wind[1][1]).narrow(
+                            -2, wind[0][0], wind[0][1]
+                        )
+                        sview = Smat.narrow(-3, wind[1][0], wind[1][1]).narrow(
+                            -2, wind[0][0], wind[0][1]
+                        )
+                        p = probe[self.beams[0], self.beams[1]].view(
+                            self.nbeams, 1, 1, 2
+                        )
+                        outview += torch.sum(complex_mul(p, sview), axis=0)
+                else:
+                    output += complex_matmul(
+                        probe[self.beams[0], self.beams[1]], Smat.view(flattened_shape)
+                    ).view(Smatshape[1:])
 
+            output /= np.sqrt(np.prod(probes.size()[-3:-1]))
             output = crop_torch(
                 output.reshape(probes.size(0), *Smat.size()[-3:]), self.stored_gridshape
             )
@@ -1766,7 +1821,6 @@ class scattering_matrix:
                 for point, Dp in zip(points, Datacube_segment[0]):
                     y, x = np.unravel_index(point, scan_shape)
                     datacube[y, x] += Dp[0]
-        # plt.show(block=True)
 
         # Unflatten 4D-STEM datacube scan dimensions, use numpy squeeze to
         # remove superfluous dimensions (ones with length 1)

@@ -20,29 +20,28 @@ def stack_to_animated_gif(
     """
     Write a numpy array to an animated gif.
 
-    Parameters:
+    Parameters
     ----------
-    arrayin: float or int, array_like (...,Y,X)
+    arrayin : float or int, array_like (...,Y,X)
         The array to convert to an animated gif, the leading dimensions of the
         array will be the different frames of the output gif
-    fnam: string
+    fnam : string
         Output filename of the gif. The filename ending will be removed and
         .gif added
-
-    Keyword arguments
-    -----------------
-    cmap: matplotlib.cmap function
+    cmap : matplotlib.cmap function, optional
         A function that takes an input from 0 to 1 and converts it to a (3,)
         RGB colour
-    vmin,vmax : float
-        vmin and vmax define the data range that the colormap covers. By
+    vmin : float, optional
+        `vmin` and `vmax` define the data range that the colormap covers. By
         default, the colormap covers the complete value range of the supplied
         data.
-    optimize : bool
+    vmax : float,optional
+        See `vmin` description
+    optimize : bool, optional
         Tells the Python image library whether to compress the gif output or not
-    duration : int
+    duration : int, optional
         Duration of each frame in milliseconds
-    loop : int
+    loop : int, optional
         Number of times to loop the gif, 0 means infinite loop and -1 means that
         gif animation is played a single time
     """
@@ -214,7 +213,21 @@ def datacube_to_py4DSTEM_viewable(
 
 
 def tiff_stack_out(array, tag):
-    """Output a multi-dimensional array as a set of tif files."""
+    """
+    Output a multi-dimensional array as a set of tif files in a directory.
+
+    This directory can then be dropped into the FIJI (Image J) program to view
+    as a stack.
+
+    Parameters
+    ----------
+    array : (...,Y,X) np.ndarray
+        Array to be written to tiff stack.
+    tag : str
+        A string that describes the output format of the files should be of the
+        form 'directory/to/output/files/to/file_{0}' where {0} will be replaced
+        with the index of the image within the stack.
+    """
     from PIL import Image
 
     direc = os.path.dirname(tag)

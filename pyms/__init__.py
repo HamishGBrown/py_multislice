@@ -1,4 +1,8 @@
-"""Import all functions and classes into pyms namespace."""
+"""
+The pyms (py_multislice) package.
+
+A Python package for simulating transmission electron microscopy (TEM) results.
+"""
 from .py_multislice import *  # noqa
 from .Probe import *  # noqa
 from .atomic_scattering_params import *  # noqa

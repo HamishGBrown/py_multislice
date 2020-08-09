@@ -1,8 +1,15 @@
 """
-Functions for calculating ionization cross sections.
+Functions for calculating ionization based TEM images.
 
-For ionization based TEM methods such as electron energy-loss spectroscopy (EELS)
-or energy-filtered TEM (EFTEM).
+See the following for a description of the underlying theory of much of this module
+
+Dwyer, Christian. "Multislice theory of fast electron scattering
+incorporating atomic inner-shell ionization." Ultramicroscopy 104.2
+(2005): 141-151.
+
+Dwyer, Christian, Scott D. Findlay, and Leslie J. Allen. "Multiple
+elastic scattering of core-loss electrons in atomic resolution imaging."
+Physical Review B 77.18 (2008): 184107.
 """
 import numpy as np
 import matplotlib.pyplot as plt
@@ -39,6 +46,12 @@ def get_q_numbers_for_transition(ell, order=1):
     order : int, optional
         Largest change in orbital angular momentum quantum number, order = 1
         gives all dipole terms, order = 2 gives all quadropole terms etc.
+
+    Returns
+    -------
+    qnumbers : list of lists
+        List containing quantum numbers of possible excited states. For each
+        excited state the list contains quantum numbers [lprime,mlprime,ml]
     """
     # Get projection quantum numbers
     mls = np.arange(-ell, ell + 1)
@@ -53,7 +66,7 @@ def get_q_numbers_for_transition(ell, order=1):
 
 def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=0.95):
     """
-    Calculate all transitions for a particular target orbital.
+    Calculate all ionization transition potentials for a particular target orbital.
 
     Parameters
     ----------
@@ -63,7 +76,7 @@ def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=
         Target orbital principle quantum number
     ell : int
         Target orbital angular momentum quantum number
-    epsilon : Optional, float
+    epsilon : Optional
         Energy of continuum wavefunction, ie energy above ionization threshhold
     eV : float
         Probe energy in electron volts
@@ -71,12 +84,10 @@ def get_transitions(Z, n, ell, epsilon, eV, gridshape, gridsize, order=1, contr=
         Pixel size of the simulation grid
     gridsize : (2,) array_like
         The real space size of the simulation grid in Angstrom
-    Keyword arguments
-    -----------------
-    order : int
+    order : int,optional
         Largest change in orbital angular momentum quantum number, order = 1
         gives all dipole terms, order = 2 gives all quadropole terms etc.
-    contr : float
+    contr : float,optional
         Threshhold for rejection of ionization transition potential, eg. if
         contr == 0.95 an individual transition is rejected if it would
         contribute less than 5 % to the total signal
@@ -169,6 +180,9 @@ class orbital:
         self.config = config
         self.n = n
         self.ell = ell
+        assert ell > -1, (
+            "Angular momentum quantum number ell = " + str(ell) + ". Must be > 0"
+        )
         if self.n == 0:
             assert epsilon > 0, "Energy of continuum electron must be > 0"
             self.epsilon = epsilon
@@ -246,8 +260,7 @@ class orbital:
             # Normalization used in flexible atomic code
             facnorm = 1 / np.sqrt(ke)
             # Desired normalization from Manson 1972
-            norm = 1 / np.sqrt(np.pi * epsilon / Ry)
-            # norm = 1
+            norm = 1 / np.sqrt(np.pi) / (epsilon / Ry) ** 0.25
 
             # If continuum wave function load phase-amplitude solution
             self.__amplitude = interp1d(
@@ -355,6 +368,7 @@ def transition_potential(
     eV,
     bandwidth_limiting=2.0 / 3,
     qspace=False,
+    orbital_filling_factor=True,
 ):
     """
     Calculate an ionization transition potential.
@@ -367,7 +381,7 @@ def transition_potential(
     ----------
     orb1 : class pyms.Ionization.orbital
         The bound state orbital object
-    orb1 : class pyms.Ionization.orbital
+    orb2 : class pyms.Ionization.orbital
         The excited state orbital object
     gridshape : (2,) array_like
         Pixel size of the simulation grid
@@ -381,14 +395,14 @@ def transition_potential(
         state
     eV : float
         The energy of the probe electron
-
-    Keyword arguments
-    -----------------
-    bandwidth_limiting : float
+    bandwidth_limiting : float, optional
         The band-width limiting as a fraction of the grid of the excitation
-    qspace : bool
+    qspace : bool, optional
         If qspace = True return the ionization transition potential in reciprocal
         space
+    orbital_filling_factor : bool, optional
+        If True (default) multiply by 2*`orb1.l` + 1 to account for the number
+        of electrons that sit in the ground state before ionization.
     """
     # Calculate energy loss
     deltaE = orb1.energy - orb2.energy
@@ -542,7 +556,7 @@ def transition_potential(
     Hn0 *= np.prod(gridshape) / np.prod(gridsize)
 
     # Multiply by orbital filling
-    # filling = 4*ell+2
+    Hn0 *= 4 * ell + 2
 
     # Apply constants:
     # sqrt(Rdyberg) to convert to 1/sqrt(eV) units
@@ -581,33 +595,53 @@ def transition_potential_multislice(
     image_CTF=None,
     threshhold=1e-4,
     showProgress=True,
+    tqposition=0,
 ):
     """
     Perform a multislice calculation with a transition potential for ionization.
 
     Parameters
     ----------
-    probes : (n,Y,X) complex array_like
+    probes : (nprobes,Y,X) complex array_like
         Electron wave functions for a set of input probes
     nslices : int, array_like
         The number of slices (iterations) to perform multislice over
-    propagators : (N,Y,X,2) torch.array
-        Fresnel free space operators required for the multislice algorithm
-        used to propagate the scattering matrix
-    transmission_functions : (N,Y,X,2)
-        The transmission functions describing the electron's interaction
-        with the specimen for the multislice algorithm
-    ionization_potentials :
-
-    qspace_out : bool
+    propagators : (nsubslice,Y,X,2) complex array_like
+        Fresnel free space operators required for the multislice algorithm.
+    transmission_functions : (nT,nslices,Y,X) array_like
+        Multislice transmission functions
+    ionization_potentials : (nstates,Y,X,2)
+        Multislice ionization transition potentials
+    ionization_sites : (ntargets,3)
+        Fractional coordinates of all target atoms for ionization in the cell.
+    tiling : (2,) array_like, optional
+        Tiling of the unit-cell for multislice
+    device_type : torch.device, optional
+        torch.device object which will determine which device (CPU or GPU) the
+        calculations will run on
+    seed : int
+        Seed for random number generator for generating transmission functions
+        and frozen phonon passes. Useful for testing purposes
+    return_numpy : bool, optional
+        Calculations are performed on pytorch tensors for speed, however numpy
+        arrays are more convenient for processing. This input allows the
+        user to control how the output is returned
+    qspace_in : bool, optional
+        If True the routine assumes that all probes are passed in reciprocal
+        space
+    qspace_out : optional
         Does nothing, purely there to match the calling signature of the STEM
         function.
+    posn : optional
+        Does nothing, purely there to match the calling signature of the STEM
+        function.
+    tqposition : int,optional
+        Used to correctly nest progress bars
     """
     from .py_multislice import multislice
     from .utils.torch_utils import (
         amplitude,
         complex_mul,
-        modulus_square,
         ensure_torch_array,
         fourier_shift_torch,
         get_device,
@@ -636,6 +670,9 @@ def transition_potential_multislice(
     propagators = ensure_torch_array(propagators, dtype=dtype, device=device)
     probes = ensure_torch_array(probes, dtype=dtype, device=device)
 
+    if len(probes.shape) < 4:
+        probes = probes.view((1, *probes.shape))
+
     # If Fourier space probes are passed, inverse Fourier transform them
     if qspace_in:
         probes = torch.ifft(probes, signal_ndim=2)
@@ -643,9 +680,8 @@ def transition_potential_multislice(
     # Calculate threshholds below which an ionization will not be included in
     # the simulation.
     if threshhold is not None:
-        trigger = np.zeros((ionization_potentials.size(0),))
+        trigger = np.zeros(ionization_potentials.shape[0])
         for i, ionization_potential in enumerate(ionization_potentials):
-            print(modulus_square(ionization_potential))
             trigger[i] = threshhold * torch.sum(amplitude(ionization_potential))
 
     # Ionization potentials must be in reciprocal space
@@ -655,11 +691,16 @@ def transition_potential_multislice(
     from .utils.torch_utils import size_of_bandwidth_limited_array
 
     nprobes = probes.size(0)
-    gridout = size_of_bandwidth_limited_array(probes.size()[-3:-1])
-    output = torch.zeros(nprobes, *gridout, device=device, dtype=dtype)
+    gridout = size_of_bandwidth_limited_array(probes.shape[-3:-1])
+    if image_CTF is None:
+        output = torch.zeros(nprobes, *gridout, device=device, dtype=dtype)
+    else:
+        output = torch.zeros(image_CTF.shape[0], *gridout, device=device, dtype=dtype)
 
     # Loop over slices of specimens
-    for i in tqdm.tqdm(range(niterations), desc="Slice", disable=not showProgress):
+    for i in tqdm.tqdm(
+        range(niterations), desc="Slice", disable=not showProgress, position=tqposition
+    ):
 
         subslice = i % nsubslices
 
@@ -671,29 +712,30 @@ def transition_potential_multislice(
         )
 
         # Loop over inelastic transitions within the slice
-        for atom in tqdm.tqdm(
-            atoms_in_slice[0], desc="Transitions in slice", disable=not showProgress
-        ):
+        for atom in atoms_in_slice[
+            0
+        ]:  # , desc="Atoms in slice", disable=not showProgress,position=tqposition+1):
 
             for j, ionization_potential in enumerate(ionization_potentials):
 
                 # Calculate inelastically scattered wave for ionization transition
                 # potential shifted to position of slice
-                posn = (
+                p_ = (
                     torch.from_numpy(ionization_sites[atom, :2] * gridshape)
                     .type(dtype)
                     .to(device)
                 )
 
                 psi_n = complex_mul(
-                    fourier_shift_torch(ionization_potential, posn, qspace_in=True),
+                    fourier_shift_torch(ionization_potential, p_, qspace_in=True),
                     probes,
                 )
+
                 # Only propagate this wave to the exit surface if it is deemed
                 # to contribute significantly (above a user-determined threshhold)
                 # to the image. Pass threshhold = None to disable this feature
                 if threshhold is not None:
-                    if torch.sum(torch.amplitude(psi_n)) < trigger[j]:
+                    if torch.sum(amplitude(psi_n)) < trigger[j]:
                         continue
 
                 # Propagate to exit surface
@@ -718,14 +760,15 @@ def transition_potential_multislice(
                     )
 
         # Propagate probe one slice
-        probes = multislice(
-            probes,
-            [i + 1],
-            propagators,
-            transmission_functions,
-            return_numpy=False,
-            output_to_bandwidth_limit=False,
-        )
+        if i < niterations - 1:
+            probes = multislice(
+                probes,
+                [i + 1],
+                propagators,
+                transmission_functions,
+                return_numpy=False,
+                output_to_bandwidth_limit=False,
+            )
 
     if return_numpy:
         return output.cpu().numpy()
@@ -821,7 +864,11 @@ def valence_orbitals(Z):
 
 
 def noble_gas_filling(Z):
-    """Return the noble gas filling for an atom with atomic number Z."""
+    """
+    Return the noble gas filling for an atom with atomic number Z.
+
+    This is the configuration of the non-valence "core" shell electrons.
+    """
     if Z < 2:
         return ""
     orb = "1s2 "
@@ -843,7 +890,26 @@ def noble_gas_filling(Z):
 
 
 def full_orbital_filling(Z):
-    """Return the full orbital filling for an atom with atomic number Z."""
+    """
+    Return the full orbital filling for an atom with atomic number Z.
+
+    Parameters
+    ----------
+    Z : int
+        Atomic number of interest
+
+    Returns
+    -------
+    filling : str
+        A string describing the orbitals and number of electrons occupying that
+        orbital.
+
+    Examples
+    --------
+    Ground state for oxygen:
+    >>> pyms.full_orbital_filling(8)
+    '1s2 2s2 2p4'
+    """
     return noble_gas_filling(Z) + valence_orbitals(Z)
 
 

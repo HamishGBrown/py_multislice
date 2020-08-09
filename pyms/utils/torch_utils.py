@@ -1,6 +1,7 @@
 """A set of utility functions for working with pytorch tensors."""
 import torch
 import numpy as np
+from itertools import product
 
 
 re = np.s_[..., 0]
@@ -246,8 +247,8 @@ def fourier_shift_torch(
 
     Parameters
     -----------
-    array : torch.tensor (...,Y,X)
-        Array to be Fourier shifted
+    array : torch.tensor (...,Y,X,2)
+        Complex array to be Fourier shifted
     posn : torch.tensor (K x 2) or (2,)
         Shift(s) to be applied
     """
@@ -339,6 +340,52 @@ def fourier_shift_array(
         return complex_mul(yramp.view(K, y, 1, 2), xramp.view(K, 1, x, 2))
 
 
+def crop_window_to_periodic_indices(win, shape):
+    """
+    Create indices for a rectangular subset of a larger array.
+
+    If indices exceed the size of the larger array then these indices will wrap
+    around to the other side of the grid providing two or more rectangular
+    subsets of the larger array. Designed to be used in conjunction with
+    the torch.narrow function to choose subsets of the square array to evaluate
+    the PRISM algorithm on.
+
+    Assumes that the requested window is smaller than the array size
+
+    Parameters
+    ----------
+    win : (4,) array_like
+        contains (y0,y,x0,x) the lower y index and y length and lower x index
+        and x length
+    shape : (2,) array_like
+        Shape of the larger array
+
+    Examples
+    --------
+    >>>> crop_window_to_periodic_indices([2,2,1,3],[5,5])
+    (([2,2],[1,3]),)
+    >>>> crop_window_to_periodic_indices([-1,3,1,3],[5,5])
+    (([4,1],[1,3]),([0,2],[1,3]))
+    >>>> crop_window_to_periodic_indices([4,4,1,3],[5,5])
+    (([4,1],[1,3]),([0,3],[1,3]))
+    >>>> list(crop_window_to_periodic_indices([4,4,3,3],[5,5]))
+    (([4,1],[3,2]),([0,3],[3,2]),([4,1],[0,1]),([0,3],[0,1]))
+    """
+
+    def oneDindices(start, step, bound):
+        if start + step > bound - 1:
+            return [start, bound - start], [0, start + step - bound]
+        elif start < 0:
+            return [start % bound, bound - start % bound], [0, (start + step) % bound]
+        else:
+            return [[start, step]]
+
+    y = oneDindices(*win[:2], shape[0])
+    x = oneDindices(*win[2:], shape[1])
+
+    return tuple(product(y, x))
+
+
 def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
     """
     Create (flattened) indices for a rectangular subset of a larger array.
@@ -380,42 +427,27 @@ def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
     return (xind + yind * shape[-1]).flatten().type(torch.LongTensor)
 
 
-def crop_to_bandwidth_limit_torch(array: torch.Tensor, limit=2 / 3):
+def crop_to_bandwidth_limit_torch(
+    array: torch.Tensor,
+    limit=2 / 3,
+    qspace_in=True,
+    qspace_out=True,
+    norm="conserve_L2",
+):
     """Crop an array to its bandwidth limit (remove superfluous array entries)."""
-    from .numpy_utils import crop_window_to_flattened_indices
-
     # Check if array is complex or not
     complx = iscomplex(array)
 
     # Get array shape, taking into account final dimension of size 2 if the array
     # is complex
-    gridshape = list(array.size())[-2 - int(complx) :][:2]
+    gridshape = array.shape[-2 - int(complx) :][:2]
 
     # New shape of final dimensions
     newshape = tuple([int(round(gridshape[i] * limit)) for i in range(2)])
 
-    # Indices of values to take
-    ind = [
-        (np.fft.fftfreq(newshape[i], 1 / newshape[i]).astype(np.int) + gridshape[i])
-        % gridshape[i]
-        for i in range(2)
-    ]
-    ind = torch.tensor(
-        crop_window_to_flattened_indices(ind, gridshape).astype("int32"),
-        dtype=torch.long,
-        device=array.device,
+    return fourier_interpolate_2d_torch(
+        array, newshape, norm=norm, qspace_in=qspace_in, qspace_out=qspace_out
     )
-
-    # flatten final two dimensions of array
-    flat_shape = tuple(array.size()[: -2 - int(complx)]) + (int(np.prod(gridshape)),)
-    newshape = tuple(array.size()[: -2 - int(complx)]) + newshape
-
-    if complx:
-        # Do real bit and complex bit seperately
-        real = array[re].view(flat_shape)[..., ind].view(newshape)
-        imag = array[im].view(flat_shape)[..., ind].view(newshape)
-        return torch.stack([real, imag], -1)
-    return array.view(flat_shape)[..., ind].view(newshape)
 
 
 def size_of_bandwidth_limited_array(shape):
@@ -445,22 +477,30 @@ def detect(detector, diffraction_pattern):
 
 
 def fourier_interpolate_2d_torch(
-    ain, shapeout, correct_norm=True, qspace_in=False, qspace_out=False
+    ain, shapeout, norm="conserve_val", qspace_in=False, qspace_out=False
 ):
     """
-    Fourier interpolation of array ain so that to shape shapeout.
+    Fourier interpolation of array ain to shape shapeout.
 
     If shapeout is smaller than ain.shape then Fourier downsampling is
     performed
 
-    Arguments:
-    ain      -- Input numpy array
-    shapeout -- Shape of output array
-    correct_norm -- If True normalization such that values are conserved, if false
-                    normalization such that sum square is conserved
-    qspace_in   -- If True expect a Fourier space input
-    qspace_out  -- If True return a Fourier space output, otherwise return
-                   in real space
+    Parameters
+    ----------
+    ain : (...,Ny,Nx,2) torch.tensor
+        Input array
+    shapeout : (2,) array_like
+        Shape of output array
+    norm : str, optional  {'conserve_val','conserve_norm','conserve_L1'}
+        Normalization of output. If 'conserve_val' then array values are preserved
+        if 'conserve_norm' L2 norm is conserved under interpolation and if
+        'conserve_L1' L1 norm is conserved under interpolation
+    qspace_in : bool, optional
+        If True expect a Fourier space input, otherwise (default) expect a
+        real space input
+    qspace_out : bool, optional
+        If True return a Fourier space output, otherwise (default) return in
+        real space
     """
     dtype = ain.dtype
     inputComplex = iscomplex(ain)
@@ -490,7 +530,7 @@ def fourier_interpolate_2d_torch(
     if inputComplex:
         ain_ = ain
     else:
-        ain_ = to_complex(ain).flatten(-3, -2)
+        ain_ = to_complex(ain)
 
     if not qspace_in:
         ain_ = torch.fft(ain_, signal_ndim=2)
@@ -498,14 +538,20 @@ def fourier_interpolate_2d_torch(
     aout[..., maskout, :] = ain_.flatten(-3, -2)[..., maskin, :]
 
     # Fourier transform result with appropriate normalization
-    aout = aout.reshape(ain.shape[: -2 - int(inputComplex)] + tuple(shapeout) + (2,))
+    if norm == "conserve_val":
+        factor = npiyout * npixout / (npiyin * npixin)
+    elif norm == "conserve_norm":
+        factor = np.sqrt(npiyout * npixout / (npiyin * npixin))
+    else:
+        factor = 1
+
+    # Fourier transform result with appropriate normalization
+    aout = factor * aout.reshape(
+        ain.shape[: -2 - int(inputComplex)] + tuple(shapeout) + (2,)
+    )
 
     if not qspace_out:
         aout = torch.ifft(aout, signal_ndim=2)
-    if correct_norm:
-        aout *= np.prod(shapeout) / np.prod([npiyin, npixin])
-    else:
-        aout *= np.sqrt(np.prod(shapeout) / np.prod([npiyin, npixin]))
 
     # Return correct array data type
     if inputComplex:

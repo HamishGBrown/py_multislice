@@ -54,13 +54,16 @@ def crop_window_to_flattened_indices(indices, shape):
     ).ravel()
 
 
-def crop_to_bandwidth_limit(array, limit=2 / 3):
+def crop_to_bandwidth_limit(array, limit=2 / 3, qspace_in=True, qspace_out=True):
     """
     Crop an array to its bandwidth limit (ie remove superfluous array entries).
 
     assumes that input array is in Fourier space with zeroth Fourier component
     in upper-left corner
     """
+    if not qspace_in:
+        array = np.fft.fft2(array)
+
     # Get array shape
     gridshape = array.shape[-2:]
 
@@ -79,42 +82,75 @@ def crop_to_bandwidth_limit(array, limit=2 / 3):
     flat_shape = array.shape[:-2] + (np.prod(array.shape[-2:]),)
     newshape = array.shape[:-2] + newshape
 
-    return array.reshape(flat_shape)[..., ind].reshape(newshape)
+    array = array.reshape(flat_shape)[..., ind].reshape(newshape)
 
-
-def bandwidth_limit_array(arrayin, limit=2 / 3):
-    """Band-width limit an array to fraction of its maximum given by limit."""
-    # Case where band-width limiting has been turned off
-    if limit is None:
-        return arrayin
-
-    array = copy.deepcopy(arrayin)
-    if isinstance(array, np.ndarray):
-        pixelsize = array.shape[:2]
-        array[
-            (
-                np.square(np.fft.fftfreq(pixelsize[0]))[:, np.newaxis]
-                + np.square(np.fft.fftfreq(pixelsize[1]))[np.newaxis, :]
-            )
-            * (2 / limit) ** 2
-            >= 1
-        ] = 0
+    if qspace_out:
+        return array
     else:
-        pixelsize = array.size()[:2]
-        array[
-            (
-                torch.from_numpy(np.fft.fftfreq(pixelsize[0]) ** 2).view(
-                    pixelsize[0], 1
-                )
-                + torch.from_numpy(np.fft.fftfreq(pixelsize[1]) ** 2).view(
-                    1, pixelsize[1]
-                )
-            )
-            * (2 / limit) ** 2
-            >= 1
-        ] = 0
+        return np.fft.ifft2(array)
 
-    return array
+
+def bandwidth_limit_array(arrayin, limit=2 / 3, qspace_in=True, qspace_out=True):
+    """
+    Band-width limit an array in Fourier space.
+
+    Band width limiting of the propagator and transmission functions is necessary
+    in multislice to prevent "aliasing", wrapping round of high-angle scattering
+    due the periodic boundary conditions implicit in the multislice algorithm.
+    See sec. 6.8 of "Kirkland's Advanced Computing in Electron Microscopy" for
+    more detail.
+
+    Parameters
+    ----------
+    arrayin : array_like (...,Ny,Nx)
+        Array to be bandwidth limited.
+    limit : float
+        Bandwidth limit as a fraction of the maximum reciprocal space frequency
+        of the array.
+    qspace_in : bool, optional
+        Set to True if the input array is in reciprocal space (default),
+        False if not
+    qspace_out : bool, optional
+        Set to True for reciprocal space output (default), False for real-space
+        output.
+    """
+    # Transform array to real space if necessary
+    if qspace_in:
+        array = copy.deepcopy(arrayin)
+    else:
+        array = np.fft.fft2(arrayin)
+
+    # Case where band-width limiting has been turned off
+    if limit is not None:
+        if isinstance(array, np.ndarray):
+            pixelsize = array.shape[:2]
+            array[
+                (
+                    np.square(np.fft.fftfreq(pixelsize[0]))[:, np.newaxis]
+                    + np.square(np.fft.fftfreq(pixelsize[1]))[np.newaxis, :]
+                )
+                * (2 / limit) ** 2
+                >= 1
+            ] = 0
+        else:
+            pixelsize = array.size()[:2]
+            array[
+                (
+                    torch.from_numpy(np.fft.fftfreq(pixelsize[0]) ** 2).view(
+                        pixelsize[0], 1
+                    )
+                    + torch.from_numpy(np.fft.fftfreq(pixelsize[1]) ** 2).view(
+                        1, pixelsize[1]
+                    )
+                )
+                * (2 / limit) ** 2
+                >= 1
+            ] = 0
+
+    if qspace_out:
+        return array
+    else:
+        return np.fft.ifft2(array)
 
 
 def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
@@ -230,23 +266,26 @@ def colorize(z, saturation=0.8, minlightness=0.0, maxlightness=0.5):
     return c
 
 
-def fourier_interpolate_2d(ain, shapeout, norm="conserve_val"):
+def fourier_interpolate_2d(
+    ain, shapeout, norm="conserve_val", qspace_in=False, qspace_out=False
+):
     """
     Perfom fourier interpolation on array ain so that its shape matches shapeout.
 
     Arguments
     ---------
-    ain      -- array_like
+    ain : (...,Ny,Nx) array_like
         Input numpy array
-    shapeout -- int (2,) , array_like
-        Shape of output array
-
-    Keyword arguments
-    -----------------
-    norm     -- str
+    shapeout : int (2,) , array_like
+        Desired shape of output array
+    norm : str, optional  {'conserve_val','conserve_norm','conserve_L1'}
         Normalization of output. If 'conserve_val' then array values are preserved
         if 'conserve_norm' L2 norm is conserved under interpolation and if
         'conserve_L1' L1 norm is conserved under interpolation
+    qspace_in : bool, optional
+        Set to True if the input array is in reciprocal space, False if not (default)
+    qspace_out : bool, optional
+        Set to True for reciprocal space output, False for real-space output (default).
     """
     # Import required FFT functions
     from numpy.fft import fft2
@@ -261,8 +300,13 @@ def fourier_interpolate_2d(ain, shapeout, norm="conserve_val"):
     # Get Fourier interpolation masks
     maskin, maskout = Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)
 
+    if qspace_in:
+        a = np.asarray(ain, dtype=np.complex)
+    else:
+        a = fft2(np.asarray(ain, dtype=np.complex))
+
     # Now transfer over Fourier coefficients from input to output array
-    aout[..., maskout] = fft2(np.asarray(ain, dtype=np.complex))[..., maskin]
+    aout[..., maskout] = a[..., maskin]
 
     # Fourier transform result with appropriate normalization
     if norm == "conserve_val":
@@ -355,12 +399,34 @@ def fourier_shift(arrayin, shift, qspacein=False, qspaceout=False, pixel_units=T
         return array
 
 
+def add_noise(arrayin, Total_counts):
+    """
+    Add Poisson counting noise to simulated data.
+
+    Parameters
+    ----------
+    arrayin : array_like
+        Array giving the fraction of Total_counts that is expected at each pixel
+        in the array.
+    Total_counts : float
+        Total number of electron counts expected over the array.
+    """
+    return np.random.poisson(arrayin * Total_counts)
+
+
 def crop(arrayin, shapeout):
     """
     Crop the last two dimensions of arrayin to grid size shapeout.
 
     For entries of shapeout which are larger than the shape of the input array,
     perform zero-padding.
+
+    Parameters
+    ----------
+    arrayin : (...,Ny,Nx) array_like
+        Array to be cropped or zero-padded.
+    shapeout : (2,) array_like
+        Desired output shape of the final two dimensions of arrayin
     """
     # Number of dimensions in input array
     ndim = arrayin.ndim
@@ -395,11 +461,26 @@ def crop(arrayin, shapeout):
 
 
 def Gaussian(sigma, gridshape, rsize, theta=0):
-    """
+    r"""
     Calculate a normalized 2D Gaussian function.
 
-    Functional form 1/sqrt(2*pi)/sigma*exp(-(x**2+y**2)/2/sigma**2),
-    grid[0] contains y gridpoints and grid[1] contains x gridpoints.
+    Notes
+    -----
+    Functional form
+    .. math:: 1 / \sqrt { 2 \pi \sigma }  e^{ - ( x^2 + y^2 ) / 2 / \sigma^2 }
+
+    Parameters
+    ----------
+    sigma : float or (2,) array_like
+        The standard deviation of the Gaussian function, if an array is provided
+        then the first two entries will give the y and x standard deviation of
+        the Gaussian.
+    gridshape : (2,) array_like
+        Number of pixels in the grid.
+    rsize : (2,) array_like
+        Size of the grid in units of length
+    theta : float, optional
+        Angle of the two dimensional Gaussian function.
     """
     if isinstance(sigma, (list, tuple, np.ndarray)):
         sigmay, sigmax = sigma[:2]

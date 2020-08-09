@@ -1,4 +1,5 @@
-"""Structure module.
+"""
+The structures module.
 
 A collection of functions and classes for reading in and manipulating structures
 and creating potential arrays for multislice simulation.
@@ -582,7 +583,12 @@ class structure:
     def output_xyz(
         self, fnam, atomic_coordinates="cartesian", temperature_factor_units="sqrturms"
     ):
-        """Output an .xyz structure file."""
+        """
+        Output an .xyz structure file.
+
+        This is the input format used by Kirkland's EM codes and the prismatic
+        software.
+        """
         f = open(splitext(fnam)[0] + ".xyz", "w")
         f.write(self.Title + "\n {0:.4f} {1:.4f} {2:.4f}\n".format(*self.unitcell))
 
@@ -1179,7 +1185,7 @@ class structure:
 
         Parameters
         ----------
-        fraction : (nax,2) or (2,) array_like
+        fraction : (nax,2) array_like
             Describes the size of the new simulation object as a fraction of
             old simulation object dimensions.
         axis : int or (nax,) array_like
@@ -1308,11 +1314,21 @@ class layered_structure_transmission_function:
         self.nT = nT
         self.gridshape = gridshape
         self.tilings = tilings
-        self.subslices = subslices
         self.eV = eV
         self.specimen_tilt = specimen_tilt
+        self.unitcell = np.zeros(3)
+        self.unitcell[:2] = structures[0].unitcell[:2]  # * np.asarray(tilings[0])
+        self.unitcell[2] = np.sum(
+            [struc.unitcell[2] * nslice for struc, nslice in zip(structures, nslices)]
+        )
         args = [gridshape, eV]
 
+        # Like every Melbourne restaurant, within the slab structure we do things
+        # a little differently: since the number of subslices can be different
+        # for each structure we have to store the transmission functions for
+        #  each structure in a list so the indexing of self.Ts is
+        # self.Ts[istructure][iT][isubslice], the __get_item__ method
+        # makes indexing this synthetic object consistent with standard practice
         for structure, subslices_, tiling in zip(structures, subslices, tilings):
             self.Ts.append(
                 torch.stack(
@@ -1345,10 +1361,21 @@ class layered_structure_transmission_function:
             )
         )
         self.N = len(self.slicemap)
+        self.subslices = []
+        T = 0
+        # Calculate the fractional depth of every subslice in the new synthetic
+        # structure.
+        for subslices_, slices, struct in zip(subslices, nslices, structures):
+            for i in range(slices):
+                self.subslices += (
+                    (np.asarray(subslices_) * struct.unitcell[2] + T) / self.unitcell[2]
+                ).tolist()
+                T = T + struct.unitcell[2]
+
         # Mimics the shape property of a numpy array
         self.shape = (self.nT, self.N, *self.gridshape, 2)
         self.Propagator = layered_structure_propagators(
-            self, propkwargs={"tilt": specimen_tilt}
+            self, subslices, propkwargs={"tilt": specimen_tilt}
         )
 
     def dim(self):
@@ -1364,6 +1391,9 @@ class layered_structure_transmission_function:
         """
         it, islice = ind[:2]
 
+        # First get the proper slice and subslice, self.Ts is a list object
+        # with each entry containing the transmission functions for that
+        # structure
         if isinstance(islice, int) or np.issubdtype(
             np.asarray(islice).dtype, np.integer
         ):
@@ -1393,7 +1423,7 @@ class layered_structure_propagators:
     Complements layered_transmission_function
     """
 
-    def __init__(self, layered_T, propkwargs={}):
+    def __init__(self, layered_T, subslices, propkwargs={}):
         """
         Generate a layered structure multislice propagator function object.
 
@@ -1421,18 +1451,19 @@ class layered_structure_propagators:
         """
         from .py_multislice import make_propagators
 
-        self.rsize = copy.deepcopy(layered_T.structures[0].unitcell)
-        self.rsize[:2] *= np.asarray(layered_T.tilings[0])
-
-        self.Ps = [
-            make_propagators(
-                layered_T.gridshape, self.rsize, layered_T.eV, subslices, **propkwargs
-            )
-            for subslices in layered_T.subslices
+        self.rsizes = [
+            copy.deepcopy(struc.unitcell * np.asarray(t + [1]))
+            for struc, t in zip(layered_T.structures, layered_T.tilings)
         ]
 
-        self.Ps = list(itertools.chain(*self.Ps))
-        self.Ps = [cx_from_numpy(P, layered_T.dtype, layered_T.device) for P in self.Ps]
+        self.Ps = [
+            cx_from_numpy(
+                make_propagators(layered_T.gridshape, r, layered_T.eV, s, **propkwargs),
+                layered_T.dtype,
+                layered_T.device,
+            )
+            for s, r in zip(subslices, self.rsizes)
+        ]
         self.slicemap = layered_T.slicemap
         self.subslicemap = layered_T.subslicemap
         # Mimics the shape property of a numpy array
@@ -1453,9 +1484,11 @@ class layered_structure_propagators:
         if isinstance(islice, int) or np.issubdtype(
             np.asarray(islice).dtype, np.integer
         ):
-            return self.Ps[self.slicemap[islice]]
+            return self.Ps[self.slicemap[islice]][self.subslicemap[islice]]
         elif isinstance(islice, slice):
-            islice_ = np.arange(*islice.indices(self.N))
-            return torch.stack([self.Ps[self.slicemap[j]] for j in islice_])
+            islice_ = np.arange(*islice.indices(len(self.slicemap)))
+            return torch.stack(
+                [self.Ps[self.slicemap[j]][self.subslicemap[j]] for j in islice_]
+            )
         else:
             raise TypeError("Invalid argument type.")

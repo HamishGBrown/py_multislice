@@ -17,7 +17,8 @@ setup(
         "numpy >= 1.17",
         "Pillow >= 6.0",
         "torch >= 1.2",
-        "tqdm >= 4.0",
+        "tqdm >= 4.48",
+        "ase",
         "pypng",
     ],
 )
