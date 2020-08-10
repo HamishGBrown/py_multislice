@@ -945,7 +945,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         tiling = [1, 1]
         # cell.unitcell[:2] = [15,15]
 
-        gridshape = [128, 128]
+        gridshape = [128, 64]
         eV = 3e5
         app = 20
         thicknesses = [20]
@@ -1073,13 +1073,13 @@ class Test_py_multislice_Methods(unittest.TestCase):
         new = torch.zeros(*gridout, 2, dtype=S.dtype, device=probe.device)
         for wind in windows:
             new[
-                wind[1][0] : wind[1][0] + wind[1][1],
                 wind[0][0] : wind[0][0] + wind[0][1],
+                wind[1][0] : wind[1][0] + wind[1][1],
                 :,
             ] = probe[
                 0,
-                wind[1][0] : wind[1][0] + wind[1][1],
                 wind[0][0] : wind[0][0] + wind[0][1],
+                wind[1][0] : wind[1][0] + wind[1][1],
                 :,
             ]
         probe = new
@@ -1088,11 +1088,11 @@ class Test_py_multislice_Methods(unittest.TestCase):
             np.squeeze(np.abs(pyms.utils.cx_to_numpy(probe)) ** 2)
         )
 
-        # fig, ax = plt.subplots(ncols=3)
-        # ax[0].imshow(ms_CBED)
-        # ax[1].imshow(datacube[0, 0])
-        # ax[2].imshow(S_CBED_amp[0])
-        # plt.show(block=True)
+        fig, ax = plt.subplots(ncols=3)
+        ax[0].imshow(ms_CBED)
+        ax[1].imshow(datacube[0, 0])
+        ax[2].imshow(S_CBED_amp[0])
+        plt.show(block=True)
 
         # The test is passed if the result from multislice and S-matrix is
         # within numerical error and the S matrix premixed routine is also
@@ -1630,3 +1630,112 @@ if __name__ == "__main__":
     # run all test functions
     unittest.main()
     clean_temp_structure()
+    import sys
+
+    sys.exit()
+
+    # A 5 x 5 x 5 Angstrom cell with an oxygen
+    cell = [5, 5, 0.0001]
+    atoms = [[0.0, 0.0, 0.0, 8]]
+    crystal = pyms.structure(cell, atoms, dwf=[0.0])
+    gridshape = [64, 64]
+    eV = 3e5
+    thicknesses = cell[2]
+    subslices = [1.0]
+    app = None
+    # Target the oxygen K edge
+    Ztarget = 8
+
+    # principal and orbital angular momentum quantum numbers for bound state
+    n = 1
+    ell = 0
+    lprime = 0
+    from pyms import orbital, get_q_numbers_for_transition, transition_potential
+
+    qnumbers = get_q_numbers_for_transition(ell, order=1)[1]
+    bound_configuration = "1s2 2s2 2p4"
+    excited_configuration = "1s1 2s2 2p4"
+    epsilon = 1
+
+    bound_orbital = orbital(Ztarget, bound_configuration, n, ell, lprime)
+    excited_orbital = orbital(Ztarget, excited_configuration, 0, qnumbers[0], 10)
+
+    # Calculate transition potential for this escited state
+    Hn0 = transition_potential(
+        bound_orbital, excited_orbital, gridshape, cell, qnumbers[2], qnumbers[1], eV
+    ).reshape((1, *gridshape))
+
+    P, T = pyms.multislice_precursor(
+        crystal, gridshape, eV, subslices, nT=1, showProgress=False
+    )
+
+    EFTEM_images = pyms.EFTEM(
+        crystal,
+        gridshape,
+        eV,
+        app,
+        thicknesses,
+        Ztarget,
+        n,
+        ell,
+        epsilon,
+        df=[0],
+        nT=1,
+        Hn0=Hn0,
+        subslices=subslices,
+        nfph=1,
+        P=P,
+        T=T,
+        showProgress=False,
+    )
+
+    # By reciprocity, a point detector should give identical results to
+    # EFTEM so this is how we test the STEM routine as well.
+    det = np.zeros((1, *gridshape))
+    det[0, 0] = 1
+    STEM_images = pyms.STEM_EELS_multislice(
+        crystal,
+        gridshape,
+        eV,
+        app,
+        det,
+        thicknesses,
+        Ztarget,
+        n,
+        ell,
+        epsilon,
+        df=0,
+        nT=1,
+        P=P,
+        T=T,
+        showProgress=False,
+        Hn0=Hn0,
+    )
+
+    # The image of the transition is "lensed" by the atom that it is passed
+    # through so we must account for this by multiplying the Hn0 by the transmission
+    # function
+    Hn0 *= pyms.utils.cx_to_numpy(T[0, 0]) / np.sqrt(np.prod(gridshape))
+
+    result = np.fft.fftshift(np.squeeze(EFTEM_images))
+    reference = np.fft.fftshift(
+        np.abs(
+            pyms.utils.fourier_interpolate_2d(
+                pyms.utils.bandwidth_limit_array(
+                    Hn0[0], qspace_in=False, qspace_out=False
+                ),
+                result.shape,
+                "conserve_norm",
+            )
+        )
+        ** 2
+    )
+
+    # import matplotlib.pyplot as plt
+    # fig,ax = plt.subplots(nrows=2)
+    # ax[0].imshow(reference)
+    # ax[1].imshow(result)
+    # plt.show(block=True)
+
+    passEFTEM = np.sum(np.abs(result - reference) ** 2) < 1e-7
+    # self.assertTrue(passEFTEM)

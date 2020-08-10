@@ -8,9 +8,10 @@ allows users to set up simulations faster and easier.
 """
 import numpy as np
 import torch
-import tqdm
+from tqdm import tqdm
 from .py_multislice import (
     make_propagators,
+    tqdm_handler,
     scattering_matrix,
     generate_STEM_raster,
     make_detector,
@@ -201,6 +202,8 @@ def STEM_PRISM(
     T : (n,Y,X) array_like
         Precomputed transmission functions
     """
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -322,10 +325,8 @@ def STEM_PRISM(
 
     PandTnotprovided = (P is None) and (T is None)
 
-    for i in tqdm.tqdm(
-        range(nfph_),
-        desc="Frozen phonon iteration",
-        disable=not showProgress or nfph_ < 2,
+    for i in tqdm(
+        range(nfph_), desc="Frozen phonon iteration", disable=tdisable or nfph_ < 2
     ):
         # Option to provide a precomputed scattering matrix (S), however if
         # none is given then we make our own
@@ -404,7 +405,7 @@ def STEM_PRISM(
                     scan_posn=scan_posn,
                     device=S.device,
                     tiling=S.tiling,
-                    showProgress=showProgress,
+                    showProgress=tdisable,
                     STEM_image=STEM_images[idf],
                 )
             if FourD_STEM:
@@ -644,6 +645,8 @@ def STEM_multislice(
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Make the STEM probe
     real_dim = structure.unitcell[:2] * np.asarray(tiling)
     probe = focused_probe(
@@ -727,9 +730,7 @@ def STEM_multislice(
     if PACBED:
         PACBED_pattern = np.zeros((len(nslices), *gridshape))
 
-    for i in tqdm.tqdm(
-        range(nfph), desc="Frozen phonon iteration", disable=not showProgress
-    ):
+    for i in tqdm(range(nfph), desc="Frozen phonon iteration", disable=tdisable):
 
         # Make propagators and transmission functions for multslice
         if P is None and T is None:
@@ -742,7 +743,7 @@ def STEM_multislice(
                 dtype=dtype,
                 nT=nT,
                 device=device,
-                showProgress=showProgress,
+                showProgress=False,
                 displacements=displacements,
                 specimen_tilt=specimen_tilt,
                 tilt_units=tilt_units,
@@ -879,6 +880,8 @@ def multislice_precursor(
     T : torch.Tensor (nT,len(subslices),Y,X,2)
         The specimen transmission functions for multislice
     """
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
     rsize[:3] = sample.unitcell[:3]
@@ -908,9 +911,7 @@ def multislice_precursor(
 
     T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
 
-    for i in tqdm.tqdm(
-        range(nT), desc="Making projected potentials", disable=not showProgress
-    ):
+    for i in tqdm(range(nT), desc="Making projected potentials", disable=tdisable):
         T[i] = sample.make_transmission_functions(
             gridshape,
             eV,
@@ -1235,7 +1236,7 @@ def CBED(
         )
 
     # Iteration over frozen phonon configurations
-    for _ in tqdm.tqdm(
+    for _ in tqdm(
         range(nfph), desc="Frozen phonon iteration", disable=not showProgress
     ):
         # Make probe
@@ -1411,7 +1412,7 @@ def HRTEM(
     output = np.zeros((len(defocii), len(nslices), *bw_limit_size))
 
     # Iteration over frozen phonon configurations
-    for _ in tqdm.tqdm(
+    for _ in tqdm(
         range(nfph), desc="Frozen phonon iteration", disable=not showProgress
     ):
         probe = plane_wave_illumination(
@@ -1601,7 +1602,7 @@ def EFTEM(
     result = np.zeros(ctfs.shape[:-1], dtype=torch_dtype_to_numpy(dtype))
 
     # Perform multislice simulation and return the tiled out result
-    for i in tqdm.tqdm(
+    for i in tqdm(
         range(nfph),
         desc="Frozen phonon iterations:",
         disable=not showProgress,
@@ -1831,7 +1832,7 @@ def STEM_EELS_PRISM(
     EELS_image = torch.zeros(nprobe_posn, dtype=S1.dtype, device=device)
 
     total_slices = nslices * len(subslices)
-    for islice in tqdm.tqdm(range(total_slices), desc="Slice"):
+    for islice in tqdm(range(total_slices), desc="Slice"):
 
         # Propagate scattering matrices to this slice
         if islice > 0:
@@ -1864,7 +1865,7 @@ def STEM_EELS_PRISM(
         ]
 
         # Iterate over atoms in this slice
-        for atom in tqdm.tqdm(atomsinslice, "Transitions in slice"):
+        for atom in tqdm(atomsinslice, "Transitions in slice"):
 
             windex = torch.from_numpy(
                 window_indices(atom, Hn0_crop, S1.stored_gridshape)

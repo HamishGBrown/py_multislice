@@ -30,6 +30,18 @@ from .utils.torch_utils import (
 )
 
 
+def tqdm_handler(showProgress):
+    """Handle showProgress boolean or string input for the tqdm progress bar."""
+    if isinstance(showProgress, str):
+        if showProgress == "notebook":
+            from tqdm import tqdm_notebook as tqdm
+        tdisable = False
+    elif isinstance(showProgress, bool):
+        tdisable = not showProgress
+        from tqdm import tqdm
+    return tdisable, tqdm
+
+
 def thickness_to_slices(
     thicknesses, slice_thickness, subslicing=False, subslices=[1.0]
 ):
@@ -859,6 +871,8 @@ def STEM(
     """
     from .utils.torch_utils import detect
 
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Get number of thicknesses in the series
     nthick = len(nslices)
 
@@ -943,7 +957,7 @@ def STEM(
 
     for i in tqdm(
         range(int(np.ceil(nscantot / batch_size))),
-        disable=not showProgress,
+        disable=tdisable,
         desc="Probe positions",
     ):
 
@@ -1576,11 +1590,11 @@ class scattering_matrix:
                     )
 
                     for wind in windows:
-                        outview = out.narrow(-3, wind[1][0], wind[1][1]).narrow(
-                            -2, wind[0][0], wind[0][1]
+                        outview = out.narrow(-3, wind[0][0], wind[0][1]).narrow(
+                            -2, wind[1][0], wind[1][1]
                         )
-                        sview = Smat.narrow(-3, wind[1][0], wind[1][1]).narrow(
-                            -2, wind[0][0], wind[0][1]
+                        sview = Smat.narrow(-3, wind[0][0], wind[0][1]).narrow(
+                            -2, wind[1][0], wind[1][1]
                         )
                         p = probe[self.beams[0], self.beams[1]].view(
                             self.nbeams, 1, 1, 2
@@ -1621,8 +1635,10 @@ class scattering_matrix:
         sequentially, with the relevant part of the scattering matrix streamed
         from CPU to GPU memory.
 
-        Keyword arguement
+        Parameters
         ----------
+        self : scattering_matrix
+            The scattering matrix object.
         detectors : (Ndet, Y, X) array_like, optional
             Diffraction plane detectors to perform conventional STEM imaging. If
             None is passed then no conventional STEM images will be returned.

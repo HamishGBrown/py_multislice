@@ -13,7 +13,7 @@ Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-at
 
 1. Clone or branch this repo into a directory on your computer
 
-2. In the command-line (Linux or Mac) or your Python interpreter (Windows) run
+2. In the command-line (Linux or Mac) or your Python interpreter (Windows) in the root directory of your local copy of the repo run
 
     $ pip install -e .
 
@@ -25,14 +25,14 @@ Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-at
 
 # Documentation and demos
 
-Documentation can be found [here](html/pyms/index.html), for demonstrations and walk throughs on common simualtion types see the Jupyter Notebooks in the [Demos](Demos/) folder.
+Documentation can be found [here](http://htmlpreview.github.com/?https://github.com/HamishGBrown/py_multislice/html/pyms/index.html), for demonstrations and walk throughs on common simulation types see the Jupyter Notebooks in the [Demos](Demos/) folder.
 
 # Bug-fixes and contributions
 
-Message me, leave a bug report and fork the repo all contributions are welcome.
+Message me, leave a bug report and fork the repo. All contributions are welcome.
 
 # Acknowledgements
 
-A big thanks to [Philipp Pelz](@PhilippPelz) for teaching me the ins and outs of pytorch and numerous other discussions on computing and electron microscopy. Credit to [Colin Ophus](@cophus) for many discussions and much inspiration re the PRISM algorithm (of which he is the inventor). Thanks to my boss Jim Ciston for tolerating this side project! Thanks to Adrian D'Alfonso, Scott Findlay and Les Allen for originally teaching me the art of multislice and ionization.
+A big thanks to [Philipp Pelz](https://github.com/PhilippPelz) for teaching me the ins and outs of pytorch and numerous other discussions on computing and electron microscopy. Credit to [Colin Ophus](https://github.com/cophus) for many discussions and much inspiration re the PRISM algorithm (of which he is the inventor). Thanks to my boss Jim Ciston for tolerating this side project! Thanks to Adrian D'Alfonso, Scott Findlay and Les Allen (my PhD advisor) for originally teaching me the art of multislice and ionization.
 
 

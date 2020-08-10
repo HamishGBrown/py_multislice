@@ -59,6 +59,18 @@ from .utils.torch_utils import (
 )
 
 
+def tqdm_handler(showProgress):
+    &#34;&#34;&#34;Handle showProgress boolean or string input for the tqdm progress bar.&#34;&#34;&#34;
+    if isinstance(showProgress, str):
+        if showProgress == &#34;notebook&#34;:
+            from tqdm import tqdm_notebook as tqdm
+        tdisable = False
+    elif isinstance(showProgress, bool):
+        tdisable = not showProgress
+        from tqdm import tqdm
+    return tdisable, tqdm
+
+
 def thickness_to_slices(
     thicknesses, slice_thickness, subslicing=False, subslices=[1.0]
 ):
@@ -888,6 +900,8 @@ def STEM(
     &#34;&#34;&#34;
     from .utils.torch_utils import detect
 
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Get number of thicknesses in the series
     nthick = len(nslices)
 
@@ -972,7 +986,7 @@ def STEM(
 
     for i in tqdm(
         range(int(np.ceil(nscantot / batch_size))),
-        disable=not showProgress,
+        disable=tdisable,
         desc=&#34;Probe positions&#34;,
     ):
 
@@ -1605,11 +1619,11 @@ class scattering_matrix:
                     )
 
                     for wind in windows:
-                        outview = out.narrow(-3, wind[1][0], wind[1][1]).narrow(
-                            -2, wind[0][0], wind[0][1]
+                        outview = out.narrow(-3, wind[0][0], wind[0][1]).narrow(
+                            -2, wind[1][0], wind[1][1]
                         )
-                        sview = Smat.narrow(-3, wind[1][0], wind[1][1]).narrow(
-                            -2, wind[0][0], wind[0][1]
+                        sview = Smat.narrow(-3, wind[0][0], wind[0][1]).narrow(
+                            -2, wind[1][0], wind[1][1]
                         )
                         p = probe[self.beams[0], self.beams[1]].view(
                             self.nbeams, 1, 1, 2
@@ -1650,8 +1664,10 @@ class scattering_matrix:
         sequentially, with the relevant part of the scattering matrix streamed
         from CPU to GPU memory.
 
-        Keyword arguement
+        Parameters
         ----------
+        self : scattering_matrix
+            The scattering matrix object.
         detectors : (Ndet, Y, X) array_like, optional
             Diffraction plane detectors to perform conventional STEM imaging. If
             None is passed then no conventional STEM images will be returned.
@@ -2075,6 +2091,8 @@ frozen phonon iterations.</p></div>
     &#34;&#34;&#34;
     from .utils.torch_utils import detect
 
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Get number of thicknesses in the series
     nthick = len(nslices)
 
@@ -2159,7 +2177,7 @@ frozen phonon iterations.</p></div>
 
     for i in tqdm(
         range(int(np.ceil(nscantot / batch_size))),
-        disable=not showProgress,
+        disable=tdisable,
         desc=&#34;Probe positions&#34;,
     ):
 
@@ -3242,6 +3260,27 @@ to the y and x centre of mass respectively.</p></div>
         return np.ceil(t / slice_thickness).astype(np.int)</code></pre>
 </details>
 </dd>
+<dt id="pyms.py_multislice.tqdm_handler"><code class="name flex">
+<span>def <span class="ident">tqdm_handler</span></span>(<span>showProgress)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Handle showProgress boolean or string input for the tqdm progress bar.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def tqdm_handler(showProgress):
+    &#34;&#34;&#34;Handle showProgress boolean or string input for the tqdm progress bar.&#34;&#34;&#34;
+    if isinstance(showProgress, str):
+        if showProgress == &#34;notebook&#34;:
+            from tqdm import tqdm_notebook as tqdm
+        tdisable = False
+    elif isinstance(showProgress, bool):
+        tdisable = not showProgress
+        from tqdm import tqdm
+    return tdisable, tqdm</code></pre>
+</details>
+</dd>
 <dt id="pyms.py_multislice.unit_cell_shift"><code class="name flex">
 <span>def <span class="ident">unit_cell_shift</span></span>(<span>array, axis, shift, tiles)</span>
 </code></dt>
@@ -3988,11 +4027,11 @@ computational accuracy.</p></div>
                     )
 
                     for wind in windows:
-                        outview = out.narrow(-3, wind[1][0], wind[1][1]).narrow(
-                            -2, wind[0][0], wind[0][1]
+                        outview = out.narrow(-3, wind[0][0], wind[0][1]).narrow(
+                            -2, wind[1][0], wind[1][1]
                         )
-                        sview = Smat.narrow(-3, wind[1][0], wind[1][1]).narrow(
-                            -2, wind[0][0], wind[0][1]
+                        sview = Smat.narrow(-3, wind[0][0], wind[0][1]).narrow(
+                            -2, wind[1][0], wind[1][1]
                         )
                         p = probe[self.beams[0], self.beams[1]].view(
                             self.nbeams, 1, 1, 2
@@ -4033,8 +4072,10 @@ computational accuracy.</p></div>
         sequentially, with the relevant part of the scattering matrix streamed
         from CPU to GPU memory.
 
-        Keyword arguement
+        Parameters
         ----------
+        self : scattering_matrix
+            The scattering matrix object.
         detectors : (Ndet, Y, X) array_like, optional
             Diffraction plane detectors to perform conventional STEM imaging. If
             None is passed then no conventional STEM images will be returned.
@@ -4518,51 +4559,53 @@ modest graphics card memory. The STEM raster is segmented into spatially
 close clusters and the probe positions in these clusters are processed
 sequentially, with the relevant part of the scattering matrix streamed
 from CPU to GPU memory.</p>
-<h2 id="keyword-arguement">Keyword Arguement</h2>
-<p>detectors : (Ndet, Y, X) array_like, optional
-Diffraction plane detectors to perform conventional STEM imaging. If
-None is passed then no conventional STEM images will be returned.
-fourD_STEM : bool or array_like, optional
-Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>self</code></strong> :&ensp;<code><a title="pyms.py_multislice.scattering_matrix" href="#pyms.py_multislice.scattering_matrix">scattering_matrix</a></code></dt>
+<dd>The scattering matrix object.</dd>
+<dt><strong><code>detectors</code></strong> :&ensp;<code>(Ndet, Y, X) array_like</code>, optional</dt>
+<dd>Diffraction plane detectors to perform conventional STEM imaging. If
+None is passed then no conventional STEM images will be returned.</dd>
+<dt><strong><code>fourD_STEM</code></strong> :&ensp;<code>bool</code> or <code>array_like</code>, optional</dt>
+<dd>Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
 space a tuple containing pixel size and diffraction space extent of the
 datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
 diffraction patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
-Angstroms.
-datacube :
-(Ny, Nx, Y, X) array_like, optional
-datacube for 4D-STEM output, if None is passed (default) this will be
+Angstroms.</dd>
+<dt><strong><code>datacube</code></strong> :&ensp;<code> (Ny, Nx, Y, X) array_like</code>, optional</dt>
+<dd>datacube for 4D-STEM output, if None is passed (default) this will be
 initialized in the function. If a datacube is passed then the result
 will be added by the STEM routine (useful for multiple frozen phonon
-iterations)
-STEM_image : (Ndet,Ny,Nx) array_like, optional
-Array that will contain the conventional STEM images, if not passed
+iterations)</dd>
+<dt><strong><code>STEM_image</code></strong> :&ensp;<code>(Ndet,Ny,Nx) array_like</code>, optional</dt>
+<dd>Array that will contain the conventional STEM images, if not passed
 will be initialized within the function. If it is passed then the result
 will be accumulated within the function, which is useful for multiple
-frozen phonon iterations.
-nstreams : int, optional
-Number of streams (seperate transfers from CPU to GPU memory). If
+frozen phonon iterations.</dd>
+<dt><strong><code>nstreams</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of streams (seperate transfers from CPU to GPU memory). If
 None this will just be set to the product of the PRISM interpolation
-factor
-df : float, optional
-Defocus in Angstrom
-aberrations : list, optional
-A list containing a set of the class aberration, pass an empty list for
-an unaberrated contrast transfer function.
-ROI : (4,) array_like
-Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
+factor</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>Defocus in Angstrom</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list containing a set of the class aberration, pass an empty list for
+an unaberrated contrast transfer function.</dd>
+<dt><strong><code>ROI</code></strong> :&ensp;<code>(4,) array_like</code></dt>
+<dd>Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
 where [x0,y0] and [x1,y1] are the bottom left and top right coordinates
 of the region of interest (ROI) expressed as a fraction of the total
-grid (or unit cell).
-device : torch.device, optional
-torch.device object which will determine which device (CPU or GPU) the
-calculations will run on.
-scan_posn :
-(&hellip;,2) array_like, optional
-Array containing the STEM scan positions in fractional coordinates.
+grid (or unit cell).</dd>
+<dt><strong><code>device</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on.</dd>
+<dt><strong><code>scan_posn</code></strong> :&ensp;<code> (&hellip;,2) array_like</code>, optional</dt>
+<dd>Array containing the STEM scan positions in fractional coordinates.
 If provided scan_posn.shape[:-1] will give the shape of the STEM
-image.
-showProgress : bool, optional
-Pass showProgress=False to disable progress bar.</p></div>
+image.</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>Pass showProgress=False to disable progress bar.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4590,8 +4633,10 @@ Pass showProgress=False to disable progress bar.</p></div>
     sequentially, with the relevant part of the scattering matrix streamed
     from CPU to GPU memory.
 
-    Keyword arguement
+    Parameters
     ----------
+    self : scattering_matrix
+        The scattering matrix object.
     detectors : (Ndet, Y, X) array_like, optional
         Diffraction plane detectors to perform conventional STEM imaging. If
         None is passed then no conventional STEM images will be returned.
@@ -4836,6 +4881,7 @@ Pass showProgress=False to disable progress bar.</p></div>
 <li><code><a title="pyms.py_multislice.phase_from_com" href="#pyms.py_multislice.phase_from_com">phase_from_com</a></code></li>
 <li><code><a title="pyms.py_multislice.second_moment" href="#pyms.py_multislice.second_moment">second_moment</a></code></li>
 <li><code><a title="pyms.py_multislice.thickness_to_slices" href="#pyms.py_multislice.thickness_to_slices">thickness_to_slices</a></code></li>
+<li><code><a title="pyms.py_multislice.tqdm_handler" href="#pyms.py_multislice.tqdm_handler">tqdm_handler</a></code></li>
 <li><code><a title="pyms.py_multislice.unit_cell_shift" href="#pyms.py_multislice.unit_cell_shift">unit_cell_shift</a></code></li>
 <li><code><a title="pyms.py_multislice.workout_4DSTEM_datacube_DP_size" href="#pyms.py_multislice.workout_4DSTEM_datacube_DP_size">workout_4DSTEM_datacube_DP_size</a></code></li>
 </ul>
