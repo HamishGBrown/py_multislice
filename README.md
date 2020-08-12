@@ -29,7 +29,7 @@ Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-at
 
 # Documentation and demos
 
-Documentation can be found [here](http://htmlpreview.github.com/?https://github.com/HamishGBrown/py_multislice/html/pyms/index.html), for demonstrations and walk throughs on common simulation types see the Jupyter Notebooks in the [Demos](Demos/) folder.
+Documentation can be found [here](html/pyms/), for demonstrations and walk throughs on common simulation types see the Jupyter Notebooks in the [Demos](Demos/) folder.
 
 # Bug-fixes and contributions
 
