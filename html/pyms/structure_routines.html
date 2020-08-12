@@ -354,7 +354,7 @@ class structure:
         &#34;&#34;&#34;
         f = open(fnam, &#34;r&#34;)
 
-        ext = splitext(fnam)[1]
+        ext = splitext(fnam)[1].lower()
 
         # Read title
         Title = f.readline().strip()
@@ -1229,6 +1229,8 @@ class structure:
         &#34;&#34;&#34;
         ax = ensure_array(axis)
         frac = ensure_array(fraction)
+        if np.asarray(frac).ndim &lt; 2:
+            frac = [frac]
 
         # Work out which atoms will stay in the sliced structure
         mask = np.ones((self.atoms.shape[0],), dtype=np.bool)
@@ -2332,7 +2334,7 @@ Short description of the object of output purposes</p>
         &#34;&#34;&#34;
         f = open(fnam, &#34;r&#34;)
 
-        ext = splitext(fnam)[1]
+        ext = splitext(fnam)[1].lower()
 
         # Read title
         Title = f.readline().strip()
@@ -3207,6 +3209,8 @@ Short description of the object of output purposes</p>
         &#34;&#34;&#34;
         ax = ensure_array(axis)
         frac = ensure_array(fraction)
+        if np.asarray(frac).ndim &lt; 2:
+            frac = [frac]
 
         # Work out which atoms will stay in the sliced structure
         mask = np.ones((self.atoms.shape[0],), dtype=np.bool)
@@ -3367,7 +3371,7 @@ def fromfile(
     &#34;&#34;&#34;
     f = open(fnam, &#34;r&#34;)
 
-    ext = splitext(fnam)[1]
+    ext = splitext(fnam)[1].lower()
 
     # Read title
     Title = f.readline().strip()
@@ -4345,6 +4349,8 @@ old simulation object dimensions.</dd>
     &#34;&#34;&#34;
     ax = ensure_array(axis)
     frac = ensure_array(fraction)
+    if np.asarray(frac).ndim &lt; 2:
+        frac = [frac]
 
     # Work out which atoms will stay in the sliced structure
     mask = np.ones((self.atoms.shape[0],), dtype=np.bool)

@@ -323,7 +323,7 @@ class structure:
         """
         f = open(fnam, "r")
 
-        ext = splitext(fnam)[1]
+        ext = splitext(fnam)[1].lower()
 
         # Read title
         Title = f.readline().strip()
@@ -1198,6 +1198,8 @@ class structure:
         """
         ax = ensure_array(axis)
         frac = ensure_array(fraction)
+        if np.asarray(frac).ndim < 2:
+            frac = [frac]
 
         # Work out which atoms will stay in the sliced structure
         mask = np.ones((self.atoms.shape[0],), dtype=np.bool)

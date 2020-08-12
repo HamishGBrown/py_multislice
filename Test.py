@@ -577,7 +577,7 @@ class Test_probe_methods(unittest.TestCase):
 class Test_ionization_methods(unittest.TestCase):
     """Tests for ionization methods."""
 
-    def test_EFTEM(self):
+    def test_EFTEM_and_multislice_STEM_EELS(self):
         """
         Test the energy filtered TEM (EFTEM) routine.
 
@@ -589,11 +589,11 @@ class Test_ionization_methods(unittest.TestCase):
         cell = [5, 5, 0.0001]
         atoms = [[0.0, 0.0, 0.0, 8]]
         crystal = pyms.structure(cell, atoms, dwf=[0.0])
-        gridshape = [64, 64]
+        gridshape = [128, 128]
         eV = 3e5
         thicknesses = cell[2]
         subslices = [1.0]
-        app = None
+        app = 20  # pyms.max_grid_resolution(gridshape,crystal.unitcell[:2],eV=eV)
         # Target the oxygen K edge
         Ztarget = 8
 
@@ -603,15 +603,18 @@ class Test_ionization_methods(unittest.TestCase):
         lprime = 0
         from pyms import orbital, get_q_numbers_for_transition, transition_potential
 
+        # qnumbers will contain the quantum numbers [lprime,mlprime,ml]
         qnumbers = get_q_numbers_for_transition(ell, order=1)[1]
         bound_configuration = "1s2 2s2 2p4"
         excited_configuration = "1s1 2s2 2p4"
-        epsilon = 1
+        epsilon = 10
 
         bound_orbital = orbital(Ztarget, bound_configuration, n, ell, lprime)
-        excited_orbital = orbital(Ztarget, excited_configuration, 0, qnumbers[0], 10)
+        excited_orbital = orbital(
+            Ztarget, excited_configuration, 0, qnumbers[0], epsilon
+        )
 
-        # Calculate transition potential for this escited state
+        # Calculate transition potential for this excited state
         Hn0 = transition_potential(
             bound_orbital,
             excited_orbital,
@@ -621,9 +624,15 @@ class Test_ionization_methods(unittest.TestCase):
             qnumbers[1],
             eV,
         ).reshape((1, *gridshape))
+        # plt.imshow(np.abs(Hn0[0]))
+        # plt.show(block=True)
 
         P, T = pyms.multislice_precursor(
             crystal, gridshape, eV, subslices, nT=1, showProgress=False
+        )
+
+        ctf = pyms.make_contrast_transfer_function(
+            gridshape, crystal.unitcell[:2], eV, app
         )
 
         EFTEM_images = pyms.EFTEM(
@@ -645,38 +654,251 @@ class Test_ionization_methods(unittest.TestCase):
             T=T,
             showProgress=False,
         )
-
-        # The image of the transition is "lensed" by the atom that it is passed
-        # through so we must account for this by multiplying the Hn0 by its transition
-        # potential
-        Hn0 *= pyms.utils.cx_to_numpy(T[0, 0]) / np.sqrt(np.prod(gridshape))
-
         result = np.fft.fftshift(np.squeeze(EFTEM_images))
-        reference = np.fft.fftshift(
-            np.abs(
-                pyms.utils.fourier_interpolate_2d(
-                    pyms.utils.bandwidth_limit_array(
-                        Hn0[0], qspace_in=False, qspace_out=False
-                    ),
-                    result.shape,
-                    "conserve_norm",
-                )
+
+        # By reciprocity, a point detector should give identical results to
+        # EFTEM so this is how we test the STEM routine as well. We work out the
+        # size of a single pixel in mrad to make such a point detector.
+        detector_ranges = [np.amin(1 / crystal.unitcell[:2] * 1e3 / pyms.wavev(eV))]
+        STEM_images = pyms.STEM_EELS_multislice(
+            crystal,
+            gridshape,
+            eV,
+            app,
+            detector_ranges,
+            thicknesses,
+            Ztarget,
+            n,
+            ell,
+            epsilon,
+            ionization_cutoff=None,
+            df=0,
+            nT=1,
+            nfph=1,
+            P=P,
+            T=T,
+            showProgress=False,
+            Hn0=Hn0,
+        )
+        # plt.imshow(STEM_images[0])
+        # plt.show(block=True)
+        STEM_images = np.fft.fftshift(
+            pyms.utils.fourier_interpolate_2d(
+                STEM_images, result.shape, norm="conserve_val"
             )
-            ** 2
         )
 
+        # The image of the transition is "lensed" by the atom that it is passed
+        # through so we must account for this by multiplying the Hn0 by the transmission
+        # function
+        Hn0 *= pyms.utils.cx_to_numpy(T[0, 0]) / np.sqrt(np.prod(gridshape))
+
+        reference = np.fft.fftshift(
+            pyms.utils.fourier_interpolate_2d(
+                np.abs(np.fft.ifft2(ctf * np.fft.fft2(Hn0[0]))) ** 2,
+                result.shape,
+                "conserve_L1",
+                qspace_out=False,
+            )
+        )
+
+        # To get STEM and EFTEM images on same scale need to multiply by number
+        # of pixels in STEM probe forming aperture function then divide by number
+        # of pixels in STEM image
+        STEM_adj = pyms.make_contrast_transfer_function(
+            gridshape, crystal.unitcell[:2], eV, app
+        )
+        STEM_adj = np.sum(np.abs(STEM_adj) ** 2)
+        STEM_images *= STEM_adj / np.prod(result.shape)
+
         # import matplotlib.pyplot as plt
-        # fig,ax = plt.subplots(nrows=2)
+        # fig,ax = plt.subplots(nrows=3)
         # ax[0].imshow(reference)
         # ax[1].imshow(result)
+        # ax[2].imshow(np.squeeze(STEM_images))
+        # print(np.mean(reference),np.mean(result),np.mean(STEM_images))
         # plt.show(block=True)
 
         passEFTEM = np.sum(np.abs(result - reference) ** 2) < 1e-7
-        self.assertTrue(passEFTEM)
+        passSTEMEELS = np.sum(np.abs(STEM_images - reference) ** 2) < 1e-7
+        self.assertTrue(passEFTEM and passSTEMEELS)
+
+    def test_PRISM_STEM_EELS(self):
+        """
+        Test that the PRISM STEM_EELS.
+
+        Calculate a EELS image and then compare with standard PRISM STEM EELS,
+        which is itself tested against the EFTEM routine.
+        """
+        # A STO crystal for testing
+        structure = SrTiO3()
+        thickness = 20
+        # An even more basic test object
+        # A 5 x 5 x 5 Angstrom cell with an oxygen
+        # cell = [10, 10, 0.0001]
+        # atoms = np.asarray([[0.5, 0.5, 0.0, 8]])#,[0.25,0.25,0.0,8]])
+        # structure = pyms.structure(cell, atoms, dwf=np.zeros(len(atoms)))
+        # thickness = 0.00009
+        df = -10
+        aberrations = pyms.aberration_starter_pack()
+        aberrations[1].amplitude = 50
+        structure.atoms[:, 5] = 0
+        gridshape = [128, 128]
+        tiling = [1, 1]  # [4,4]#[2, 2]
+        rsize = np.asarray(tiling) * structure.unitcell[:2]
+        PRISM_factor = [1, 1]  # tiling#[1,1]#[2, 2]
+        Hn0_crop = None
+        # Target the oxygen K edge
+        Ztarget = 8
+        eV = 3e5
+        app = 20
+        det = 30
+        subslices = [1.0]
+
+        # principal and orbital angular momentum quantum numbers for bound state
+        n = 1
+        ell = 0
+        lprime = 0
+        from pyms import orbital, get_q_numbers_for_transition, transition_potential
+
+        # qnumbers will contain the quantum numbers [lprime,mlprime,ml]
+        qnumbers = get_q_numbers_for_transition(ell, order=1)[1]
+        bound_configuration = "1s2 2s2 2p4"
+        excited_configuration = "1s1 2s2 2p4"
+        epsilon = 10
+
+        bound_orbital = orbital(Ztarget, bound_configuration, n, ell, lprime)
+        excited_orbital = orbital(
+            Ztarget, excited_configuration, 0, qnumbers[0], epsilon
+        )
+
+        # Calculate transition potential for this excited state
+        # cropped_grid = pyms.utils.size_of_bandwidth_limited_array(gridshape)
+        Hn0s = transition_potential(
+            bound_orbital,
+            excited_orbital,
+            gridshape,
+            rsize,
+            qnumbers[2],
+            qnumbers[1],
+            eV,
+        ).reshape((1, *gridshape))
+
+        PRISM_result = pyms.STEM_EELS_PRISM(
+            structure,
+            gridshape,
+            eV,
+            app,
+            det,
+            thickness,
+            Ztarget,
+            n,
+            ell,
+            epsilon,
+            nfph=1,
+            df=df,
+            aberrations=aberrations,
+            Hn0s=pyms.utils.crop_to_bandwidth_limit(
+                Hn0s, qspace_in=False, qspace_out=False, norm="conserve_val"
+            ),
+            PRISM_factor=PRISM_factor,
+            Hn0_crop=Hn0_crop,
+            subslices=subslices,
+            nT=1,
+            contr=None,
+            tiling=tiling,
+            showProgress=False,
+            do_reverse_multislice=False,
+        )
+
+        ms_result = pyms.STEM_EELS_multislice(
+            structure,
+            gridshape,
+            eV,
+            app,
+            det,
+            thickness,
+            Ztarget,
+            n,
+            ell,
+            epsilon,
+            df=df,
+            aberrations=aberrations,
+            nfph=1,
+            Hn0=Hn0s,
+            nT=1,
+            contr=None,
+            subslices=subslices,
+            ionization_cutoff=None,
+            showProgress=False,
+        )
+        # fig, ax = plt.subplots(ncols=3)
+        # ax[0].imshow(PRISM_result)
+        # ax[1].imshow(ms_result[0])
+        # ax[2].imshow(ms_result[0]-PRISM_result)
+        # plt.show(block=True)
+        self.assertTrue(
+            sumsqr_diff(ms_result[0], PRISM_result) / np.mean(ms_result[0]) < 1e-4
+        )
 
 
 class Test_py_multislice_Methods(unittest.TestCase):
     """Tests for functions inside of the py_multislice.py file."""
+
+    def test_reverse_multislice(self):
+        """Test the reverse multislice option."""
+        structure = SrTiO3()
+        gridshape = [512, 512]
+        tiling = [1, 1]
+        eV = 3e5
+        subslicing = [0.5, 1.0]
+        slices = pyms.generate_slice_indices(5, len(subslicing), subslicing=False)
+        seed = np.random.randint(0, 2 ** 31 - 1, size=len(slices))
+        P, T = pyms.multislice_precursor(
+            structure,
+            gridshape,
+            eV,
+            tiling=[5, 5],
+            band_width_limiting=[1, 1],
+            displacements=True,
+            subslices=subslicing,
+        )
+
+        rsize = structure.unitcell[:2] * np.asarray(tiling)
+
+        # Make a plane wave probe
+        probe = pyms.plane_wave_illumination(gridshape, rsize, eV)
+
+        # Propagate forward
+        exitprobe = pyms.multislice(
+            probe,
+            slices,
+            P,
+            T,
+            output_to_bandwidth_limit=False,
+            return_numpy=False,
+            tiling=tiling,
+            subslicing=True,
+            seed=seed,
+        )
+        eprobe = pyms.utils.cx_to_numpy(exitprobe)
+
+        # Now propagate back
+        entranceprobe = pyms.multislice(
+            exitprobe,
+            slices[::-1],
+            P,
+            T,
+            tiling=tiling,
+            reverse=True,
+            subslicing=True,
+            seed=seed,
+        )
+
+        # Make sure that errors are low
+        self.assertTrue(
+            np.std(np.angle(entranceprobe)) / np.std(np.angle(eprobe)) < 1e-2
+        )
 
     def test_thickness_to_slices(self):
         """Test Angstorm thickness to multislice slices routine."""
@@ -1088,11 +1310,11 @@ class Test_py_multislice_Methods(unittest.TestCase):
             np.squeeze(np.abs(pyms.utils.cx_to_numpy(probe)) ** 2)
         )
 
-        fig, ax = plt.subplots(ncols=3)
-        ax[0].imshow(ms_CBED)
-        ax[1].imshow(datacube[0, 0])
-        ax[2].imshow(S_CBED_amp[0])
-        plt.show(block=True)
+        # fig, ax = plt.subplots(ncols=3)
+        # ax[0].imshow(ms_CBED)
+        # ax[1].imshow(datacube[0, 0])
+        # ax[2].imshow(S_CBED_amp[0])
+        # plt.show(block=True)
 
         # The test is passed if the result from multislice and S-matrix is
         # within numerical error and the S matrix premixed routine is also
@@ -1232,7 +1454,7 @@ class Test_util_Methods(unittest.TestCase):
         gridshape = [127, 127]
         in_ = np.ones(gridshape)
         bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
-        cropped = pyms.utils.crop_to_bandwidth_limit(bwlimited)
+        cropped = pyms.utils.crop_to_bandwidth_limit_torch(bwlimited)
         passtest = (
             passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
         )
@@ -1248,7 +1470,7 @@ class Test_util_Methods(unittest.TestCase):
         gridshape = [127, 127]
         in_ = np.ones(gridshape)
         bwlimited = pyms.utils.bandwidth_limit_array(pyms.utils.cx_from_numpy(in_))
-        cropped = pyms.utils.crop_to_bandwidth_limit(bwlimited)
+        cropped = pyms.utils.crop_to_bandwidth_limit_torch(bwlimited)
         passtest = (
             passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
         )
@@ -1585,16 +1807,6 @@ class Test_util_Methods(unittest.TestCase):
         passreal = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
         self.assertTrue(passcomplex and passreal)
 
-    def test_roll_n(self):
-        """Test the roll (circular shift of array) function."""
-        shifted = torch.zeros((5, 5))
-        shifted[0, 0] = 1
-        for a, n in zip([-1, -2], [2, 3]):
-            shifted = pyms.utils.roll_n(shifted, a, n)
-        test_array = torch.zeros((5, 5))
-        test_array[2, 3] = 1
-        self.assertTrue(sumsqr_diff(shifted, test_array).item() < 1e-10)
-
     def test_cx_from_numpy(self):
         """Test function for converting complex numpy arrays to complex tensors."""
         in_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
@@ -1622,120 +1834,15 @@ class Test_util_Methods(unittest.TestCase):
 
 
 if __name__ == "__main__":
-
-    # Code to run a single test function
     # test = Test_util_Methods()
-    # test.test_crop_periodic_rectangle()
+    # test.test_crop_tobandwidthlimit()
 
-    # run all test functions
+    # test = Test_ionization_methods()
+    # test.test_PRISM_STEM_EELS()
+    # import sys;sys.exit()
+
     unittest.main()
     clean_temp_structure()
     import sys
 
     sys.exit()
-
-    # A 5 x 5 x 5 Angstrom cell with an oxygen
-    cell = [5, 5, 0.0001]
-    atoms = [[0.0, 0.0, 0.0, 8]]
-    crystal = pyms.structure(cell, atoms, dwf=[0.0])
-    gridshape = [64, 64]
-    eV = 3e5
-    thicknesses = cell[2]
-    subslices = [1.0]
-    app = None
-    # Target the oxygen K edge
-    Ztarget = 8
-
-    # principal and orbital angular momentum quantum numbers for bound state
-    n = 1
-    ell = 0
-    lprime = 0
-    from pyms import orbital, get_q_numbers_for_transition, transition_potential
-
-    qnumbers = get_q_numbers_for_transition(ell, order=1)[1]
-    bound_configuration = "1s2 2s2 2p4"
-    excited_configuration = "1s1 2s2 2p4"
-    epsilon = 1
-
-    bound_orbital = orbital(Ztarget, bound_configuration, n, ell, lprime)
-    excited_orbital = orbital(Ztarget, excited_configuration, 0, qnumbers[0], 10)
-
-    # Calculate transition potential for this escited state
-    Hn0 = transition_potential(
-        bound_orbital, excited_orbital, gridshape, cell, qnumbers[2], qnumbers[1], eV
-    ).reshape((1, *gridshape))
-
-    P, T = pyms.multislice_precursor(
-        crystal, gridshape, eV, subslices, nT=1, showProgress=False
-    )
-
-    EFTEM_images = pyms.EFTEM(
-        crystal,
-        gridshape,
-        eV,
-        app,
-        thicknesses,
-        Ztarget,
-        n,
-        ell,
-        epsilon,
-        df=[0],
-        nT=1,
-        Hn0=Hn0,
-        subslices=subslices,
-        nfph=1,
-        P=P,
-        T=T,
-        showProgress=False,
-    )
-
-    # By reciprocity, a point detector should give identical results to
-    # EFTEM so this is how we test the STEM routine as well.
-    det = np.zeros((1, *gridshape))
-    det[0, 0] = 1
-    STEM_images = pyms.STEM_EELS_multislice(
-        crystal,
-        gridshape,
-        eV,
-        app,
-        det,
-        thicknesses,
-        Ztarget,
-        n,
-        ell,
-        epsilon,
-        df=0,
-        nT=1,
-        P=P,
-        T=T,
-        showProgress=False,
-        Hn0=Hn0,
-    )
-
-    # The image of the transition is "lensed" by the atom that it is passed
-    # through so we must account for this by multiplying the Hn0 by the transmission
-    # function
-    Hn0 *= pyms.utils.cx_to_numpy(T[0, 0]) / np.sqrt(np.prod(gridshape))
-
-    result = np.fft.fftshift(np.squeeze(EFTEM_images))
-    reference = np.fft.fftshift(
-        np.abs(
-            pyms.utils.fourier_interpolate_2d(
-                pyms.utils.bandwidth_limit_array(
-                    Hn0[0], qspace_in=False, qspace_out=False
-                ),
-                result.shape,
-                "conserve_norm",
-            )
-        )
-        ** 2
-    )
-
-    # import matplotlib.pyplot as plt
-    # fig,ax = plt.subplots(nrows=2)
-    # ax[0].imshow(reference)
-    # ax[1].imshow(result)
-    # plt.show(block=True)
-
-    passEFTEM = np.sum(np.abs(result - reference) ** 2) < 1e-7
-    # self.assertTrue(passEFTEM)

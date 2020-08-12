@@ -7,7 +7,7 @@ Python multislice slice code
 GPU accelerated using 
 [pytorch](https://pytorch.org/)
 
-Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-atomic-code/fac), ionization potentials now working though correct units are still forthcoming!
+Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-atomic-code/fac).
 
 # Installation
 
@@ -19,9 +19,13 @@ Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-at
 
    All necessary dependencies (pytorch etc.) should also be installed, if you have issues try installing in a fresh anaconda environment.
 
-3. As an added precaution, run the Test.py script to ensure everything is working as expected
+3. If you would like to perform ionization based TEM simulations, download and install the flexible atomic code (FAC), including the python interface (pfac), from [here](https://github.com/flexible-atomic-code/fac). I've only successfully got this working on Linux, your mileage may vary on Windows operating systems. 
+
+4. As an added precaution, run the Test.py script to ensure everything is working as expected
 
     $ python Test.py
+
+    You can also run run Orbital_normalization.py to test that the ionization cross-sections are being calculated appropriately.
 
 # Documentation and demos
 

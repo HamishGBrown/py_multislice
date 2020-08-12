@@ -150,19 +150,19 @@ def amplitude(r):
         return r * r
 
 
-def roll_n(X, axis, n):
-    """Roll a pytorch tensor X n entries along a given axis."""
-    f_idx = tuple(
-        slice(None, None, None) if i != axis % X.dim() else slice(0, n, None)
-        for i in range(X.dim())
-    )
-    b_idx = tuple(
-        slice(None, None, None) if i != axis % X.dim() else slice(n, None, None)
-        for i in range(X.dim())
-    )
-    front = X[f_idx]
-    back = X[b_idx]
-    return torch.cat([back, front], axis)
+# def roll_n(X, axis, n):
+#     """Roll a pytorch tensor X n entries along a given axis."""
+#     f_idx = tuple(
+#         slice(None, None, None) if i != axis % X.dim() else slice(0, n, None)
+#         for i in range(X.dim())
+#     )
+#     b_idx = tuple(
+#         slice(None, None, None) if i != axis % X.dim() else slice(n, None, None)
+#         for i in range(X.dim())
+#     )
+#     front = X[f_idx]
+#     back = X[b_idx]
+#     return torch.cat([back, front], axis)
 
 
 def cx_from_numpy(

@@ -2,7 +2,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from tqdm import tqdm
 from .Probe import wavev, focused_probe
 from .utils.numpy_utils import (
     ensure_array,
@@ -12,7 +11,8 @@ from .utils.numpy_utils import (
     crop,
 )
 from .utils.torch_utils import (
-    roll_n,
+    iscomplex,
+    # roll_n,
     cx_from_numpy,
     cx_to_numpy,
     complex_matmul,
@@ -33,7 +33,7 @@ from .utils.torch_utils import (
 def tqdm_handler(showProgress):
     """Handle showProgress boolean or string input for the tqdm progress bar."""
     if isinstance(showProgress, str):
-        if showProgress == "notebook":
+        if showProgress.lower() == "notebook":
             from tqdm import tqdm_notebook as tqdm
         tdisable = False
     elif isinstance(showProgress, bool):
@@ -88,9 +88,6 @@ def make_propagators(
         the object (third dimension)
     eV : float
         Probe energy in electron volts
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -101,6 +98,11 @@ def make_propagators(
         by shearing the propagator. Units given by input variable tilt_units.
     tilt_units : string, optional
         Units of specimen tilt, can be 'mrad','pixels' or 'invA'
+    Returns
+    -------
+    P : (n,Y,X)
+        Fresnel free-space progators, the first dimension will be of size
+        len(`gridsize`)
     """
     from .Probe import make_contrast_transfer_function
 
@@ -199,7 +201,7 @@ def multislice(
     qspace_out : bool, optional
         Should be set to True if the output wavefunction is desired in momentum
         (q) space and False otherwise (this is the default)
-    posn :
+    posn : None, optional
         Does nothing, included to match calling signature for STEM function
     subslicing : bool, optional
         Pass subslicing=True to access propagation to sub-slices of the
@@ -279,10 +281,10 @@ def multislice(
             T_ = T[it, subslice]
             if tiling[0] > 1:
                 # Shift an integer number of pixels in y
-                T_ = roll_n(T_, 0, r.randint(0, tiling[0]) * (nopiy // tiling[0]))
+                T_ = torch.roll(T_, r.randint(0, tiling[0]) * (nopiy // tiling[0]), 0)
             if tiling[1] > 1:
                 # Shift an integer number of pixels in x
-                T_ = roll_n(T_, 1, r.randint(1, tiling[1]) * (nopix // tiling[1]))
+                T_ = torch.roll(T_, r.randint(1, tiling[1]) * (nopix // tiling[1]), 1)
         else:
             # Case of a non-integer pixel shifting of the unit cell
             yshift = r.randint(0, tiling[0]) * (nopiy / tiling[0])
@@ -399,13 +401,14 @@ def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
         Probe energy in electron volts
     betamax : float
         Detector outer acceptance semi-angle
-
-    Keyword arguments
-    -----------------
     betamin : float, optional
         Detector inner acceptance semi-angle
     units : float, optional
         Units of betamin and betamax, mrad or invA are both acceptable
+    Returns
+    -------
+    D : (ndet,Y,X) array_like
+        The detector functions
     """
     # Get reciprocal space array
     q = q_space_array(gridshape, rsize)
@@ -471,9 +474,6 @@ def generate_STEM_raster(
     alpha : float
         Probe forming aperture semi-angle in mrad or inverse Angstorm
         (if invA == True)
-
-    Keyword arguments
-    -----------------
     gridshape : (2,) array_like, optional
         Pixel dimensions of the 2D grid, by default [1,1] so probe positions will
         be returned as a fraction of the array size
@@ -488,12 +488,11 @@ def generate_STEM_raster(
     invA : bool
         If True, alpha is taken to be in units of inverse Angstrom, not mrad.
         This also means that the value of eV no longer matters
-
     Returns
     -------
     probe_posns : (nY,nX,2) np.ndarray
-        The probe positions in fractions of the array gridshape is [1,1] and in
-        pixel units if gridshape is the size of the pixel array.
+        The probe positions in fractions of the array if gridshape is [1,1] and
+        in pixel units if gridshape is the size of the pixel array.
     """
     # Field of view in Angstrom
     FOV = np.asarray([rsize[0] * (ROI[2] - ROI[0]), rsize[1] * (ROI[3] - ROI[1])])
@@ -535,7 +534,6 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
         Real space size of simulation grid
     gridshape : (2,) array_like
         Pixel size of gridshape
-
     Returns
     -------
     gridout : (2,) array_like
@@ -650,9 +648,6 @@ def generate_probe_spread_plot(
         Probe-forming aperture in mrad
     thickness : float
         The maximum thickness of the simulation object in Angstrom
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -671,7 +666,6 @@ def generate_probe_spread_plot(
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
         Precomputed transmission functions
-
     Returns
     -------
     fig : matplotlib.figure object
@@ -821,9 +815,6 @@ def STEM(
     alpha : float
         The convergence angle of the probe in mrad, needed to work out probe
         sampling requirements
-
-    Keyword arguments
-    -----------------
     batch_size : int, optional
         The multislice algorithm can be performed on multiple probes columns
         at once to parrallelize computation, the number of parrallel computations
@@ -842,9 +833,13 @@ def STEM(
         initialized in the function. If a datacube is passed then the result
         will be added by the STEM routine (useful for multiple frozen phonon
         iterations)
+    PACBED : bool
+        If True the STEM function will calculate a position averaged convergent
+        electron diffraction (PABCED) pattern by averaging the diffraction space
     scan_posn :  (...,2) array_like, optional
         Array containing the STEM scan positions in fractional coordinates.
         If provided scan_posn.shape[:-1] will give the shape of the STEM image.
+        result over all scan positions
     dtype : torch.dtype, optional
         Datatype of the simulation arrays, by default 32-bit floating point
     device : torch.device, optional
@@ -853,10 +848,11 @@ def STEM(
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid, STEM raster will only
         scan a single unit cell.
-    seed : int, optional
+    seed : array_like or int, optional
         Seed for the random number generator for frozen phonon configurations
-    showProgress : bool, optional
-        Pass showProgress=False to disable progress bar.
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass 'notebook' to get correct
+        progress bar behaviour inside a jupyter notebook
     method_args : list, optional
         Arguments for the method function used to propagate probes to the exit
         surface
@@ -868,6 +864,13 @@ def STEM(
         will be initialized within the function. If it is passed then the result
         will be accumulated within the function, which is useful for multiple
         frozen phonon iterations.
+    Returns
+    -------
+    Result : dict
+        A dictionary with the keys "STEM images", "datacube" and "PACBED" which
+        contain the conventional STEM images, the 4D-STEM datacube and the PACBED
+        pattern respectively. If any of these simulations where not performed
+        then the relevant entry will just contain None
     """
     from .utils.torch_utils import detect
 
@@ -987,11 +990,14 @@ def STEM(
                 probes, t, *method_args, posn=scan_posn[scan_index], **method_kwargs
             )
 
-            # Calculate amplitude of probes
-            amp = amplitude(probes)
-
-            # Correct normalization in Fourier space
-            amp /= np.prod(probes.size()[-3:-1])
+            # Calculate amplitude of probes, a real output is assumed to be the
+            # amplitude of the exit surface wave function. Also correct
+            # normalization to be in units of fractional intensity
+            cmplxout = iscomplex(probes)
+            if cmplxout:
+                amp = amplitude(probes) / np.prod(probes.size()[-3:-1])
+            else:
+                amp = probes / np.prod(probes.size()[-2:])
 
             # Calculate STEM images
             if conventional_STEM:
@@ -1008,6 +1014,12 @@ def STEM(
 
             if PACBED:
                 PACBED_pattern[it] += torch.sum(amp, axis=0) / nscantot
+
+            # In some cases the amplitude will be returned by the function
+            # in this case multiple thickness values should not be used! This
+            # break command helps prevent misuse.
+            if not cmplxout:
+                break
 
     if conventional_STEM:
         STEM_image = np.squeeze(STEM_image.reshape(ndet, nthick, *scan_shape))
@@ -1071,7 +1083,8 @@ class scattering_matrix:
         transposed=False,
         stored_gridshape=None,
     ):
-        """Initialize a scattering matrix.
+        """
+        Initialize with a set of propagators and transmission functions.
 
         Parameters
         ----------
@@ -1091,9 +1104,6 @@ class scattering_matrix:
         alpha : float
             Maximum input angle for the scattering matrix, should match the
             probe forming aperture used in experiment
-
-        Keyword arguments
-        -----------------
         GPU_streaming : bool, optional
             If True, the scattering matrix will be stored off GPU RAM and
             streamed to GPU RAM as necessary, does nothing if the calculation
@@ -1114,8 +1124,9 @@ class scattering_matrix:
             and chemical imaging 3.1 (2017): 13 for details on this.
         seed : int32, optional
             A seed to control seeding of the frozen phonon approximation
-        showProgress : bool, optional
-            Pass showProgress = False to disable live progress readout
+        showProgress : str or bool, optional
+            Pass False to disable progress readout, pass 'notebook' to get correct
+            progress bar behaviour inside a jupyter notebook
         bandwidth_limit : float, optional
             Band-width limiting of the transmission function and propagators to
             prevent wrap-around error in the multislice algorithm, 2/3 by
@@ -1280,9 +1291,6 @@ class scattering_matrix:
         transmission_functions : (N,Y,X,2)
             The transmission functions describing the electron's interaction
             with the specimen for the multislice algorithm
-
-        Keyword arguments
-        -----------------
         batch_size : int, optional
             The multislice algorithm can be performed on multiple scattering
             matrix columns at once to parrallelize computation, this number is
@@ -1292,13 +1300,15 @@ class scattering_matrix:
             unit cell, in this case nslices is taken to be in units of subslices
             to propagate rather than unit cells (i.e. nslices = 3 will propagate
             1.5 unit cells for a subslicing of 2 subslices per unit cell)
-        showProgress : bool, optional
-            Pass showProgress = False to disable live progress readout
+        showProgress : str or bool, optional
+            Pass False to disable progress readout, pass 'notebook' to get correct
+            progress bar behaviour inside a jupyter notebook
         transpose : bool, optional
             Make a "transposed" scattering matrix - see Brown et al. (2019)
             Physical Review Research paper for a discussion of this and its
             applications
         """
+        tdisable, tqdm = tqdm_handler(showProgress)
         from .Probe import plane_wave_illumination
 
         # Initialize scattering matrix if necessary
@@ -1347,7 +1357,7 @@ class scattering_matrix:
                     )
             self.initialized = True
 
-        # Make nslice_ which always accounts of subslices of the cyrstal structure
+        # Make nslice_ which always accounts of subslices of the structure
         if subslicing:
             nslice_ = nslice
         else:
@@ -1397,7 +1407,7 @@ class scattering_matrix:
         # scattering matrix
         for i in tqdm(
             range(int(np.ceil(self.nbeams / batch_size))),
-            disable=not showProgress,
+            disable=tdisable,
             desc="Calculating S-matrix",
         ):
             # Initialize array that will be used as input to the multislice routine
@@ -1679,10 +1689,12 @@ class scattering_matrix:
             Array containing the STEM scan positions in fractional coordinates.
             If provided scan_posn.shape[:-1] will give the shape of the STEM
             image.
-        showProgress : bool, optional
-            Pass showProgress=False to disable progress bar.
+        showProgress : str or bool, optional
+            Pass False to disable progress readout, pass 'notebook' to get correct
+            progress bar behaviour inside a jupyter notebook
         """
         device = get_device(device)
+        tdisable, tqdm = tqdm_handler(showProgress)
 
         # Get indices of PRISM cropping window
         crop_ = [x.cpu().numpy() for x in self.PRISM_crop_window()]
@@ -1763,9 +1775,7 @@ class scattering_matrix:
 
         # Loop over probe positions clusters. This would be a good candidate
         # for multi-GPU work.
-        for cluster in tqdm(
-            clusters, desc="Probe position clusters", disable=not showProgress
-        ):
+        for cluster in tqdm(clusters, desc="Probe position clusters", disable=tdisable):
             # Get map of probe positions in cluster
             points = np.nonzero(yhat == cluster)[0]
             npoints = len(points)

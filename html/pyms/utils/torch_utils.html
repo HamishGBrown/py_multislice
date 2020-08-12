@@ -179,19 +179,19 @@ def amplitude(r):
         return r * r
 
 
-def roll_n(X, axis, n):
-    &#34;&#34;&#34;Roll a pytorch tensor X n entries along a given axis.&#34;&#34;&#34;
-    f_idx = tuple(
-        slice(None, None, None) if i != axis % X.dim() else slice(0, n, None)
-        for i in range(X.dim())
-    )
-    b_idx = tuple(
-        slice(None, None, None) if i != axis % X.dim() else slice(n, None, None)
-        for i in range(X.dim())
-    )
-    front = X[f_idx]
-    back = X[b_idx]
-    return torch.cat([back, front], axis)
+# def roll_n(X, axis, n):
+#     &#34;&#34;&#34;Roll a pytorch tensor X n entries along a given axis.&#34;&#34;&#34;
+#     f_idx = tuple(
+#         slice(None, None, None) if i != axis % X.dim() else slice(0, n, None)
+#         for i in range(X.dim())
+#     )
+#     b_idx = tuple(
+#         slice(None, None, None) if i != axis % X.dim() else slice(n, None, None)
+#         for i in range(X.dim())
+#     )
+#     front = X[f_idx]
+#     back = X[b_idx]
+#     return torch.cat([back, front], axis)
 
 
 def cx_from_numpy(
@@ -1471,30 +1471,6 @@ real space</dd>
     return a.shape[-1] == 2</code></pre>
 </details>
 </dd>
-<dt id="pyms.utils.torch_utils.roll_n"><code class="name flex">
-<span>def <span class="ident">roll_n</span></span>(<span>X, axis, n)</span>
-</code></dt>
-<dd>
-<div class="desc"><p>Roll a pytorch tensor X n entries along a given axis.</p></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def roll_n(X, axis, n):
-    &#34;&#34;&#34;Roll a pytorch tensor X n entries along a given axis.&#34;&#34;&#34;
-    f_idx = tuple(
-        slice(None, None, None) if i != axis % X.dim() else slice(0, n, None)
-        for i in range(X.dim())
-    )
-    b_idx = tuple(
-        slice(None, None, None) if i != axis % X.dim() else slice(n, None, None)
-        for i in range(X.dim())
-    )
-    front = X[f_idx]
-    back = X[b_idx]
-    return torch.cat([back, front], axis)</code></pre>
-</details>
-</dd>
 <dt id="pyms.utils.torch_utils.sinc"><code class="name flex">
 <span>def <span class="ident">sinc</span></span>(<span>x)</span>
 </code></dt>
@@ -1620,7 +1596,6 @@ real space</dd>
 <li><code><a title="pyms.utils.torch_utils.fourier_shift_torch" href="#pyms.utils.torch_utils.fourier_shift_torch">fourier_shift_torch</a></code></li>
 <li><code><a title="pyms.utils.torch_utils.get_device" href="#pyms.utils.torch_utils.get_device">get_device</a></code></li>
 <li><code><a title="pyms.utils.torch_utils.iscomplex" href="#pyms.utils.torch_utils.iscomplex">iscomplex</a></code></li>
-<li><code><a title="pyms.utils.torch_utils.roll_n" href="#pyms.utils.torch_utils.roll_n">roll_n</a></code></li>
 <li><code><a title="pyms.utils.torch_utils.sinc" href="#pyms.utils.torch_utils.sinc">sinc</a></code></li>
 <li><code><a title="pyms.utils.torch_utils.size_of_bandwidth_limited_array" href="#pyms.utils.torch_utils.size_of_bandwidth_limited_array">size_of_bandwidth_limited_array</a></code></li>
 <li><code><a title="pyms.utils.torch_utils.to_complex" href="#pyms.utils.torch_utils.to_complex">to_complex</a></code></li>

@@ -19,6 +19,14 @@ import torch
 import tqdm
 from .Probe import wavev, relativistic_mass_correction
 from .utils.numpy_utils import fourier_shift
+from .py_multislice import multislice, tqdm_handler
+from .utils.torch_utils import (
+    amplitude,
+    complex_mul,
+    ensure_torch_array,
+    fourier_shift_torch,
+    get_device,
+)
 
 # List of letters for each orbital, used to convert between orbital angular
 # momentum quantum number ell and letter
@@ -401,8 +409,8 @@ def transition_potential(
         If qspace = True return the ionization transition potential in reciprocal
         space
     orbital_filling_factor : bool, optional
-        If True (default) multiply by 2*`orb1.l` + 1 to account for the number
-        of electrons that sit in the ground state before ionization.
+        If True (default) multiply by sqrt(2*(`orb1.l` + 1)) to account for the
+        number of electrons that sit in the ground state before ionization.
     """
     # Calculate energy loss
     deltaE = orb1.energy - orb2.energy
@@ -556,25 +564,23 @@ def transition_potential(
     Hn0 *= np.prod(gridshape) / np.prod(gridsize)
 
     # Multiply by orbital filling
-    Hn0 *= 4 * ell + 2
+    if orbital_filling_factor:
+        Hn0 *= np.sqrt(4 * ell + 2)
 
     # Apply constants:
     # sqrt(Rdyberg) to convert to 1/sqrt(eV) units
     # 1 / (2 pi**2 a0 kn) as as per paper
     # Relativistic mass correction to go from a0 to relativistically corrected a0*
     # divide by q**2
-    Hn0 *= (
-        np.sqrt(2)
-        * relativistic_mass_correction(eV)
-        / (2 * a0 * np.pi ** 2 * np.sqrt(Ry) * kn * qabs ** 2)
+    Hn0 *= relativistic_mass_correction(eV) / (
+        2 * a0 * np.pi ** 2 * np.sqrt(Ry) * kn * qabs ** 2
     )
 
     # Return result of Eq. (10) from Dwyer Ultramicroscopy 104 (2005) 141-151
     # in real space
-    if not qspace:
-        Hn0 = np.fft.ifft2(Hn0)
-
-    return Hn0
+    if qspace:
+        return Hn0
+    return np.fft.ifft2(Hn0)
 
 
 def transition_potential_multislice(
@@ -606,7 +612,7 @@ def transition_potential_multislice(
         Electron wave functions for a set of input probes
     nslices : int, array_like
         The number of slices (iterations) to perform multislice over
-    propagators : (nsubslice,Y,X,2) complex array_like
+    propagators : (nsubslice,Y,X) complex array_like
         Fresnel free space operators required for the multislice algorithm.
     transmission_functions : (nT,nslices,Y,X) array_like
         Multislice transmission functions
@@ -638,14 +644,7 @@ def transition_potential_multislice(
     tqposition : int,optional
         Used to correctly nest progress bars
     """
-    from .py_multislice import multislice
-    from .utils.torch_utils import (
-        amplitude,
-        complex_mul,
-        ensure_torch_array,
-        fourier_shift_torch,
-        get_device,
-    )
+    tdisable, tqdm = tqdm_handler(showProgress)
 
     device = get_device(device_type)
     # Number of subslices
@@ -698,7 +697,7 @@ def transition_potential_multislice(
         output = torch.zeros(image_CTF.shape[0], *gridout, device=device, dtype=dtype)
 
     # Loop over slices of specimens
-    for i in tqdm.tqdm(
+    for i in tqdm(
         range(niterations), desc="Slice", disable=not showProgress, position=tqposition
     ):
 
@@ -726,10 +725,8 @@ def transition_potential_multislice(
                     .to(device)
                 )
 
-                psi_n = complex_mul(
-                    fourier_shift_torch(ionization_potential, p_, qspace_in=True),
-                    probes,
-                )
+                Hn0 = fourier_shift_torch(ionization_potential, p_, qspace_in=True)
+                psi_n = complex_mul(Hn0, probes)
 
                 # Only propagate this wave to the exit surface if it is deemed
                 # to contribute significantly (above a user-determined threshhold)

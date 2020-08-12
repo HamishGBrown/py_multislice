@@ -41,7 +41,6 @@ allows users to set up simulations faster and easier.
 &#34;&#34;&#34;
 import numpy as np
 import torch
-from tqdm import tqdm
 from .py_multislice import (
     make_propagators,
     tqdm_handler,
@@ -67,13 +66,16 @@ from .utils.torch_utils import (
 )
 from .utils.numpy_utils import (
     fourier_shift,
-    crop,
     crop_to_bandwidth_limit,
     ensure_array,
     q_space_array,
 )
 from .utils.output import initialize_h5_datacube_object
-from .Ionization import get_transitions, tile_out_ionization_image
+from .Ionization import (
+    get_transitions,
+    tile_out_ionization_image,
+    transition_potential_multislice,
+)
 from .Probe import (
     focused_probe,
     make_contrast_transfer_function,
@@ -87,7 +89,7 @@ def window_indices(center, windowsize, gridshape):
     window = []
     for i, wind in enumerate(windowsize):
         indices = np.arange(-wind // 2, wind // 2, dtype=np.int) + wind % 2
-        indices += int(round(center[i] * gridshape[i]))
+        indices += int(np.floor(center[i] * gridshape[i]))
         indices = np.mod(indices, gridshape[i])
         window.append(indices)
 
@@ -148,9 +150,6 @@ def STEM_PRISM(
         Objective aperture in mrad
     thicknesses : float or array_like
         Thickness of the calculation
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -201,8 +200,9 @@ def STEM_PRISM(
     device_type : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     stored_gridshape : int, array_like
         The size of the stored array in the scattering matrix.
     detector_ranges : array_like, optional
@@ -221,8 +221,8 @@ def STEM_PRISM(
         if this is provided then nfph will be ignored since a new scattering
         matrix should be calculated for each frozen phonon iteration
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     GPU_streaming : bool
         Choose whether to use GPU streaming or not for the scattering matrix,
         providing a scattering matrix to the routine will override whatever is
@@ -234,6 +234,13 @@ def STEM_PRISM(
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
         Precomputed transmission functions
+    Returns
+    -------
+    result : dict
+        A dictionary containing numpy arrays with the requested simulations.
+        Possible keys include &#34;STEM images&#34; (conventional STEM images from a
+        monolithic detector), &#34;datacube&#34; (the 4D-STEM datacube) and &#34;DPC&#34; (the
+        differential phase contrast reconstruction of the electrostatic potential)
     &#34;&#34;&#34;
     tdisable, tqdm = tqdm_handler(showProgress)
 
@@ -471,10 +478,54 @@ def PACBED(
     device=None,
     nT=5,
     subslicing=False,
-    T=None,
     P=None,
+    T=None,
 ):
-    &#34;&#34;&#34;Calculate position averaged convergent electron diffraction (PACBED) patterns.&#34;&#34;&#34;
+    &#34;&#34;&#34;
+    Calculate position averaged convergent electron diffraction (PACBED) patterns.
+
+    This is a convenience function, PACBEDs can also be calculated in the
+    `STEM_multislice` function
+
+    Parameters
+    ----------
+    structure : pyms.structure_routines.structure
+        The structure of interest
+    gridshape : (2,) array_like
+        Pixel size of the simulation grid
+    eV : float
+        Probe energy in electron volts
+    app : float
+        Objective aperture in mrad
+    thicknesses : float or array_like
+        Thickness of the calculation
+    subslices : array_like, optional
+        A one dimensional array-like object containing the depths (in fractional
+        coordinates) at which the object will be subsliced. The last entry
+        should always be 1.0. For example, to slice the object into four equal
+        sized slices pass [0.25,0.5,0.75,1.0]
+    nfph : int, optional
+        Number of iterations of the frozen phonon algorithm (25 by default, which
+        is a good rule of thumb for convergence)
+    tiling : (2,) array_like, optional
+        Tiling of a repeat unit cell on simulation grid
+    device : torch.device, optional
+        torch.device object which will determine which device (CPU or GPU) the
+        calculations will run on
+    nT : int, optional
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
+    subslicing : bool,optional
+        Set to True to allow output at fractions of the unit cell thickness
+    P : (nslices,Y,X) array_like, optional
+        Precomputed Fresnel free-space propagators
+    T : (nT,nslices,Y,X) array_like
+        Precomputed transmission functions
+    Returns
+    -------
+    result : (len(nslices),Y,X) np.ndarray
+        The requested PACBED simulation
+    &#34;&#34;&#34;
     # Sampling of PACBED is half that required for a STEM image
     scan_posn = generate_STEM_raster(
         structure.unitcell[:2] * np.asarray(tiling) / 2, eV, app, tiling=tiling
@@ -551,9 +602,6 @@ def STEM_multislice(
         Objective aperture in mrad
     thicknesses : float or array_like
         Thickness of the calculation
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -613,8 +661,8 @@ def STEM_multislice(
         Seed for random number generator for generating transmission functions
         and frozen phonon passes. Useful for testing purposes
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
         calculation, if contr = 1.0 all ionization transitions will be inlcuded
@@ -646,8 +694,9 @@ def STEM_multislice(
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated probe.
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     detector_ranges : array_like, optional
         The acceptance angles of each of the stem detectors should be stored as
         a list of lists: ie [[0,10],[10,20]] will make two detectors spanning
@@ -660,8 +709,8 @@ def STEM_multislice(
     subslicing : bool,optional
         Set to True to allow output at fractions of the unit cell thickness
     nT : int, optional
-        Number of transmission functions calculated with independent atomic
-        displacements for frozen phonon iteration.
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     P : (nslices,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (nT,nslices,Y,X) array_like
@@ -672,8 +721,9 @@ def STEM_multislice(
     result : dict
         Can contain up to three entries with keys &#39;STEM images&#39; which is the
         conventional STEM images simulated, &#39;datacube&#39; which is a 4D-STEM
-        datacube and &#39;DPC&#39; which are the reconstructions of the specimen phase
-        from the centre-of-mass STEM images.
+        datacube, &#39;PACBED&#39; which is the postion averaged convergent beam
+        electron diffraction pattern and &#39;DPC&#39; which are the reconstructions
+        of the specimen phase from the centre-of-mass STEM images.
     &#34;&#34;&#34;
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -842,7 +892,7 @@ def STEM_multislice(
 
 
 def multislice_precursor(
-    sample,
+    structure,
     gridshape,
     eV,
     subslices=[1.0],
@@ -869,9 +919,6 @@ def multislice_precursor(
         Pixel size of the simulation grid
     eV : float
         Probe energy in electron volts
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -885,15 +932,16 @@ def multislice_precursor(
     tilt_units : string, optional
         Units of specimen tilt, can be &#39;mrad&#39;,&#39;pixels&#39; or &#39;invA&#39;
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     device : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
     dtype : torch.dtype, optional
         Datatype of the simulation arrays, by default 32-bit floating point
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     displacements : bool, optional
         Pass False to disable thermal vibration of the atoms
     fractional_occupancy : bool, optional
@@ -917,7 +965,7 @@ def multislice_precursor(
 
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
-    rsize[:3] = sample.unitcell[:3]
+    rsize[:3] = structure.unitcell[:3]
     rsize[:2] *= np.asarray(tiling)
 
     # If slices are basically equidistant, we can use the same propagator
@@ -945,7 +993,7 @@ def multislice_precursor(
     T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
 
     for i in tqdm(range(nT), desc=&#34;Making projected potentials&#34;, disable=tdisable):
-        T[i] = sample.make_transmission_functions(
+        T[i] = structure.make_transmission_functions(
             gridshape,
             eV,
             subslices=subslices,
@@ -966,7 +1014,7 @@ def STEM_EELS_multislice(
     gridshape,
     eV,
     app,
-    det,
+    detector_ranges,
     thicknesses,
     Ztarget,
     n,
@@ -976,6 +1024,7 @@ def STEM_EELS_multislice(
     subslices=[1.0],
     device_type=None,
     tiling=[1, 1],
+    nfph=5,
     nT=5,
     contr=0.95,
     dtype=torch.float32,
@@ -987,6 +1036,9 @@ def STEM_EELS_multislice(
     aberrations=[],
     batch_size=1,
     subslicing=False,
+    Hn0=None,
+    P=None,
+    T=None,
 ):
     &#34;&#34;&#34;
     Perform a STEM-EELS simulation using only the multislice algorithm.
@@ -1001,8 +1053,10 @@ def STEM_EELS_multislice(
         Probe energy in electron volts
     app : float
         Objective aperture in mrad
-    det : float
-        EELS aperture acceptance angle in mrad
+    detector_ranges : array_like
+        The maxmimum acceptance angles of each of the spectrometer apertures
+        should be stored as in an array: ie [10,20] will make two detectors
+        spanning 0 to 10 mrad and 0 to 20 mrad.
     thicknesses : float or array_like
         Thickness of the calculation
     Ztarget : int
@@ -1015,10 +1069,7 @@ def STEM_EELS_multislice(
         interest
     epsilon : float
         Energy above ionization threshhold energy
-
-    Keyword arguments
-    -----------------
-    df : float
+    df : float, optional
         Probe defocus
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
@@ -1031,8 +1082,10 @@ def STEM_EELS_multislice(
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
+    nfph : int, optional
+        Number of frozen phonon iterations.
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
         calculation, if contr = 1.0 all ionization transitions will be inlcuded
@@ -1056,12 +1109,22 @@ def STEM_EELS_multislice(
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated probe.
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     subslicing : bool,optional
         Set to True to allow output at fractions of the unit cell thickness
+    Hn0 : (n,y,x) np.complex, optional
+        Precalculated Hn0s ionization transition potentials, if not provided
+        these will be calculated.
+    P : (nslices,y,x) array_like, optional
+        Precalculated multislice propagators, default is None which will mean
+        that these are calculated within the routine.
+    T : (nT,nslices,y,x) array_like, optional
+        Precalculated multislice transmission functions, default is None which
+        will mean that these are calculated within the routine.
     &#34;&#34;&#34;
-    from .Ionization import transition_potential_multislice
+    tdisable, tqdm = tqdm_handler(showProgress)
 
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -1072,20 +1135,6 @@ def STEM_EELS_multislice(
     # Convert thicknesses to multislice slices
     nslices = thickness_to_slices(
         thicknesses, structure.unitcell[2], subslicing=subslicing, subslices=subslices
-    )
-
-    # Make propagators and transmission functions for multslice
-    P, T = multislice_precursor(
-        structure,
-        gridshape,
-        eV,
-        subslices=subslices,
-        tiling=tiling,
-        nT=nT,
-        device=device,
-        showProgress=showProgress,
-        specimen_tilt=specimen_tilt,
-        tilt_units=tilt_units,
     )
 
     # Get the coordinates of the target atoms in a unit cell
@@ -1099,50 +1148,78 @@ def STEM_EELS_multislice(
         rsize,
         eV,
         app,
+        df=df,
         beam_tilt=beam_tilt,
         tilt_units=tilt_units,
         aberrations=aberrations,
     )
     # Generate ionization transition potentials for atom of interest
-    Hn0 = get_transitions(
-        Ztarget, n, ell, epsilon, eV, gridshape, rsize, order=1, contr=contr
-    )
+    if Hn0 is None:
+        Hn0 = get_transitions(
+            Ztarget, n, ell, epsilon, eV, gridshape, rsize, order=1, contr=contr
+        )
 
     # Make EELS aperture masks
-    detector_ranges = ensure_array(det)
     D = np.stack(
-        [make_detector(gridshape, rsize, eV, drange, 0) for drange in detector_ranges]
+        [
+            make_detector(gridshape, rsize, eV, d, 0)
+            for d in ensure_array(detector_ranges)
+        ]
     )
 
     # The method pyms.Ionization.transition_potential_multislice will be passed
     # to the STEM routine, make a list of the function arguments and a
     # dictionary of the keyword arguments to also pass to the STEM routine
-    args = (subslices, P, T, Hn0, ionization_sites)
+
     kwargs = {
         &#34;tiling&#34;: tiling,
         &#34;device_type&#34;: device,
         &#34;return_numpy&#34;: False,
         &#34;qspace_in&#34;: True,
         &#34;threshhold&#34;: ionization_cutoff,
-        &#34;showProgress&#34;: showProgress,
+        &#34;showProgress&#34;: False,
+        &#34;tqposition&#34;: 1,
     }
 
-    # Call STEM routine
-    return STEM(
-        rsize,
-        probe,
-        transition_potential_multislice,
-        nslices,
-        eV,
-        app,
-        batch_size=1,
-        detectors=D,
-        device=device,
-        tiling=tiling,
-        showProgress=showProgress,
-        method_args=args,
-        method_kwargs=kwargs,
-    )[0]
+    probe_posn = generate_STEM_raster(rsize, eV, app, tiling=tiling)
+    STEM_images = np.zeros((D.shape[0], *probe_posn.shape[:2]))
+
+    for _ in tqdm(
+        range(nfph), desc=&#34;Frozen phonon interations:&#34;, disable=tdisable, position=0
+    ):
+        # Make propagators and transmission functions for multislice
+        if P is None or T is None:
+            P, T = multislice_precursor(
+                structure,
+                gridshape,
+                eV,
+                subslices=subslices,
+                tiling=tiling,
+                nT=nT,
+                device=device,
+                showProgress=showProgress,
+                specimen_tilt=specimen_tilt,
+                tilt_units=tilt_units,
+            )
+        args = (subslices, P, T, Hn0, ionization_sites)
+        # Call STEM routine
+        STEM_images += STEM(
+            rsize,
+            probe,
+            transition_potential_multislice,
+            nslices,
+            eV,
+            app,
+            batch_size=1,
+            scan_posn=probe_posn,
+            detectors=D,
+            device=device,
+            tiling=tiling,
+            showProgress=showProgress,
+            method_args=args,
+            method_kwargs=kwargs,
+        )[&#34;STEM images&#34;]
+    return STEM_images / nfph
 
 
 def CBED(
@@ -1190,9 +1267,6 @@ def CBED(
     thicknesses : float or array_like
         Thickness of the object in the calculation, will be rounded off to the
         nearest unit cell.
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -1206,12 +1280,13 @@ def CBED(
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     nfph : int, optional
         Number of iterations of the frozen phonon algorithm (25 by default)
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     beam_tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -1219,6 +1294,8 @@ def CBED(
     specimen_tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
         by shearing the propagator. Units given by input variable tilt_units.
+    df : float, optional
+        Probe defocus in Angstrom
     tilt_units : string, optional
         Units of specimen and beam tilt, can be &#39;mrad&#39;,&#39;pixels&#39; or &#39;invA&#39;
     aberrations : list, optional
@@ -1230,6 +1307,9 @@ def CBED(
         coordinate.
     subslicing : bool,optional
         Set to True to allow output at fractions of the unit cell thickness
+    nslices : int or array_like
+        Maximum slice number or set of slices to perform multislice algorithm
+        over.
     P : (n,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
@@ -1237,7 +1317,12 @@ def CBED(
     seed : int
         Seed for random number generator for generating transmission functions
         and frozen phonon passes. Useful for testing purposes
+    Returns
+    -------
+    CBED : (len(thicknesses,Y,X)) array_like
+        The requested convergent beam electron diffraction patterns
     &#34;&#34;&#34;
+    tdisable, tqdm = tqdm_handler(showProgress)
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -1269,9 +1354,7 @@ def CBED(
         )
 
     # Iteration over frozen phonon configurations
-    for _ in tqdm(
-        range(nfph), desc=&#34;Frozen phonon iteration&#34;, disable=not showProgress
-    ):
+    for _ in tqdm(range(nfph), desc=&#34;Frozen phonon iteration&#34;, disable=tdisable):
         # Make probe
         probe = focused_probe(
             gridshape,
@@ -1353,19 +1436,15 @@ def HRTEM(
     app : float
         Image-forming lens aperture in mrad, pass None for aperture-less imaging
     thicknesses : float or array_like
-    det : float
-        EELS aperture acceptance angle in mrad
-    thicknesses : float or array_like
         Thickness of the object in the calculation, will be rounded off to the
         nearest unit cell.
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
         should always be 1.0. For example, to slice the object into four equal
         sized slices pass [0.25,0.5,0.75,1.0]
+    df : float or array_like
+        Probe defocus or defocii (if array)
     device_type : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
@@ -1374,12 +1453,13 @@ def HRTEM(
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     nfph : int, optional
         Number of iterations of the frozen phonon algorithm (25 by default)
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     beam_tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -1389,16 +1469,24 @@ def HRTEM(
         by shearing the propagator. Units given by input variable tilt_units.
     tilt_units : string, optional
         Units of specimen and beam tilt, can be &#39;mrad&#39;,&#39;pixels&#39; or &#39;invA&#39;
-    subslicing : bool,optional
-        Set to True to allow output at fractions of the unit cell thickness
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated contrast transfer function.
+    subslicing : bool,optional
+        Set to True to allow output at fractions of the unit cell thickness
     P : (n,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like, optional
         Precomputed transmission functions
+    Returns
+    -------
+    result : (len(df), len(nslices), Y,X) array_like
+        Resulting HRTEM images, result will be cropped to the reciprocal space
+        bandwidth limit and in general the Y and X array size will be 2/3 of
+        the requested array
     &#34;&#34;&#34;
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -1445,9 +1533,7 @@ def HRTEM(
     output = np.zeros((len(defocii), len(nslices), *bw_limit_size))
 
     # Iteration over frozen phonon configurations
-    for _ in tqdm(
-        range(nfph), desc=&#34;Frozen phonon iteration&#34;, disable=not showProgress
-    ):
+    for _ in tqdm(range(nfph), desc=&#34;Frozen phonon iteration&#34;, disable=tdisable):
         probe = plane_wave_illumination(
             gridshape, rsize, eV, beam_tilt, tilt_units, qspace=True
         )
@@ -1533,8 +1619,8 @@ def EFTEM(
         interest
     epsilon : float
         Energy above ionization threshhold energy
-    df : float, optional
-        Probe defocus
+    df : float or array_like, optional
+        Probe defocus, 0 by default.
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -1546,8 +1632,8 @@ def EFTEM(
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
         calculation, if contr = 1.0 all ionization transitions will be inlcuded
@@ -1568,22 +1654,28 @@ def EFTEM(
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated probe.
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     ionization_cutoff : float
         Threshhold below which the contribution of certain ionizations will be
         ignored.
     Hn0 : (n,y,x) np.complex, optional
         Precalculated Hn0s ionization transition potentials, if not provided
-        these will be calculated. These must be in reciprocal space.
+        these will be calculated.
     P : (nslices,y,x) array_like, optional
         Precalculated multislice propagators, default is None which will mean
-        that these are calculated within the routine
+        that these are calculated within the routine.
     T : (nT,nslices,y,x) array_like, optional
         Precalculated multislice transmission functions, default is None which
-        will mean that these are calculated within the routine
+        will mean that these are calculated within the routine.
+    Returns
+    -------
+    result : (len(df),Y,X) array_like
+        The EFTEM images, if an array of defocus values is provided then a
+        defocus series will be provided.
     &#34;&#34;&#34;
-    from .Ionization import transition_potential_multislice
+    tdisable, tqdm = tqdm_handler(showProgress)
 
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
@@ -1635,11 +1727,8 @@ def EFTEM(
     result = np.zeros(ctfs.shape[:-1], dtype=torch_dtype_to_numpy(dtype))
 
     # Perform multislice simulation and return the tiled out result
-    for i in tqdm(
-        range(nfph),
-        desc=&#34;Frozen phonon iterations:&#34;,
-        disable=not showProgress,
-        position=0,
+    for _ in tqdm(
+        range(nfph), desc=&#34;Frozen phonon iterations:&#34;, disable=tdisable, position=0
     ):
         # Calculate propagator and transmission functions for multislice
         if P is None or T is None:
@@ -1692,7 +1781,8 @@ def STEM_EELS_PRISM(
     n,
     ell,
     epsilon,
-    # TODO implement defocus, this is not yet included
+    nfph=5,
+    aberrations=[],
     df=0,
     Hn0_crop=None,
     subslices=[1.0],
@@ -1702,6 +1792,9 @@ def STEM_EELS_PRISM(
     PRISM_factor=[1, 1],
     contr=0.95,
     dtype=torch.float32,
+    Hn0s=None,
+    showProgress=True,
+    do_reverse_multislice=True,
 ):
     &#34;&#34;&#34;
     Perform a STEM EELS simulation using the PRISM algorithm.
@@ -1737,12 +1830,11 @@ def STEM_EELS_PRISM(
         interest
     epsilon : float
         Energy above ionization threshhold energy
-
-    Keyword arguments
-    -----------------
-    df : float
+    nfph : int,optional
+        Number of frozen phonon iterations default is 5
+    df : float,optional
         Probe defocus
-    Hn0_crop : (2,) int array_like
+    Hn0_crop : (2,) int array_like, optional
         Cropping of the electron transition potential to speed up calculation
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
@@ -1755,8 +1847,8 @@ def STEM_EELS_PRISM(
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     PRISM_factor : int (2,) array_like, optional
         The PRISM &#34;interpolation factor&#34; this is the amount by which the
         scattering matrices are cropped in real space to speed up
@@ -1771,7 +1863,22 @@ def STEM_EELS_PRISM(
         included
     dtype : torch.dtype, optional
         Datatype of the simulation arrays, by default 32-bit floating point
+    Hn0s : (n,y,x) np.complex, optional
+        Precalculated Hn0s ionization transition potentials, if not provided
+        these will be calculated.
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
+    do_reverse_multislice : bool, optional
+        Set to False (True is default) to turn off the reverse multislice
+        optimization
+
+    Returns
+    -------
+    EELS_image : (nY,nX) np.ndarray
+        The calculated STEM EELS image
     &#34;&#34;&#34;
+    tdisable, tqdm = tqdm_handler(showProgress)
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -1785,63 +1892,25 @@ def STEM_EELS_PRISM(
     scan_shape = scan.shape[:2]
     nprobe_posn = np.prod(scan_shape)
 
-    # TODO enable a thickness series
-    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
-    P = make_propagators(gridshape, rsize, eV, subslices)
-    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
-
-    # Make the transmission functions for multislice
-    for i in range(nT):
-        T[i] = structure.make_transmission_functions(gridshape, eV, subslices, tiling)
-
     # Get the coordinates of the target atoms in a unit cell
-    tiled_structure = structure.tile(*tiling)
+    import copy
+
+    tiled_structure = copy.deepcopy(structure).tile(*tiling)
     coords = tiled_structure.atoms[tiled_structure.atoms[:, 3] == Ztarget][:, :3]
-
-    # Scattering matrix 1 propagates probe from surface of specimen to slice of
-    # interest
-    S1 = scattering_matrix(
-        rsize,
-        P,
-        T,
-        0,
-        eV,
-        app,
-        batch_size=5,
-        subslicing=True,
-        PRISM_factor=PRISM_factor,
-    )
-
-    # Scattering matrix 2 propagates probe from slice of ionization to exit surface
-    S2 = scattering_matrix(
-        rsize,
-        P,
-        T,
-        nslices * len(subslices),
-        eV,
-        app,
-        batch_size=5,
-        subslicing=True,
-        transposed=True,
-        PRISM_factor=PRISM_factor,
-    )
-    # Link the slices and seeds of both scattering matrices
-    S1.seed = S2.seed
+    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
 
     # Make ionization transition potentials
-    Hn0 = get_transitions(
-        Ztarget, n, ell, epsilon, eV, S1.stored_gridshape, rsize, order=1, contr=0.99
-    )
-    nstates = Hn0.shape[0]
-
-    if Hn0_crop is None:
-        Hn0_crop = [S1.stored_gridshape[i] for i in range(2)]
-    else:
-        Hn0_crop = [min(Hn0_crop[i], S1.stored_gridshape[i]) for i in range(2)]
-        Hn0 = np.fft.fft2(
-            np.fft.ifftshift(
-                crop(np.fft.fftshift(Hn0, axes=[-2, -1]), Hn0_crop), axes=[-2, -1]
-            )
+    if Hn0s is None:
+        Hn0s = get_transitions(
+            Ztarget,
+            n,
+            ell,
+            epsilon,
+            eV,
+            size_of_bandwidth_limited_array(gridshape),
+            rsize,
+            order=1,
+            contr=0.99,
         )
 
     # Make probe wavefunction vectors for scan
@@ -1850,110 +1919,214 @@ def STEM_EELS_PRISM(
         np.fft.fftfreq(gridshape[-2 + i], d=1 / gridshape[-2 + i]) for i in range(2)
     ]
 
-    scan_array = np.zeros((nprobe_posn, S1.S.shape[0]), dtype=np.complex)
+    # Electron wavelength
+    from .Probe import wavev, chi
 
-    # TODO implement aberrations and defocii
-    for i in range(S1.nbeams):
-        scan_array[:, i] = (
-            np.exp(-2 * np.pi * 1j * ky[S1.beams[0][i]] * scan[..., 0].ravel())
-            * np.exp(-2 * np.pi * 1j * kx[S1.beams[1][i]] * scan[..., 1].ravel())
-        ).ravel()
-
-    scan_array = cx_from_numpy(scan_array, dtype=S1.dtype, device=device)
+    lam = 1 / wavev(eV)
+    scan_array = None
 
     # Initialize Image
-    EELS_image = torch.zeros(nprobe_posn, dtype=S1.dtype, device=device)
+    EELS_image = torch.zeros(nprobe_posn, dtype=dtype, device=device)
 
-    total_slices = nslices * len(subslices)
-    for islice in tqdm(range(total_slices), desc=&#34;Slice&#34;):
+    # Loop over frozen phonons
 
-        # Propagate scattering matrices to this slice
-        if islice &gt; 0:
-            S1.Propagate(
-                islice, P, T, subslicing=True, batch_size=5, showProgress=False
-            )
-            S2.Propagate(
-                total_slices - islice,
-                P,
-                T,
-                subslicing=True,
-                batch_size=5,
-                showProgress=False,
-            )
+    for ifph in tqdm(
+        range(nfph), disable=tdisable, position=0, desc=&#34;Frozen phonon iteration&#34;
+    ):
 
-        # Flatten indices of second scattering matrix in preparation for
-        # indexing
-        S2.S = S2.S.reshape(S2.S.shape[0], np.product(S2.stored_gridshape), 2)
+        P, T = multislice_precursor(
+            structure,
+            gridshape,
+            eV,
+            subslices=subslices,
+            tiling=tiling,
+            device=device,
+            dtype=dtype,
+            showProgress=False,
+        )
 
-        # Work out which subslice of the crystal unit cell we are in
-        subslice = islice % S1.nsubslices
+        # Scattering matrix 1 propagates probe from surface of specimen to slice of
+        # interest
+        S1 = scattering_matrix(
+            rsize,
+            P,
+            T,
+            0,
+            eV,
+            app,
+            batch_size=5,
+            subslicing=True,
+            PRISM_factor=PRISM_factor,
+            showProgress=False,
+        )
 
-        # Get list of atoms within this slice
-        atomsinslice = coords[
-            np.logical_and(
-                coords[:, 2] &gt;= subslice / S1.nsubslices,
-                coords[:, 2] &lt; (subslice + 1) / S1.nsubslices,
-            ),
-            :2,
-        ]
+        # Scattering matrix 2 propagates probe from slice of ionization to exit surface
+        S2 = scattering_matrix(
+            rsize,
+            P,
+            T,
+            nslices * len(subslices),
+            eV,
+            det,
+            batch_size=5,
+            subslicing=True,
+            transposed=True,
+            PRISM_factor=PRISM_factor,
+            showProgress=False,
+        )
+        # Link the slices and seeds of both scattering matrices
+        S1.seed = S2.seed
 
-        # Iterate over atoms in this slice
-        for atom in tqdm(atomsinslice, &#34;Transitions in slice&#34;):
+        # On first iteration generate illumination vector and work out transition
+        # potential cropping
+        if ifph == 0:
+            scan_array = np.zeros((nprobe_posn, S1.S.shape[0]), dtype=np.complex)
 
-            windex = torch.from_numpy(
-                window_indices(atom, Hn0_crop, S1.stored_gridshape)
-            )
-
-            for i in range(nstates):
-                # Initialize matrix describing this transition event
-                SHn0 = torch.zeros(
-                    S1.S.shape[0], S2.S.shape[0], 2, dtype=S1.S.dtype, device=device
-                )
-
-                # Sub-pixel shift of Hn0
-                posn = atom * np.asarray(gridshape)
-                destination = np.remainder(posn, 1.0)
-                Hn0_ = np.fft.fftshift(
-                    fourier_shift(Hn0[i], destination, qspacein=True)
+            # TODO test aberrations and defocii
+            negtwopii = -2 * np.pi * 1j
+            for i in range(S1.nbeams):
+                ky_ = ky[S1.beams[0][i]]
+                kx_ = kx[S1.beams[1][i]]
+                k = np.hypot(ky_ / rsize[0], kx_ / rsize[1])
+                kphi = np.arctan2(ky_, kx_)
+                scan_array[:, i] = np.exp(
+                    negtwopii
+                    * (ky_ * scan[..., 0].ravel() + kx_ * scan[..., 1].ravel())
+                    - 1j * chi(k, kphi, lam, df, aberrations)
                 ).ravel()
+            # Normalize scan_array and convert to torch array
+            scan_array *= 1 / np.sqrt(np.sum(scan_array.shape[1]))
+            scan_array = cx_from_numpy(scan_array, dtype=dtype, device=device)
 
-                # Convert Hn0 to pytorch Tensor
-                Hn0_ = cx_from_numpy(Hn0_, dtype=S1.S.dtype, device=device)
+            if Hn0_crop is None:
+                Hn0_crop = [S1.stored_gridshape[i] // PRISM_factor[i] for i in range(2)]
+            else:
+                Hn0_crop = [
+                    min(H, S // P)
+                    for H, S, P in zip(Hn0_crop, S1.stored_gridshape, PRISM_factor)
+                ]
 
-                for i, S1component in enumerate(S1.S):
-                    # Multiplication of component of first scattering matrix
-                    # (takes probe it depth of ionization) with the transition
-                    # potential
-                    Hn0S1 = complex_mul(
-                        Hn0_, S1component.flatten(end_dim=-2)[windex, :]
+            # We achieve cropping of the Hn0 with some abuse of the fourier
+            # interpolation routine
+            from .utils import fourier_interpolate_2d
+
+            Hn0s = np.fft.fft2(
+                fourier_interpolate_2d(Hn0s, Hn0_crop, qspace_in=True, qspace_out=True)
+            )
+
+        total_slices = nslices * len(subslices)
+        for islice in tqdm(range(total_slices), desc=&#34;Slice&#34;, position=1):
+
+            # Propagate scattering matrices to this slice
+            if islice &gt; 0:
+                S1.Propagate(
+                    islice, P, T, subslicing=True, batch_size=5, showProgress=False
+                )
+                if do_reverse_multislice:
+                    S2.Propagate(
+                        total_slices - islice,
+                        P,
+                        T,
+                        subslicing=True,
+                        batch_size=5,
+                        showProgress=False,
+                    )
+                else:
+                    S2 = scattering_matrix(
+                        rsize,
+                        P,
+                        T,
+                        total_slices - islice,
+                        eV,
+                        det,
+                        batch_size=5,
+                        subslicing=True,
+                        transposed=True,
+                        PRISM_factor=PRISM_factor,
+                        showProgress=False,
+                        seed=S1.seed,
                     )
 
-                    # Matrix multiplication with second scattering matrix (takes
-                    # scattered electrons to EELS detector)
-                    SHn0[i] = complex_matmul(S2.S[:, windex], Hn0S1)
+            # Flatten indices of second scattering matrix in preparation for
+            # indexing
+            S2.S = S2.S.reshape(S2.S.shape[0], np.product(S2.stored_gridshape), 2)
 
-                # Build a mask such that only probe positions within a PRISM
-                # cropping region about the probe are evaluated
-                scan_mask = np.logical_and(
-                    (
-                        np.abs((atom[0] - scan[..., 0].ravel() + 0.5) % 1.0 - 0.5)
-                        &lt;= 1 / PRISM_factor[0] / 2
-                    ),
-                    (
-                        np.abs((atom[1] - scan[..., 1].ravel() + 0.5) % 1.0 - 0.5)
-                        &lt;= 1 / PRISM_factor[1] / 2
-                    ),
-                ).ravel()
+            # Work out which subslice of the crystal unit cell we are in
+            subslice = islice % S1.nsubslices
 
-                EELS_image[scan_mask] += torch.sum(
-                    amplitude(complex_matmul(scan_array[scan_mask], SHn0)), axis=1
-                )
+            # Get list of atoms within this slice
+            atomsinslice = coords[
+                np.logical_and(
+                    coords[:, 2] &gt;= subslice / S1.nsubslices,
+                    coords[:, 2] &lt; (subslice + 1) / S1.nsubslices,
+                ),
+                :2,
+            ]
 
-        # Reshape scattering matrix S2 for propagation
-        S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape, 2))
+            # Iterate over atoms in this slice
+            for atom in tqdm(
+                atomsinslice, &#34;Transitions in slice&#34;, disable=tdisable, position=2
+            ):
+
+                windex = torch.from_numpy(
+                    window_indices(atom, Hn0_crop, S1.stored_gridshape)
+                ).to(device)
+
+                for Hn0 in Hn0s:
+                    # Initialize matrix describing this transition event
+                    SHn0 = torch.zeros(
+                        S2.S.shape[0], S1.S.shape[0], 2, dtype=S1.S.dtype, device=device
+                    )
+
+                    # Sub-pixel shift of Hn0
+                    posn = atom * np.asarray(S1.stored_gridshape)
+                    destination = np.remainder(posn, 1.0)
+                    Hn0_ = np.fft.fftshift(
+                        fourier_shift(Hn0, destination, qspacein=True)
+                    ).ravel()
+
+                    # Convert Hn0 to pytorch Tensor
+                    Hn0_ = cx_from_numpy(Hn0_, dtype=S1.S.dtype, device=device)
+
+                    for i, S1component in enumerate(S1.S):
+                        # Multiplication of component of first scattering matrix
+                        # (takes probe it depth of ionization) with the transition
+                        # potential
+                        Hn0S1 = complex_mul(
+                            Hn0_, S1component.flatten(end_dim=-2)[windex]
+                        )
+
+                        # Matrix multiplication with second scattering matrix (takes
+                        # scattered electrons to EELS detector)
+                        SHn0[:, i] = complex_matmul(S2.S[:, windex], Hn0S1)
+
+                    # Build a mask such that only probe positions within a PRISM
+                    # cropping region about the transition are evaluated
+                    scan_mask = np.logical_and(
+                        (
+                            np.abs((scan[..., 0].ravel() - atom[0] + 0.5) % 1.0 - 0.5)
+                            &lt;= 1 / PRISM_factor[0] / 2
+                        ),
+                        (
+                            np.abs((scan[..., 1].ravel() - atom[1] + 0.5) % 1.0 - 0.5)
+                            &lt;= 1 / PRISM_factor[1] / 2
+                        ),
+                    ).ravel()
+
+                    EELS_image[scan_mask] += torch.sum(
+                        amplitude(
+                            complex_matmul(
+                                SHn0, scan_array[scan_mask, :].transpose(0, 1)
+                            )
+                        ),
+                        axis=0,
+                    )
+
+            # Reshape scattering matrix S2 for propagation
+            S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape, 2))
 
     # Move EELS_image to cpu and numpy and then reshape to rectangular grid
-    return EELS_image.cpu().numpy().reshape(scan_shape)</code></pre>
+    return EELS_image.cpu().numpy().reshape(scan_shape) / nfph</code></pre>
 </details>
 </section>
 <section>
@@ -1984,52 +2157,62 @@ if a small enough aperture (app) is selected</p>
 <dt><strong><code>thicknesses</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
 <dd>Thickness of the object in the calculation, will be rounded off to the
 nearest unit cell.</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>subslices : array_like, optional
-A one dimensional array-like object containing the depths (in fractional
+<dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>A one dimensional array-like object containing the depths (in fractional
 coordinates) at which the object will be subsliced. The last entry
 should always be 1.0. For example, to slice the object into four equal
-sized slices pass [0.25,0.5,0.75,1.0]
-device_type : torch.device, optional
-torch.device object which will determine which device (CPU or GPU) the
-calculations will run on
-dtype : torch.dtype, optional
-Datatype of the simulation arrays, by default 32-bit floating point
-tiling : (2,) array_like, optional
-Tiling of a repeat unit cell on simulation grid
-nT : int, optional
-Number of transmission functions generated to and then selected from
-in the frozen phonon algorithm
-nfph : int, optional
-Number of iterations of the frozen phonon algorithm (25 by default)
-showProgress : bool, optional
-Pass False to disable progress readout
-beam_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
+sized slices pass [0.25,0.5,0.75,1.0]</dd>
+<dt><strong><code>device_type</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on</dd>
+<dt><strong><code>dtype</code></strong> :&ensp;<code>torch.dtype</code>, optional</dt>
+<dd>Datatype of the simulation arrays, by default 32-bit floating point</dd>
+<dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Tiling of a repeat unit cell on simulation grid</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>nfph</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of iterations of the frozen phonon algorithm (25 by default)</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>str</code> or <code>bool</code>, optional</dt>
+<dd>Pass False to disable progress readout, pass 'notebook' to get correct
+progress bar behaviour inside a jupyter notebook</dd>
+<dt><strong><code>beam_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
 periodicity of the wave function at the boundaries this tilt is rounded
-to the nearest pixel value.
-specimen_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
-by shearing the propagator. Units given by input variable tilt_units.
-tilt_units : string, optional
-Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'
-aberrations : list, optional
-A list containing a set of the class aberration, pass an empty list for
-an unaberrated probe.
-probe_posn : array_like, optional
-Probe position as a fraction of the unit-cell, by default the probe will
+to the nearest pixel value.</dd>
+<dt><strong><code>specimen_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
+by shearing the propagator. Units given by input variable tilt_units.</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>Probe defocus in Angstrom</dd>
+<dt><strong><code>tilt_units</code></strong> :&ensp;<code>string</code>, optional</dt>
+<dd>Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list containing a set of the class aberration, pass an empty list for
+an unaberrated probe.</dd>
+<dt><strong><code>probe_posn</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Probe position as a fraction of the unit-cell, by default the probe will
 be in the upper-left corner of the simulation grid. This is the [0,0]
-coordinate.
-subslicing : bool,optional
-Set to True to allow output at fractions of the unit cell thickness
-P : (n,Y,X) array_like, optional
-Precomputed Fresnel free-space propagators
-T : (n,Y,X) array_like
-Precomputed transmission functions
-seed : int
-Seed for random number generator for generating transmission functions
-and frozen phonon passes. Useful for testing purposes</p></div>
+coordinate.</dd>
+<dt><strong><code>subslicing</code></strong> :&ensp;<code>bool</code>,optional</dt>
+<dd>Set to True to allow output at fractions of the unit cell thickness</dd>
+<dt><strong><code>nslices</code></strong> :&ensp;<code>int</code> or <code>array_like</code></dt>
+<dd>Maximum slice number or set of slices to perform multislice algorithm
+over.</dd>
+<dt><strong><code>P</code></strong> :&ensp;<code>(n,Y,X) array_like</code>, optional</dt>
+<dd>Precomputed Fresnel free-space propagators</dd>
+<dt><strong><code>T</code></strong> :&ensp;<code>(n,Y,X) array_like</code></dt>
+<dd>Precomputed transmission functions</dd>
+<dt><strong><code>seed</code></strong> :&ensp;<code>int</code></dt>
+<dd>Seed for random number generator for generating transmission functions
+and frozen phonon passes. Useful for testing purposes</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>CBED</code></strong> :&ensp;<code>(len(thicknesses,Y,X)) array_like</code></dt>
+<dd>The requested convergent beam electron diffraction patterns</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2079,9 +2262,6 @@ and frozen phonon passes. Useful for testing purposes</p></div>
     thicknesses : float or array_like
         Thickness of the object in the calculation, will be rounded off to the
         nearest unit cell.
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -2095,12 +2275,13 @@ and frozen phonon passes. Useful for testing purposes</p></div>
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     nfph : int, optional
         Number of iterations of the frozen phonon algorithm (25 by default)
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     beam_tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -2108,6 +2289,8 @@ and frozen phonon passes. Useful for testing purposes</p></div>
     specimen_tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
         by shearing the propagator. Units given by input variable tilt_units.
+    df : float, optional
+        Probe defocus in Angstrom
     tilt_units : string, optional
         Units of specimen and beam tilt, can be &#39;mrad&#39;,&#39;pixels&#39; or &#39;invA&#39;
     aberrations : list, optional
@@ -2119,6 +2302,9 @@ and frozen phonon passes. Useful for testing purposes</p></div>
         coordinate.
     subslicing : bool,optional
         Set to True to allow output at fractions of the unit cell thickness
+    nslices : int or array_like
+        Maximum slice number or set of slices to perform multislice algorithm
+        over.
     P : (n,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
@@ -2126,7 +2312,12 @@ and frozen phonon passes. Useful for testing purposes</p></div>
     seed : int
         Seed for random number generator for generating transmission functions
         and frozen phonon passes. Useful for testing purposes
+    Returns
+    -------
+    CBED : (len(thicknesses,Y,X)) array_like
+        The requested convergent beam electron diffraction patterns
     &#34;&#34;&#34;
+    tdisable, tqdm = tqdm_handler(showProgress)
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -2158,9 +2349,7 @@ and frozen phonon passes. Useful for testing purposes</p></div>
         )
 
     # Iteration over frozen phonon configurations
-    for _ in tqdm(
-        range(nfph), desc=&#34;Frozen phonon iteration&#34;, disable=not showProgress
-    ):
+    for _ in tqdm(range(nfph), desc=&#34;Frozen phonon iteration&#34;, disable=tdisable):
         # Make probe
         probe = focused_probe(
             gridshape,
@@ -2231,8 +2420,8 @@ shell, 2 for L shell etc.)</dd>
 interest</dd>
 <dt><strong><code>epsilon</code></strong> :&ensp;<code>float</code></dt>
 <dd>Energy above ionization threshhold energy</dd>
-<dt><strong><code>df</code></strong> :&ensp;<code>float</code>, optional</dt>
-<dd>Probe defocus</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code> or <code>array_like</code>, optional</dt>
+<dd>Probe defocus, 0 by default.</dd>
 <dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
 <dd>A one dimensional array-like object containing the depths (in fractional
 coordinates) at which the object will be subsliced. The last entry
@@ -2244,8 +2433,8 @@ calculations will run on</dd>
 <dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
 <dd>Tiling of a repeat unit cell on simulation grid</dd>
 <dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
-<dd>Number of transmission functions generated to and then selected from
-in the frozen phonon algorithm</dd>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
 <dt><strong><code>contr</code></strong> :&ensp;<code>float</code>, optional</dt>
 <dd>A threshhold for inclusion of ionization transitions within the
 calculation, if contr = 1.0 all ionization transitions will be inlcuded
@@ -2266,20 +2455,27 @@ by shearing the propagator. Units given by input variable tilt_units.</dd>
 <dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
 <dd>A list containing a set of the class aberration, pass an empty list for
 an unaberrated probe.</dd>
-<dt><strong><code>showProgress</code></strong> :&ensp;<code>bool</code>, optional</dt>
-<dd>Pass False to disable progress readout</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>str</code> or <code>bool</code>, optional</dt>
+<dd>Pass False to disable progress readout, pass 'notebook' to get correct
+progress bar behaviour inside a jupyter notebook</dd>
 <dt><strong><code>ionization_cutoff</code></strong> :&ensp;<code>float</code></dt>
 <dd>Threshhold below which the contribution of certain ionizations will be
 ignored.</dd>
 <dt><strong><code>Hn0</code></strong> :&ensp;<code>(n,y,x) np.complex</code>, optional</dt>
 <dd>Precalculated Hn0s ionization transition potentials, if not provided
-these will be calculated. These must be in reciprocal space.</dd>
+these will be calculated.</dd>
 <dt><strong><code>P</code></strong> :&ensp;<code>(nslices,y,x) array_like</code>, optional</dt>
 <dd>Precalculated multislice propagators, default is None which will mean
-that these are calculated within the routine</dd>
+that these are calculated within the routine.</dd>
 <dt><strong><code>T</code></strong> :&ensp;<code>(nT,nslices,y,x) array_like</code>, optional</dt>
 <dd>Precalculated multislice transmission functions, default is None which
-will mean that these are calculated within the routine</dd>
+will mean that these are calculated within the routine.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>result</code></strong> :&ensp;<code>(len(df),Y,X) array_like</code></dt>
+<dd>The EFTEM images, if an array of defocus values is provided then a
+defocus series will be provided.</dd>
 </dl></div>
 <details class="source">
 <summary>
@@ -2338,8 +2534,8 @@ will mean that these are calculated within the routine</dd>
         interest
     epsilon : float
         Energy above ionization threshhold energy
-    df : float, optional
-        Probe defocus
+    df : float or array_like, optional
+        Probe defocus, 0 by default.
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -2351,8 +2547,8 @@ will mean that these are calculated within the routine</dd>
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
         calculation, if contr = 1.0 all ionization transitions will be inlcuded
@@ -2373,22 +2569,28 @@ will mean that these are calculated within the routine</dd>
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated probe.
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     ionization_cutoff : float
         Threshhold below which the contribution of certain ionizations will be
         ignored.
     Hn0 : (n,y,x) np.complex, optional
         Precalculated Hn0s ionization transition potentials, if not provided
-        these will be calculated. These must be in reciprocal space.
+        these will be calculated.
     P : (nslices,y,x) array_like, optional
         Precalculated multislice propagators, default is None which will mean
-        that these are calculated within the routine
+        that these are calculated within the routine.
     T : (nT,nslices,y,x) array_like, optional
         Precalculated multislice transmission functions, default is None which
-        will mean that these are calculated within the routine
+        will mean that these are calculated within the routine.
+    Returns
+    -------
+    result : (len(df),Y,X) array_like
+        The EFTEM images, if an array of defocus values is provided then a
+        defocus series will be provided.
     &#34;&#34;&#34;
-    from .Ionization import transition_potential_multislice
+    tdisable, tqdm = tqdm_handler(showProgress)
 
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
@@ -2440,11 +2642,8 @@ will mean that these are calculated within the routine</dd>
     result = np.zeros(ctfs.shape[:-1], dtype=torch_dtype_to_numpy(dtype))
 
     # Perform multislice simulation and return the tiled out result
-    for i in tqdm(
-        range(nfph),
-        desc=&#34;Frozen phonon iterations:&#34;,
-        disable=not showProgress,
-        position=0,
+    for _ in tqdm(
+        range(nfph), desc=&#34;Frozen phonon iterations:&#34;, disable=tdisable, position=0
     ):
         # Calculate propagator and transmission functions for multislice
         if P is None or T is None:
@@ -2503,51 +2702,56 @@ will mean that these are calculated within the routine</dd>
 <dt><strong><code>app</code></strong> :&ensp;<code>float</code></dt>
 <dd>Image-forming lens aperture in mrad, pass None for aperture-less imaging</dd>
 <dt><strong><code>thicknesses</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
-<dd>&nbsp;</dd>
-<dt><strong><code>det</code></strong> :&ensp;<code>float</code></dt>
-<dd>EELS aperture acceptance angle in mrad</dd>
-<dt><strong><code>thicknesses</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
 <dd>Thickness of the object in the calculation, will be rounded off to the
 nearest unit cell.</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>subslices : array_like, optional
-A one dimensional array-like object containing the depths (in fractional
+<dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>A one dimensional array-like object containing the depths (in fractional
 coordinates) at which the object will be subsliced. The last entry
 should always be 1.0. For example, to slice the object into four equal
-sized slices pass [0.25,0.5,0.75,1.0]
-device_type : torch.device, optional
-torch.device object which will determine which device (CPU or GPU) the
-calculations will run on
-dtype : torch.dtype, optional
-Datatype of the simulation arrays, by default 32-bit floating point
-tiling : (2,) array_like, optional
-Tiling of a repeat unit cell on simulation grid
-nT : int, optional
-Number of transmission functions generated to and then selected from
-in the frozen phonon algorithm
-nfph : int, optional
-Number of iterations of the frozen phonon algorithm (25 by default)
-showProgress : bool, optional
-Pass False to disable progress readout
-beam_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
+sized slices pass [0.25,0.5,0.75,1.0]</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
+<dd>Probe defocus or defocii (if array)</dd>
+<dt><strong><code>device_type</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on</dd>
+<dt><strong><code>dtype</code></strong> :&ensp;<code>torch.dtype</code>, optional</dt>
+<dd>Datatype of the simulation arrays, by default 32-bit floating point</dd>
+<dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Tiling of a repeat unit cell on simulation grid</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>nfph</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of iterations of the frozen phonon algorithm (25 by default)</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>str</code> or <code>bool</code>, optional</dt>
+<dd>Pass False to disable progress readout, pass 'notebook' to get correct
+progress bar behaviour inside a jupyter notebook</dd>
+<dt><strong><code>beam_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
 periodicity of the wave function at the boundaries this tilt is rounded
-to the nearest pixel value.
-specimen_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
-by shearing the propagator. Units given by input variable tilt_units.
-tilt_units : string, optional
-Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'
-subslicing : bool,optional
-Set to True to allow output at fractions of the unit cell thickness
-aberrations : list, optional
-A list containing a set of the class aberration, pass an empty list for
-an unaberrated contrast transfer function.
-P : (n,Y,X) array_like, optional
-Precomputed Fresnel free-space propagators
-T : (n,Y,X) array_like, optional
-Precomputed transmission functions</p></div>
+to the nearest pixel value.</dd>
+<dt><strong><code>specimen_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
+by shearing the propagator. Units given by input variable tilt_units.</dd>
+<dt><strong><code>tilt_units</code></strong> :&ensp;<code>string</code>, optional</dt>
+<dd>Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list containing a set of the class aberration, pass an empty list for
+an unaberrated contrast transfer function.</dd>
+<dt><strong><code>subslicing</code></strong> :&ensp;<code>bool</code>,optional</dt>
+<dd>Set to True to allow output at fractions of the unit cell thickness</dd>
+<dt><strong><code>P</code></strong> :&ensp;<code>(n,Y,X) array_like</code>, optional</dt>
+<dd>Precomputed Fresnel free-space propagators</dd>
+<dt><strong><code>T</code></strong> :&ensp;<code>(n,Y,X) array_like</code>, optional</dt>
+<dd>Precomputed transmission functions</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>result</code></strong> :&ensp;<code>(len(df), len(nslices), Y,X) array_like</code></dt>
+<dd>Resulting HRTEM images, result will be cropped to the reciprocal space
+bandwidth limit and in general the Y and X array size will be 2/3 of
+the requested array</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2590,19 +2794,15 @@ Precomputed transmission functions</p></div>
     app : float
         Image-forming lens aperture in mrad, pass None for aperture-less imaging
     thicknesses : float or array_like
-    det : float
-        EELS aperture acceptance angle in mrad
-    thicknesses : float or array_like
         Thickness of the object in the calculation, will be rounded off to the
         nearest unit cell.
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
         should always be 1.0. For example, to slice the object into four equal
         sized slices pass [0.25,0.5,0.75,1.0]
+    df : float or array_like
+        Probe defocus or defocii (if array)
     device_type : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
@@ -2611,12 +2811,13 @@ Precomputed transmission functions</p></div>
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     nfph : int, optional
         Number of iterations of the frozen phonon algorithm (25 by default)
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     beam_tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -2626,16 +2827,24 @@ Precomputed transmission functions</p></div>
         by shearing the propagator. Units given by input variable tilt_units.
     tilt_units : string, optional
         Units of specimen and beam tilt, can be &#39;mrad&#39;,&#39;pixels&#39; or &#39;invA&#39;
-    subslicing : bool,optional
-        Set to True to allow output at fractions of the unit cell thickness
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated contrast transfer function.
+    subslicing : bool,optional
+        Set to True to allow output at fractions of the unit cell thickness
     P : (n,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like, optional
         Precomputed transmission functions
+    Returns
+    -------
+    result : (len(df), len(nslices), Y,X) array_like
+        Resulting HRTEM images, result will be cropped to the reciprocal space
+        bandwidth limit and in general the Y and X array size will be 2/3 of
+        the requested array
     &#34;&#34;&#34;
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -2682,9 +2891,7 @@ Precomputed transmission functions</p></div>
     output = np.zeros((len(defocii), len(nslices), *bw_limit_size))
 
     # Iteration over frozen phonon configurations
-    for _ in tqdm(
-        range(nfph), desc=&#34;Frozen phonon iteration&#34;, disable=not showProgress
-    ):
+    for _ in tqdm(range(nfph), desc=&#34;Frozen phonon iteration&#34;, disable=tdisable):
         probe = plane_wave_illumination(
             gridshape, rsize, eV, beam_tilt, tilt_units, qspace=True
         )
@@ -2718,10 +2925,52 @@ Precomputed transmission functions</p></div>
 </details>
 </dd>
 <dt id="pyms.Premixed_routines.PACBED"><code class="name flex">
-<span>def <span class="ident">PACBED</span></span>(<span>structure, gridshape, eV, app, thicknesses, subslices, nfph, tiling=[1, 1], device=None, nT=5, subslicing=False, T=None, P=None)</span>
+<span>def <span class="ident">PACBED</span></span>(<span>structure, gridshape, eV, app, thicknesses, subslices, nfph, tiling=[1, 1], device=None, nT=5, subslicing=False, P=None, T=None)</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Calculate position averaged convergent electron diffraction (PACBED) patterns.</p></div>
+<div class="desc"><p>Calculate position averaged convergent electron diffraction (PACBED) patterns.</p>
+<p>This is a convenience function, PACBEDs can also be calculated in the
+<code><a title="pyms.Premixed_routines.STEM_multislice" href="#pyms.Premixed_routines.STEM_multislice">STEM_multislice()</a></code> function</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>structure</code></strong> :&ensp;<code><a title="pyms.structure_routines.structure" href="structure_routines.html#pyms.structure_routines.structure">structure</a></code></dt>
+<dd>The structure of interest</dd>
+<dt><strong><code>gridshape</code></strong> :&ensp;<code>(2,) array_like</code></dt>
+<dd>Pixel size of the simulation grid</dd>
+<dt><strong><code>eV</code></strong> :&ensp;<code>float</code></dt>
+<dd>Probe energy in electron volts</dd>
+<dt><strong><code>app</code></strong> :&ensp;<code>float</code></dt>
+<dd>Objective aperture in mrad</dd>
+<dt><strong><code>thicknesses</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
+<dd>Thickness of the calculation</dd>
+<dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>A one dimensional array-like object containing the depths (in fractional
+coordinates) at which the object will be subsliced. The last entry
+should always be 1.0. For example, to slice the object into four equal
+sized slices pass [0.25,0.5,0.75,1.0]</dd>
+<dt><strong><code>nfph</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of iterations of the frozen phonon algorithm (25 by default, which
+is a good rule of thumb for convergence)</dd>
+<dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Tiling of a repeat unit cell on simulation grid</dd>
+<dt><strong><code>device</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>subslicing</code></strong> :&ensp;<code>bool</code>,optional</dt>
+<dd>Set to True to allow output at fractions of the unit cell thickness</dd>
+<dt><strong><code>P</code></strong> :&ensp;<code>(nslices,Y,X) array_like</code>, optional</dt>
+<dd>Precomputed Fresnel free-space propagators</dd>
+<dt><strong><code>T</code></strong> :&ensp;<code>(nT,nslices,Y,X) array_like</code></dt>
+<dd>Precomputed transmission functions</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>result</code></strong> :&ensp;<code>(len(nslices),Y,X) np.ndarray</code></dt>
+<dd>The requested PACBED simulation</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2738,10 +2987,54 @@ Precomputed transmission functions</p></div>
     device=None,
     nT=5,
     subslicing=False,
-    T=None,
     P=None,
+    T=None,
 ):
-    &#34;&#34;&#34;Calculate position averaged convergent electron diffraction (PACBED) patterns.&#34;&#34;&#34;
+    &#34;&#34;&#34;
+    Calculate position averaged convergent electron diffraction (PACBED) patterns.
+
+    This is a convenience function, PACBEDs can also be calculated in the
+    `STEM_multislice` function
+
+    Parameters
+    ----------
+    structure : pyms.structure_routines.structure
+        The structure of interest
+    gridshape : (2,) array_like
+        Pixel size of the simulation grid
+    eV : float
+        Probe energy in electron volts
+    app : float
+        Objective aperture in mrad
+    thicknesses : float or array_like
+        Thickness of the calculation
+    subslices : array_like, optional
+        A one dimensional array-like object containing the depths (in fractional
+        coordinates) at which the object will be subsliced. The last entry
+        should always be 1.0. For example, to slice the object into four equal
+        sized slices pass [0.25,0.5,0.75,1.0]
+    nfph : int, optional
+        Number of iterations of the frozen phonon algorithm (25 by default, which
+        is a good rule of thumb for convergence)
+    tiling : (2,) array_like, optional
+        Tiling of a repeat unit cell on simulation grid
+    device : torch.device, optional
+        torch.device object which will determine which device (CPU or GPU) the
+        calculations will run on
+    nT : int, optional
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
+    subslicing : bool,optional
+        Set to True to allow output at fractions of the unit cell thickness
+    P : (nslices,Y,X) array_like, optional
+        Precomputed Fresnel free-space propagators
+    T : (nT,nslices,Y,X) array_like
+        Precomputed transmission functions
+    Returns
+    -------
+    result : (len(nslices),Y,X) np.ndarray
+        The requested PACBED simulation
+    &#34;&#34;&#34;
     # Sampling of PACBED is half that required for a STEM image
     scan_posn = generate_STEM_raster(
         structure.unitcell[:2] * np.asarray(tiling) / 2, eV, app, tiling=tiling
@@ -2769,7 +3062,7 @@ Precomputed transmission functions</p></div>
 </details>
 </dd>
 <dt id="pyms.Premixed_routines.STEM_EELS_PRISM"><code class="name flex">
-<span>def <span class="ident">STEM_EELS_PRISM</span></span>(<span>structure, gridshape, eV, app, det, thicknesses, Ztarget, n, ell, epsilon, df=0, Hn0_crop=None, subslices=[1.0], device_type=None, tiling=[1, 1], nT=5, PRISM_factor=[1, 1], contr=0.95, dtype=torch.float32)</span>
+<span>def <span class="ident">STEM_EELS_PRISM</span></span>(<span>structure, gridshape, eV, app, det, thicknesses, Ztarget, n, ell, epsilon, nfph=5, aberrations=[], df=0, Hn0_crop=None, subslices=[1.0], device_type=None, tiling=[1, 1], nT=5, PRISM_factor=[1, 1], contr=0.95, dtype=torch.float32, Hn0s=None, showProgress=True, do_reverse_multislice=True)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Perform a STEM EELS simulation using the PRISM algorithm.</p>
@@ -2803,39 +3096,54 @@ shell, 2 for L shell etc.)</dd>
 interest</dd>
 <dt><strong><code>epsilon</code></strong> :&ensp;<code>float</code></dt>
 <dd>Energy above ionization threshhold energy</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>df : float
-Probe defocus
-Hn0_crop : (2,) int array_like
-Cropping of the electron transition potential to speed up calculation
-subslices : array_like, optional
-A one dimensional array-like object containing the depths (in fractional
+<dt><strong><code>nfph</code></strong> :&ensp;<code>int</code>,optional</dt>
+<dd>Number of frozen phonon iterations default is 5</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code>,optional</dt>
+<dd>Probe defocus</dd>
+<dt><strong><code>Hn0_crop</code></strong> :&ensp;<code>(2,) int array_like</code>, optional</dt>
+<dd>Cropping of the electron transition potential to speed up calculation</dd>
+<dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>A one dimensional array-like object containing the depths (in fractional
 coordinates) at which the object will be subsliced. The last entry
 should always be 1.0. For example, to slice the object into four equal
-sized slices pass [0.25,0.5,0.75,1.0]
-device_type : torch.device, optional
-torch.device object which will determine which device (CPU or GPU) the
-calculations will run on
-tiling : (2,) array_like, optional
-Tiling of a repeat unit cell on simulation grid
-nT : int, optional
-Number of transmission functions generated to and then selected from
-in the frozen phonon algorithm
-PRISM_factor : int (2,) array_like, optional
-The PRISM "interpolation factor" this is the amount by which the
+sized slices pass [0.25,0.5,0.75,1.0]</dd>
+<dt><strong><code>device_type</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on</dd>
+<dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Tiling of a repeat unit cell on simulation grid</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>PRISM_factor</code></strong> :&ensp;<code>int (2,) array_like</code>, optional</dt>
+<dd>The PRISM "interpolation factor" this is the amount by which the
 scattering matrices are cropped in real space to speed up
 calculations see Ophus, Colin. "A fast image simulation algorithm
 for scanning transmission electron microscopy." Advanced structural
-and chemical imaging 3.1 (2017): 13 for details on this.
-contr : float, optional
-A threshhold for inclusion of ionization transitions within the
+and chemical imaging 3.1 (2017): 13 for details on this.</dd>
+<dt><strong><code>contr</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>A threshhold for inclusion of ionization transitions within the
 calculation, if contr = 1.0 all ionization transitions will be inlcuded
 in the simulation otherwise only the transitions that make up a
 fraction equal to contr of the total ionization transitions will be
-included
-dtype : torch.dtype, optional
-Datatype of the simulation arrays, by default 32-bit floating point</p></div>
+included</dd>
+<dt><strong><code>dtype</code></strong> :&ensp;<code>torch.dtype</code>, optional</dt>
+<dd>Datatype of the simulation arrays, by default 32-bit floating point</dd>
+<dt><strong><code>Hn0s</code></strong> :&ensp;<code>(n,y,x) np.complex</code>, optional</dt>
+<dd>Precalculated Hn0s ionization transition potentials, if not provided
+these will be calculated.</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>str</code> or <code>bool</code>, optional</dt>
+<dd>Pass False to disable progress readout, pass 'notebook' to get correct
+progress bar behaviour inside a jupyter notebook</dd>
+<dt><strong><code>do_reverse_multislice</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>Set to False (True is default) to turn off the reverse multislice
+optimization</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>EELS_image</code></strong> :&ensp;<code>(nY,nX) np.ndarray</code></dt>
+<dd>The calculated STEM EELS image</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2851,7 +3159,8 @@ Datatype of the simulation arrays, by default 32-bit floating point</p></div>
     n,
     ell,
     epsilon,
-    # TODO implement defocus, this is not yet included
+    nfph=5,
+    aberrations=[],
     df=0,
     Hn0_crop=None,
     subslices=[1.0],
@@ -2861,6 +3170,9 @@ Datatype of the simulation arrays, by default 32-bit floating point</p></div>
     PRISM_factor=[1, 1],
     contr=0.95,
     dtype=torch.float32,
+    Hn0s=None,
+    showProgress=True,
+    do_reverse_multislice=True,
 ):
     &#34;&#34;&#34;
     Perform a STEM EELS simulation using the PRISM algorithm.
@@ -2896,12 +3208,11 @@ Datatype of the simulation arrays, by default 32-bit floating point</p></div>
         interest
     epsilon : float
         Energy above ionization threshhold energy
-
-    Keyword arguments
-    -----------------
-    df : float
+    nfph : int,optional
+        Number of frozen phonon iterations default is 5
+    df : float,optional
         Probe defocus
-    Hn0_crop : (2,) int array_like
+    Hn0_crop : (2,) int array_like, optional
         Cropping of the electron transition potential to speed up calculation
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
@@ -2914,8 +3225,8 @@ Datatype of the simulation arrays, by default 32-bit floating point</p></div>
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     PRISM_factor : int (2,) array_like, optional
         The PRISM &#34;interpolation factor&#34; this is the amount by which the
         scattering matrices are cropped in real space to speed up
@@ -2930,7 +3241,22 @@ Datatype of the simulation arrays, by default 32-bit floating point</p></div>
         included
     dtype : torch.dtype, optional
         Datatype of the simulation arrays, by default 32-bit floating point
+    Hn0s : (n,y,x) np.complex, optional
+        Precalculated Hn0s ionization transition potentials, if not provided
+        these will be calculated.
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
+    do_reverse_multislice : bool, optional
+        Set to False (True is default) to turn off the reverse multislice
+        optimization
+
+    Returns
+    -------
+    EELS_image : (nY,nX) np.ndarray
+        The calculated STEM EELS image
     &#34;&#34;&#34;
+    tdisable, tqdm = tqdm_handler(showProgress)
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -2944,63 +3270,25 @@ Datatype of the simulation arrays, by default 32-bit floating point</p></div>
     scan_shape = scan.shape[:2]
     nprobe_posn = np.prod(scan_shape)
 
-    # TODO enable a thickness series
-    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
-    P = make_propagators(gridshape, rsize, eV, subslices)
-    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
-
-    # Make the transmission functions for multislice
-    for i in range(nT):
-        T[i] = structure.make_transmission_functions(gridshape, eV, subslices, tiling)
-
     # Get the coordinates of the target atoms in a unit cell
-    tiled_structure = structure.tile(*tiling)
+    import copy
+
+    tiled_structure = copy.deepcopy(structure).tile(*tiling)
     coords = tiled_structure.atoms[tiled_structure.atoms[:, 3] == Ztarget][:, :3]
-
-    # Scattering matrix 1 propagates probe from surface of specimen to slice of
-    # interest
-    S1 = scattering_matrix(
-        rsize,
-        P,
-        T,
-        0,
-        eV,
-        app,
-        batch_size=5,
-        subslicing=True,
-        PRISM_factor=PRISM_factor,
-    )
-
-    # Scattering matrix 2 propagates probe from slice of ionization to exit surface
-    S2 = scattering_matrix(
-        rsize,
-        P,
-        T,
-        nslices * len(subslices),
-        eV,
-        app,
-        batch_size=5,
-        subslicing=True,
-        transposed=True,
-        PRISM_factor=PRISM_factor,
-    )
-    # Link the slices and seeds of both scattering matrices
-    S1.seed = S2.seed
+    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
 
     # Make ionization transition potentials
-    Hn0 = get_transitions(
-        Ztarget, n, ell, epsilon, eV, S1.stored_gridshape, rsize, order=1, contr=0.99
-    )
-    nstates = Hn0.shape[0]
-
-    if Hn0_crop is None:
-        Hn0_crop = [S1.stored_gridshape[i] for i in range(2)]
-    else:
-        Hn0_crop = [min(Hn0_crop[i], S1.stored_gridshape[i]) for i in range(2)]
-        Hn0 = np.fft.fft2(
-            np.fft.ifftshift(
-                crop(np.fft.fftshift(Hn0, axes=[-2, -1]), Hn0_crop), axes=[-2, -1]
-            )
+    if Hn0s is None:
+        Hn0s = get_transitions(
+            Ztarget,
+            n,
+            ell,
+            epsilon,
+            eV,
+            size_of_bandwidth_limited_array(gridshape),
+            rsize,
+            order=1,
+            contr=0.99,
         )
 
     # Make probe wavefunction vectors for scan
@@ -3009,114 +3297,218 @@ Datatype of the simulation arrays, by default 32-bit floating point</p></div>
         np.fft.fftfreq(gridshape[-2 + i], d=1 / gridshape[-2 + i]) for i in range(2)
     ]
 
-    scan_array = np.zeros((nprobe_posn, S1.S.shape[0]), dtype=np.complex)
+    # Electron wavelength
+    from .Probe import wavev, chi
 
-    # TODO implement aberrations and defocii
-    for i in range(S1.nbeams):
-        scan_array[:, i] = (
-            np.exp(-2 * np.pi * 1j * ky[S1.beams[0][i]] * scan[..., 0].ravel())
-            * np.exp(-2 * np.pi * 1j * kx[S1.beams[1][i]] * scan[..., 1].ravel())
-        ).ravel()
-
-    scan_array = cx_from_numpy(scan_array, dtype=S1.dtype, device=device)
+    lam = 1 / wavev(eV)
+    scan_array = None
 
     # Initialize Image
-    EELS_image = torch.zeros(nprobe_posn, dtype=S1.dtype, device=device)
+    EELS_image = torch.zeros(nprobe_posn, dtype=dtype, device=device)
 
-    total_slices = nslices * len(subslices)
-    for islice in tqdm(range(total_slices), desc=&#34;Slice&#34;):
+    # Loop over frozen phonons
 
-        # Propagate scattering matrices to this slice
-        if islice &gt; 0:
-            S1.Propagate(
-                islice, P, T, subslicing=True, batch_size=5, showProgress=False
-            )
-            S2.Propagate(
-                total_slices - islice,
-                P,
-                T,
-                subslicing=True,
-                batch_size=5,
-                showProgress=False,
-            )
+    for ifph in tqdm(
+        range(nfph), disable=tdisable, position=0, desc=&#34;Frozen phonon iteration&#34;
+    ):
 
-        # Flatten indices of second scattering matrix in preparation for
-        # indexing
-        S2.S = S2.S.reshape(S2.S.shape[0], np.product(S2.stored_gridshape), 2)
+        P, T = multislice_precursor(
+            structure,
+            gridshape,
+            eV,
+            subslices=subslices,
+            tiling=tiling,
+            device=device,
+            dtype=dtype,
+            showProgress=False,
+        )
 
-        # Work out which subslice of the crystal unit cell we are in
-        subslice = islice % S1.nsubslices
+        # Scattering matrix 1 propagates probe from surface of specimen to slice of
+        # interest
+        S1 = scattering_matrix(
+            rsize,
+            P,
+            T,
+            0,
+            eV,
+            app,
+            batch_size=5,
+            subslicing=True,
+            PRISM_factor=PRISM_factor,
+            showProgress=False,
+        )
 
-        # Get list of atoms within this slice
-        atomsinslice = coords[
-            np.logical_and(
-                coords[:, 2] &gt;= subslice / S1.nsubslices,
-                coords[:, 2] &lt; (subslice + 1) / S1.nsubslices,
-            ),
-            :2,
-        ]
+        # Scattering matrix 2 propagates probe from slice of ionization to exit surface
+        S2 = scattering_matrix(
+            rsize,
+            P,
+            T,
+            nslices * len(subslices),
+            eV,
+            det,
+            batch_size=5,
+            subslicing=True,
+            transposed=True,
+            PRISM_factor=PRISM_factor,
+            showProgress=False,
+        )
+        # Link the slices and seeds of both scattering matrices
+        S1.seed = S2.seed
 
-        # Iterate over atoms in this slice
-        for atom in tqdm(atomsinslice, &#34;Transitions in slice&#34;):
+        # On first iteration generate illumination vector and work out transition
+        # potential cropping
+        if ifph == 0:
+            scan_array = np.zeros((nprobe_posn, S1.S.shape[0]), dtype=np.complex)
 
-            windex = torch.from_numpy(
-                window_indices(atom, Hn0_crop, S1.stored_gridshape)
-            )
-
-            for i in range(nstates):
-                # Initialize matrix describing this transition event
-                SHn0 = torch.zeros(
-                    S1.S.shape[0], S2.S.shape[0], 2, dtype=S1.S.dtype, device=device
-                )
-
-                # Sub-pixel shift of Hn0
-                posn = atom * np.asarray(gridshape)
-                destination = np.remainder(posn, 1.0)
-                Hn0_ = np.fft.fftshift(
-                    fourier_shift(Hn0[i], destination, qspacein=True)
+            # TODO test aberrations and defocii
+            negtwopii = -2 * np.pi * 1j
+            for i in range(S1.nbeams):
+                ky_ = ky[S1.beams[0][i]]
+                kx_ = kx[S1.beams[1][i]]
+                k = np.hypot(ky_ / rsize[0], kx_ / rsize[1])
+                kphi = np.arctan2(ky_, kx_)
+                scan_array[:, i] = np.exp(
+                    negtwopii
+                    * (ky_ * scan[..., 0].ravel() + kx_ * scan[..., 1].ravel())
+                    - 1j * chi(k, kphi, lam, df, aberrations)
                 ).ravel()
+            # Normalize scan_array and convert to torch array
+            scan_array *= 1 / np.sqrt(np.sum(scan_array.shape[1]))
+            scan_array = cx_from_numpy(scan_array, dtype=dtype, device=device)
 
-                # Convert Hn0 to pytorch Tensor
-                Hn0_ = cx_from_numpy(Hn0_, dtype=S1.S.dtype, device=device)
+            if Hn0_crop is None:
+                Hn0_crop = [S1.stored_gridshape[i] // PRISM_factor[i] for i in range(2)]
+            else:
+                Hn0_crop = [
+                    min(H, S // P)
+                    for H, S, P in zip(Hn0_crop, S1.stored_gridshape, PRISM_factor)
+                ]
 
-                for i, S1component in enumerate(S1.S):
-                    # Multiplication of component of first scattering matrix
-                    # (takes probe it depth of ionization) with the transition
-                    # potential
-                    Hn0S1 = complex_mul(
-                        Hn0_, S1component.flatten(end_dim=-2)[windex, :]
+            # We achieve cropping of the Hn0 with some abuse of the fourier
+            # interpolation routine
+            from .utils import fourier_interpolate_2d
+
+            Hn0s = np.fft.fft2(
+                fourier_interpolate_2d(Hn0s, Hn0_crop, qspace_in=True, qspace_out=True)
+            )
+
+        total_slices = nslices * len(subslices)
+        for islice in tqdm(range(total_slices), desc=&#34;Slice&#34;, position=1):
+
+            # Propagate scattering matrices to this slice
+            if islice &gt; 0:
+                S1.Propagate(
+                    islice, P, T, subslicing=True, batch_size=5, showProgress=False
+                )
+                if do_reverse_multislice:
+                    S2.Propagate(
+                        total_slices - islice,
+                        P,
+                        T,
+                        subslicing=True,
+                        batch_size=5,
+                        showProgress=False,
+                    )
+                else:
+                    S2 = scattering_matrix(
+                        rsize,
+                        P,
+                        T,
+                        total_slices - islice,
+                        eV,
+                        det,
+                        batch_size=5,
+                        subslicing=True,
+                        transposed=True,
+                        PRISM_factor=PRISM_factor,
+                        showProgress=False,
+                        seed=S1.seed,
                     )
 
-                    # Matrix multiplication with second scattering matrix (takes
-                    # scattered electrons to EELS detector)
-                    SHn0[i] = complex_matmul(S2.S[:, windex], Hn0S1)
+            # Flatten indices of second scattering matrix in preparation for
+            # indexing
+            S2.S = S2.S.reshape(S2.S.shape[0], np.product(S2.stored_gridshape), 2)
 
-                # Build a mask such that only probe positions within a PRISM
-                # cropping region about the probe are evaluated
-                scan_mask = np.logical_and(
-                    (
-                        np.abs((atom[0] - scan[..., 0].ravel() + 0.5) % 1.0 - 0.5)
-                        &lt;= 1 / PRISM_factor[0] / 2
-                    ),
-                    (
-                        np.abs((atom[1] - scan[..., 1].ravel() + 0.5) % 1.0 - 0.5)
-                        &lt;= 1 / PRISM_factor[1] / 2
-                    ),
-                ).ravel()
+            # Work out which subslice of the crystal unit cell we are in
+            subslice = islice % S1.nsubslices
 
-                EELS_image[scan_mask] += torch.sum(
-                    amplitude(complex_matmul(scan_array[scan_mask], SHn0)), axis=1
-                )
+            # Get list of atoms within this slice
+            atomsinslice = coords[
+                np.logical_and(
+                    coords[:, 2] &gt;= subslice / S1.nsubslices,
+                    coords[:, 2] &lt; (subslice + 1) / S1.nsubslices,
+                ),
+                :2,
+            ]
 
-        # Reshape scattering matrix S2 for propagation
-        S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape, 2))
+            # Iterate over atoms in this slice
+            for atom in tqdm(
+                atomsinslice, &#34;Transitions in slice&#34;, disable=tdisable, position=2
+            ):
+
+                windex = torch.from_numpy(
+                    window_indices(atom, Hn0_crop, S1.stored_gridshape)
+                ).to(device)
+
+                for Hn0 in Hn0s:
+                    # Initialize matrix describing this transition event
+                    SHn0 = torch.zeros(
+                        S2.S.shape[0], S1.S.shape[0], 2, dtype=S1.S.dtype, device=device
+                    )
+
+                    # Sub-pixel shift of Hn0
+                    posn = atom * np.asarray(S1.stored_gridshape)
+                    destination = np.remainder(posn, 1.0)
+                    Hn0_ = np.fft.fftshift(
+                        fourier_shift(Hn0, destination, qspacein=True)
+                    ).ravel()
+
+                    # Convert Hn0 to pytorch Tensor
+                    Hn0_ = cx_from_numpy(Hn0_, dtype=S1.S.dtype, device=device)
+
+                    for i, S1component in enumerate(S1.S):
+                        # Multiplication of component of first scattering matrix
+                        # (takes probe it depth of ionization) with the transition
+                        # potential
+                        Hn0S1 = complex_mul(
+                            Hn0_, S1component.flatten(end_dim=-2)[windex]
+                        )
+
+                        # Matrix multiplication with second scattering matrix (takes
+                        # scattered electrons to EELS detector)
+                        SHn0[:, i] = complex_matmul(S2.S[:, windex], Hn0S1)
+
+                    # Build a mask such that only probe positions within a PRISM
+                    # cropping region about the transition are evaluated
+                    scan_mask = np.logical_and(
+                        (
+                            np.abs((scan[..., 0].ravel() - atom[0] + 0.5) % 1.0 - 0.5)
+                            &lt;= 1 / PRISM_factor[0] / 2
+                        ),
+                        (
+                            np.abs((scan[..., 1].ravel() - atom[1] + 0.5) % 1.0 - 0.5)
+                            &lt;= 1 / PRISM_factor[1] / 2
+                        ),
+                    ).ravel()
+
+                    EELS_image[scan_mask] += torch.sum(
+                        amplitude(
+                            complex_matmul(
+                                SHn0, scan_array[scan_mask, :].transpose(0, 1)
+                            )
+                        ),
+                        axis=0,
+                    )
+
+            # Reshape scattering matrix S2 for propagation
+            S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape, 2))
 
     # Move EELS_image to cpu and numpy and then reshape to rectangular grid
-    return EELS_image.cpu().numpy().reshape(scan_shape)</code></pre>
+    return EELS_image.cpu().numpy().reshape(scan_shape) / nfph</code></pre>
 </details>
 </dd>
 <dt id="pyms.Premixed_routines.STEM_EELS_multislice"><code class="name flex">
-<span>def <span class="ident">STEM_EELS_multislice</span></span>(<span>structure, gridshape, eV, app, det, thicknesses, Ztarget, n, ell, epsilon, df=0, subslices=[1.0], device_type=None, tiling=[1, 1], nT=5, contr=0.95, dtype=torch.float32, showProgress=True, ionization_cutoff=0.0001, beam_tilt=[0, 0], specimen_tilt=[0, 0], tilt_units='mrad', aberrations=[], batch_size=1, subslicing=False)</span>
+<span>def <span class="ident">STEM_EELS_multislice</span></span>(<span>structure, gridshape, eV, app, detector_ranges, thicknesses, Ztarget, n, ell, epsilon, df=0, subslices=[1.0], device_type=None, tiling=[1, 1], nfph=5, nT=5, contr=0.95, dtype=torch.float32, showProgress=True, ionization_cutoff=0.0001, beam_tilt=[0, 0], specimen_tilt=[0, 0], tilt_units='mrad', aberrations=[], batch_size=1, subslicing=False, Hn0=None, P=None, T=None)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Perform a STEM-EELS simulation using only the multislice algorithm.</p>
@@ -3130,8 +3522,10 @@ Datatype of the simulation arrays, by default 32-bit floating point</p></div>
 <dd>Probe energy in electron volts</dd>
 <dt><strong><code>app</code></strong> :&ensp;<code>float</code></dt>
 <dd>Objective aperture in mrad</dd>
-<dt><strong><code>det</code></strong> :&ensp;<code>float</code></dt>
-<dd>EELS aperture acceptance angle in mrad</dd>
+<dt><strong><code>detector_ranges</code></strong> :&ensp;<code>array_like</code></dt>
+<dd>The maxmimum acceptance angles of each of the spectrometer apertures
+should be stored as in an array: ie [10,20] will make two detectors
+spanning 0 to 10 mrad and 0 to 20 mrad.</dd>
 <dt><strong><code>thicknesses</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
 <dd>Thickness of the calculation</dd>
 <dt><strong><code>Ztarget</code></strong> :&ensp;<code>int</code></dt>
@@ -3144,50 +3538,61 @@ shell, 2 for L shell etc.)</dd>
 interest</dd>
 <dt><strong><code>epsilon</code></strong> :&ensp;<code>float</code></dt>
 <dd>Energy above ionization threshhold energy</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>df : float
-Probe defocus
-subslices : array_like, optional
-A one dimensional array-like object containing the depths (in fractional
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>Probe defocus</dd>
+<dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>A one dimensional array-like object containing the depths (in fractional
 coordinates) at which the object will be subsliced. The last entry
 should always be 1.0. For example, to slice the object into four equal
-sized slices pass [0.25,0.5,0.75,1.0]
-device_type : torch.device, optional
-torch.device object which will determine which device (CPU or GPU) the
-calculations will run on
-tiling : (2,) array_like, optional
-Tiling of a repeat unit cell on simulation grid
-nT : int, optional
-Number of transmission functions generated to and then selected from
-in the frozen phonon algorithm
-contr : float, optional
-A threshhold for inclusion of ionization transitions within the
+sized slices pass [0.25,0.5,0.75,1.0]</dd>
+<dt><strong><code>device_type</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on</dd>
+<dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Tiling of a repeat unit cell on simulation grid</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>nfph</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of frozen phonon iterations.</dd>
+<dt><strong><code>contr</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>A threshhold for inclusion of ionization transitions within the
 calculation, if contr = 1.0 all ionization transitions will be inlcuded
 in the simulation otherwise only the transitions that make up a
 fraction equal to contr of the total ionization transitions will be
-included
-dtype : torch.dtype, optional
-Datatype of the simulation arrays, by default 32-bit floating point
-ionization_cutoff : float
-Threshhold below which the contribution of certain ionizations will be
-ignored.
-beam_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
+included</dd>
+<dt><strong><code>dtype</code></strong> :&ensp;<code>torch.dtype</code>, optional</dt>
+<dd>Datatype of the simulation arrays, by default 32-bit floating point</dd>
+<dt><strong><code>ionization_cutoff</code></strong> :&ensp;<code>float</code></dt>
+<dd>Threshhold below which the contribution of certain ionizations will be
+ignored.</dd>
+<dt><strong><code>beam_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
 periodicity of the wave function at the boundaries this tilt is rounded
-to the nearest pixel value.
-specimen_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
-by shearing the propagator. Units given by input variable tilt_units.
-tilt_units : string, optional
-Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'
-aberrations : list, optional
-A list containing a set of the class aberration, pass an empty list for
-an unaberrated probe.
-showProgress : bool, optional
-Pass False to disable progress readout
-subslicing : bool,optional
-Set to True to allow output at fractions of the unit cell thickness</p></div>
+to the nearest pixel value.</dd>
+<dt><strong><code>specimen_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
+by shearing the propagator. Units given by input variable tilt_units.</dd>
+<dt><strong><code>tilt_units</code></strong> :&ensp;<code>string</code>, optional</dt>
+<dd>Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list containing a set of the class aberration, pass an empty list for
+an unaberrated probe.</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>str</code> or <code>bool</code>, optional</dt>
+<dd>Pass False to disable progress readout, pass 'notebook' to get correct
+progress bar behaviour inside a jupyter notebook</dd>
+<dt><strong><code>subslicing</code></strong> :&ensp;<code>bool</code>,optional</dt>
+<dd>Set to True to allow output at fractions of the unit cell thickness</dd>
+<dt><strong><code>Hn0</code></strong> :&ensp;<code>(n,y,x) np.complex</code>, optional</dt>
+<dd>Precalculated Hn0s ionization transition potentials, if not provided
+these will be calculated.</dd>
+<dt><strong><code>P</code></strong> :&ensp;<code>(nslices,y,x) array_like</code>, optional</dt>
+<dd>Precalculated multislice propagators, default is None which will mean
+that these are calculated within the routine.</dd>
+<dt><strong><code>T</code></strong> :&ensp;<code>(nT,nslices,y,x) array_like</code>, optional</dt>
+<dd>Precalculated multislice transmission functions, default is None which
+will mean that these are calculated within the routine.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3197,7 +3602,7 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
     gridshape,
     eV,
     app,
-    det,
+    detector_ranges,
     thicknesses,
     Ztarget,
     n,
@@ -3207,6 +3612,7 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
     subslices=[1.0],
     device_type=None,
     tiling=[1, 1],
+    nfph=5,
     nT=5,
     contr=0.95,
     dtype=torch.float32,
@@ -3218,6 +3624,9 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
     aberrations=[],
     batch_size=1,
     subslicing=False,
+    Hn0=None,
+    P=None,
+    T=None,
 ):
     &#34;&#34;&#34;
     Perform a STEM-EELS simulation using only the multislice algorithm.
@@ -3232,8 +3641,10 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
         Probe energy in electron volts
     app : float
         Objective aperture in mrad
-    det : float
-        EELS aperture acceptance angle in mrad
+    detector_ranges : array_like
+        The maxmimum acceptance angles of each of the spectrometer apertures
+        should be stored as in an array: ie [10,20] will make two detectors
+        spanning 0 to 10 mrad and 0 to 20 mrad.
     thicknesses : float or array_like
         Thickness of the calculation
     Ztarget : int
@@ -3246,10 +3657,7 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
         interest
     epsilon : float
         Energy above ionization threshhold energy
-
-    Keyword arguments
-    -----------------
-    df : float
+    df : float, optional
         Probe defocus
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
@@ -3262,8 +3670,10 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
+    nfph : int, optional
+        Number of frozen phonon iterations.
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
         calculation, if contr = 1.0 all ionization transitions will be inlcuded
@@ -3287,12 +3697,22 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated probe.
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     subslicing : bool,optional
         Set to True to allow output at fractions of the unit cell thickness
+    Hn0 : (n,y,x) np.complex, optional
+        Precalculated Hn0s ionization transition potentials, if not provided
+        these will be calculated.
+    P : (nslices,y,x) array_like, optional
+        Precalculated multislice propagators, default is None which will mean
+        that these are calculated within the routine.
+    T : (nT,nslices,y,x) array_like, optional
+        Precalculated multislice transmission functions, default is None which
+        will mean that these are calculated within the routine.
     &#34;&#34;&#34;
-    from .Ionization import transition_potential_multislice
+    tdisable, tqdm = tqdm_handler(showProgress)
 
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -3303,20 +3723,6 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
     # Convert thicknesses to multislice slices
     nslices = thickness_to_slices(
         thicknesses, structure.unitcell[2], subslicing=subslicing, subslices=subslices
-    )
-
-    # Make propagators and transmission functions for multslice
-    P, T = multislice_precursor(
-        structure,
-        gridshape,
-        eV,
-        subslices=subslices,
-        tiling=tiling,
-        nT=nT,
-        device=device,
-        showProgress=showProgress,
-        specimen_tilt=specimen_tilt,
-        tilt_units=tilt_units,
     )
 
     # Get the coordinates of the target atoms in a unit cell
@@ -3330,50 +3736,78 @@ Set to True to allow output at fractions of the unit cell thickness</p></div>
         rsize,
         eV,
         app,
+        df=df,
         beam_tilt=beam_tilt,
         tilt_units=tilt_units,
         aberrations=aberrations,
     )
     # Generate ionization transition potentials for atom of interest
-    Hn0 = get_transitions(
-        Ztarget, n, ell, epsilon, eV, gridshape, rsize, order=1, contr=contr
-    )
+    if Hn0 is None:
+        Hn0 = get_transitions(
+            Ztarget, n, ell, epsilon, eV, gridshape, rsize, order=1, contr=contr
+        )
 
     # Make EELS aperture masks
-    detector_ranges = ensure_array(det)
     D = np.stack(
-        [make_detector(gridshape, rsize, eV, drange, 0) for drange in detector_ranges]
+        [
+            make_detector(gridshape, rsize, eV, d, 0)
+            for d in ensure_array(detector_ranges)
+        ]
     )
 
     # The method pyms.Ionization.transition_potential_multislice will be passed
     # to the STEM routine, make a list of the function arguments and a
     # dictionary of the keyword arguments to also pass to the STEM routine
-    args = (subslices, P, T, Hn0, ionization_sites)
+
     kwargs = {
         &#34;tiling&#34;: tiling,
         &#34;device_type&#34;: device,
         &#34;return_numpy&#34;: False,
         &#34;qspace_in&#34;: True,
         &#34;threshhold&#34;: ionization_cutoff,
-        &#34;showProgress&#34;: showProgress,
+        &#34;showProgress&#34;: False,
+        &#34;tqposition&#34;: 1,
     }
 
-    # Call STEM routine
-    return STEM(
-        rsize,
-        probe,
-        transition_potential_multislice,
-        nslices,
-        eV,
-        app,
-        batch_size=1,
-        detectors=D,
-        device=device,
-        tiling=tiling,
-        showProgress=showProgress,
-        method_args=args,
-        method_kwargs=kwargs,
-    )[0]</code></pre>
+    probe_posn = generate_STEM_raster(rsize, eV, app, tiling=tiling)
+    STEM_images = np.zeros((D.shape[0], *probe_posn.shape[:2]))
+
+    for _ in tqdm(
+        range(nfph), desc=&#34;Frozen phonon interations:&#34;, disable=tdisable, position=0
+    ):
+        # Make propagators and transmission functions for multislice
+        if P is None or T is None:
+            P, T = multislice_precursor(
+                structure,
+                gridshape,
+                eV,
+                subslices=subslices,
+                tiling=tiling,
+                nT=nT,
+                device=device,
+                showProgress=showProgress,
+                specimen_tilt=specimen_tilt,
+                tilt_units=tilt_units,
+            )
+        args = (subslices, P, T, Hn0, ionization_sites)
+        # Call STEM routine
+        STEM_images += STEM(
+            rsize,
+            probe,
+            transition_potential_multislice,
+            nslices,
+            eV,
+            app,
+            batch_size=1,
+            scan_posn=probe_posn,
+            detectors=D,
+            device=device,
+            tiling=tiling,
+            showProgress=showProgress,
+            method_args=args,
+            method_kwargs=kwargs,
+        )[&#34;STEM images&#34;]
+    return STEM_images / nfph</code></pre>
 </details>
 </dd>
 <dt id="pyms.Premixed_routines.STEM_PRISM"><code class="name flex">
@@ -3398,93 +3832,99 @@ electron microscopy." Advanced structural and chemical imaging 3.1 (2017):
 <dd>Objective aperture in mrad</dd>
 <dt><strong><code>thicknesses</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
 <dd>Thickness of the calculation</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>subslices : array_like, optional
-A one dimensional array-like object containing the depths (in fractional
+<dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>A one dimensional array-like object containing the depths (in fractional
 coordinates) at which the object will be subsliced. The last entry
 should always be 1.0. For example, to slice the object into four equal
-sized slices pass [0.25,0.5,0.75,1.0]
-tiling : (2,) array_like, optional
-Tiling of a repeat unit cell on simulation grid
-PRISM_factor : int (2,) array_like, optional
-The PRISM "interpolation factor" this is the amount by which the
+sized slices pass [0.25,0.5,0.75,1.0]</dd>
+<dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Tiling of a repeat unit cell on simulation grid</dd>
+<dt><strong><code>PRISM_factor</code></strong> :&ensp;<code>int (2,) array_like</code>, optional</dt>
+<dd>The PRISM "interpolation factor" this is the amount by which the
 scattering matrices are cropped in real space to speed up
 calculations see Ophus, Colin. "A fast image simulation algorithm
 for scanning transmission electron microscopy." Advanced structural
-and chemical imaging 3.1 (2017): 13 for details on this.
-df : float or (ndf,) array_like
-Probe defocus, can be an array like object to perform a focal series. In
+and chemical imaging 3.1 (2017): 13 for details on this.</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code> or <code>(ndf,) array_like</code></dt>
+<dd>Probe defocus, can be an array like object to perform a focal series. In
 the latter case it would be expected that h5_filename is a list of
-equal length to df
-aberrations : list, optional
-A list containing a set of the class aberration, pass an empty list for
-an unaberrated probe.
-batch_size : int, optional
-The multislice algorithm can be performed on multiple scattering matrix
+equal length to df</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list containing a set of the class aberration, pass an empty list for
+an unaberrated probe.</dd>
+<dt><strong><code>batch_size</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>The multislice algorithm can be performed on multiple scattering matrix
 columns at once to parrallelize computation, this number is set by
-batch_size.
-fourD_STEM : bool or array_like, optional
-Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
+batch_size.</dd>
+<dt><strong><code>fourD_STEM</code></strong> :&ensp;<code>bool</code> or <code>array_like</code>, optional</dt>
+<dd>Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
 space a tuple containing pixel size and diffraction space extent of the
 datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
 diffraction patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
-Angstroms.
-h5_filename : string or (ndf,) array_like of strings
-FourD-STEM images can be streamed directly to a hdf5 file output,
+Angstroms.</dd>
+<dt><strong><code>h5_filename</code></strong> :&ensp;<code>string</code> or <code>(ndf,) array_like</code> of <code>strings</code></dt>
+<dd>FourD-STEM images can be streamed directly to a hdf5 file output,
 avoiding the need for them to be stored in intermediate memory. To take
 advantage of this the user can provide a list of filenames to output
-these result to.
-datacube :
-(ndf, Ny, Nx, Y, X) array_like, optional
-datacube for 4D-STEM output, if None is passed (default) this will be
+these result to.</dd>
+<dt><strong><code>datacube</code></strong> :&ensp;<code> (ndf, Ny, Nx, Y, X) array_like</code>, optional</dt>
+<dd>datacube for 4D-STEM output, if None is passed (default) this will be
 initialized in the function. If a datacube is passed then the result
 will be added to by the STEM routine (useful for multiple frozen phonon
-iterations)
-scan_posn :
-(ny,nx,2) array_like, optional
-An array containing y and x scan positions in the final dimension for
+iterations)</dd>
+<dt><strong><code>scan_posn</code></strong> :&ensp;<code> (ny,nx,2) array_like</code>, optional</dt>
+<dd>An array containing y and x scan positions in the final dimension for
 each scan position in the STEM raster, if provided overrides internal
-calculations of STEM sampling
-dtype : torch.dtype, optional
-Datatype of the simulation arrays, by default 32-bit (single precision)
-floating point
-device_type : torch.device, optional
-torch.device object which will determine which device (CPU or GPU) the
-calculations will run on
-showProgress : bool, optional
-Pass False to disable progress readout
-stored_gridshape : int, array_like
-The size of the stored array in the scattering matrix.
-detector_ranges : array_like, optional
-The acceptance angles of each of the stem detectors should be stored as
+calculations of STEM sampling</dd>
+<dt><strong><code>dtype</code></strong> :&ensp;<code>torch.dtype</code>, optional</dt>
+<dd>Datatype of the simulation arrays, by default 32-bit (single precision)
+floating point</dd>
+<dt><strong><code>device_type</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>str</code> or <code>bool</code>, optional</dt>
+<dd>Pass False to disable progress readout, pass 'notebook' to get correct
+progress bar behaviour inside a jupyter notebook</dd>
+<dt><strong><code>stored_gridshape</code></strong> :&ensp;<code>int, array_like</code></dt>
+<dd>The size of the stored array in the scattering matrix.</dd>
+<dt><strong><code>detector_ranges</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>The acceptance angles of each of the stem detectors should be stored as
 a list of lists: ie [[0,10],[10,20]] will make two detectors spanning
-0 to 10 mrad and 10 to 20 mrad.
-D : (ndet x Y x X) array_like, optional
-A precomputed set of STEM detectors, overrides detector_ranges.
-ROI : (4,) array_like
-Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
+0 to 10 mrad and 10 to 20 mrad.</dd>
+<dt><strong><code>D</code></strong> :&ensp;<code>(ndet x Y x X) array_like</code>, optional</dt>
+<dd>A precomputed set of STEM detectors, overrides detector_ranges.</dd>
+<dt><strong><code>ROI</code></strong> :&ensp;<code>(4,) array_like</code></dt>
+<dd>Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
 where [x0,y0] and [x1,y1] are the bottom left and top right coordinates
 of the region of interest (ROI) expressed as a fraction of the total
-grid (or unit cell).
-S : (nbeams x Y x X)
-A precalculated scattering matrix (useful for calculating defocus series)
+grid (or unit cell).</dd>
+<dt><strong><code>S</code></strong> :&ensp;<code>(nbeams x Y x X)</code></dt>
+<dd>A precalculated scattering matrix (useful for calculating defocus series)
 if this is provided then nfph will be ignored since a new scattering
-matrix should be calculated for each frozen phonon iteration
-nT : int, optional
-Number of transmission functions generated to and then selected from
-in the frozen phonon algorithm
-GPU_streaming : bool
-Choose whether to use GPU streaming or not for the scattering matrix,
+matrix should be calculated for each frozen phonon iteration</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>GPU_streaming</code></strong> :&ensp;<code>bool</code></dt>
+<dd>Choose whether to use GPU streaming or not for the scattering matrix,
 providing a scattering matrix to the routine will override whatever is
-selected for this option
-Calculate_potential_on_CPU : bool
-Calculate the potential, which can sometimes be the most memory intensive
-part of the calculation on the CPU and then stream to the GPU
-P : (n,Y,X) array_like, optional
-Precomputed Fresnel free-space propagators
-T : (n,Y,X) array_like
-Precomputed transmission functions</p></div>
+selected for this option</dd>
+<dt><strong><code>Calculate_potential_on_CPU</code></strong> :&ensp;<code>bool</code></dt>
+<dd>Calculate the potential, which can sometimes be the most memory intensive
+part of the calculation on the CPU and then stream to the GPU</dd>
+<dt><strong><code>P</code></strong> :&ensp;<code>(n,Y,X) array_like</code>, optional</dt>
+<dd>Precomputed Fresnel free-space propagators</dd>
+<dt><strong><code>T</code></strong> :&ensp;<code>(n,Y,X) array_like</code></dt>
+<dd>Precomputed transmission functions</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>result</code></strong> :&ensp;<code>dict</code></dt>
+<dd>A dictionary containing numpy arrays with the requested simulations.
+Possible keys include "STEM images" (conventional STEM images from a
+monolithic detector), "datacube" (the 4D-STEM datacube) and "DPC" (the
+differential phase contrast reconstruction of the electrostatic potential)</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3543,9 +3983,6 @@ Precomputed transmission functions</p></div>
         Objective aperture in mrad
     thicknesses : float or array_like
         Thickness of the calculation
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -3596,8 +4033,9 @@ Precomputed transmission functions</p></div>
     device_type : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     stored_gridshape : int, array_like
         The size of the stored array in the scattering matrix.
     detector_ranges : array_like, optional
@@ -3616,8 +4054,8 @@ Precomputed transmission functions</p></div>
         if this is provided then nfph will be ignored since a new scattering
         matrix should be calculated for each frozen phonon iteration
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     GPU_streaming : bool
         Choose whether to use GPU streaming or not for the scattering matrix,
         providing a scattering matrix to the routine will override whatever is
@@ -3629,6 +4067,13 @@ Precomputed transmission functions</p></div>
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
         Precomputed transmission functions
+    Returns
+    -------
+    result : dict
+        A dictionary containing numpy arrays with the requested simulations.
+        Possible keys include &#34;STEM images&#34; (conventional STEM images from a
+        monolithic detector), &#34;datacube&#34; (the 4D-STEM datacube) and &#34;DPC&#34; (the
+        differential phase contrast reconstruction of the electrostatic potential)
     &#34;&#34;&#34;
     tdisable, tqdm = tqdm_handler(showProgress)
 
@@ -3871,129 +4316,128 @@ Precomputed transmission functions</p></div>
 <dd>Objective aperture in mrad</dd>
 <dt><strong><code>thicknesses</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
 <dd>Thickness of the calculation</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>subslices : array_like, optional
-A one dimensional array-like object containing the depths (in fractional
+<dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>A one dimensional array-like object containing the depths (in fractional
 coordinates) at which the object will be subsliced. The last entry
 should always be 1.0. For example, to slice the object into four equal
-sized slices pass [0.25,0.5,0.75,1.0]
-df : float, optional
-Probe defocus, convention is that a negative defocus has the probe
-focused "into" the specimen
-nfph : int, optional
-Number of iterations of the frozen phonon algorithm (25 by default, which
-is a good rule of thumb for convergence)
-aberrations : list, optional
-A list of of probe aberrations of class pyms.Probe.aberration, pass an
+sized slices pass [0.25,0.5,0.75,1.0]</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>Probe defocus, convention is that a negative defocus has the probe
+focused "into" the specimen</dd>
+<dt><strong><code>nfph</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of iterations of the frozen phonon algorithm (25 by default, which
+is a good rule of thumb for convergence)</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list of of probe aberrations of class pyms.Probe.aberration, pass an
 empty list for an aberration free probe (the defocus aberration is also
-controlled by the df parameter)
-batch_size : int, optional
-The multislice algorithm can be performed on multiple probes columns
+controlled by the df parameter)</dd>
+<dt><strong><code>batch_size</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>The multislice algorithm can be performed on multiple probes columns
 at once to parrallelize computation, the number of parrallel computations
-is set by batch_size.
-fourD_STEM : bool or array_like, optional
-Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
+is set by batch_size.</dd>
+<dt><strong><code>fourD_STEM</code></strong> :&ensp;<code>bool</code> or <code>array_like</code>, optional</dt>
+<dd>Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
 space a tuple containing pixel size and diffraction space extent of the
 datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
 diffraction patterns cropped and downsampled/interpolated to measure
-64 x 64 pixels and 1.2 x 1.2 inverse Angstroms.
-PACBED : bool, optional
-Pass PACBED = True to calculate a position averaged convergent beam
-electron diffraction pattern (PACBED)
-h5_filename : string or array_like of strings
-FourD-STEM images can be streamed directly to a hdf5 file output,
+64 x 64 pixels and 1.2 x 1.2 inverse Angstroms.</dd>
+<dt><strong><code>PACBED</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>Pass PACBED = True to calculate a position averaged convergent beam
+electron diffraction pattern (PACBED)</dd>
+<dt><strong><code>h5_filename</code></strong> :&ensp;<code>string</code> or <code>array_like</code> of <code>strings</code></dt>
+<dd>FourD-STEM images can be streamed directly to a hdf5 file output,
 avoiding the need for them to be stored in intermediate memory. To take
 advantage of this the user can provide a list of filenames to output
-these result to.
-STEM_images : (nthick,ndet,ny,nx) array_like
-An array containing the STEM images. If not provided but detector_ranges
-is then this will be initialized in the function.
-DPC : bool
-Set to True to simulate centre-of-mass differential phase contrast (DPC)
+these result to.</dd>
+<dt><strong><code>STEM_images</code></strong> :&ensp;<code>(nthick,ndet,ny,nx) array_like</code></dt>
+<dd>An array containing the STEM images. If not provided but detector_ranges
+is then this will be initialized in the function.</dd>
+<dt><strong><code>DPC</code></strong> :&ensp;<code>bool</code></dt>
+<dd>Set to True to simulate centre-of-mass differential phase contrast (DPC)
 STEM imaging. The centre of mass images will be added to the STEM_images
 output and the differential phase contrast reconstrutions from these
-images will be outputted seperately in the results dictionary
-scan_posn :
-(ny,nx,2) array_like, optional
-An array containing y and x scan positions in the final dimension for
+images will be outputted seperately in the results dictionary</dd>
+<dt><strong><code>scan_posn</code></strong> :&ensp;<code> (ny,nx,2) array_like</code>, optional</dt>
+<dd>An array containing y and x scan positions in the final dimension for
 each scan position in the STEM raster, if provided overrides internal
-calculations of STEM sampling
-device_type : torch.device, optional
-torch.device object which will determine which device (CPU or GPU) the
-calculations will run on
-ROI : (4,) array_like
-Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
+calculations of STEM sampling</dd>
+<dt><strong><code>device_type</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on</dd>
+<dt><strong><code>ROI</code></strong> :&ensp;<code>(4,) array_like</code></dt>
+<dd>Fraction of the unit cell to be scanned. Should contain [y0,x0,y1,x1]
 where [x0,y0] and [x1,y1] are the bottom left and top right coordinates
 of the region of interest (ROI) expressed as a fraction of the total
-grid (or unit cell).
-tiling : (2,) array_like, optional
-Tiling of a repeat unit cell on simulation grid
-seed : int
-Seed for random number generator for generating transmission functions
-and frozen phonon passes. Useful for testing purposes
-nT : int, optional
-Number of transmission functions generated to and then selected from
-in the frozen phonon algorithm
-contr : float, optional
-A threshhold for inclusion of ionization transitions within the
+grid (or unit cell).</dd>
+<dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Tiling of a repeat unit cell on simulation grid</dd>
+<dt><strong><code>seed</code></strong> :&ensp;<code>int</code></dt>
+<dd>Seed for random number generator for generating transmission functions
+and frozen phonon passes. Useful for testing purposes</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>contr</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>A threshhold for inclusion of ionization transitions within the
 calculation, if contr = 1.0 all ionization transitions will be inlcuded
 in the simulation otherwise only the transitions that make up a
 fraction equal to contr of the total ionization transitions will be
-included
-dtype : torch.dtype, optional
-Datatype of the simulation arrays, by default 32-bit floating point
-beam_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
+included</dd>
+<dt><strong><code>dtype</code></strong> :&ensp;<code>torch.dtype</code>, optional</dt>
+<dd>Datatype of the simulation arrays, by default 32-bit floating point</dd>
+<dt><strong><code>beam_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
 periodicity of the wave function at the boundaries this tilt is rounded
-to the nearest pixel value.
-specimen_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
-by shearing the propagator. Units given by input variable tilt_units.
-tilt_units : string, optional
-Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'
-fourD_STEM : bool or array_like, optional
-Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
+to the nearest pixel value.</dd>
+<dt><strong><code>specimen_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
+by shearing the propagator. Units given by input variable tilt_units.</dd>
+<dt><strong><code>tilt_units</code></strong> :&ensp;<code>string</code>, optional</dt>
+<dd>Units of specimen and beam tilt, can be 'mrad','pixels' or 'invA'</dd>
+<dt><strong><code>fourD_STEM</code></strong> :&ensp;<code>bool</code> or <code>array_like</code>, optional</dt>
+<dd>Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
 space a tuple containing pixel size and diffraction space extent of the
 datacube can be passed in. For example ([64,64],[1.2,1.2]) will output
 diffraction patterns measuring 64 x 64 pixels and 1.2 x 1.2 inverse
-Angstroms.
-datacube :
-(Ny, Nx, Y, X) array_like, optional
-datacube for 4D-STEM output, if None is passed (default) this will be
+Angstroms.</dd>
+<dt><strong><code>datacube</code></strong> :&ensp;<code> (Ny, Nx, Y, X) array_like</code>, optional</dt>
+<dd>datacube for 4D-STEM output, if None is passed (default) this will be
 initialized in the function. If a datacube is passed then the result
 will be added by the STEM routine (useful for multiple frozen phonon
-iterations)
-aberrations : list, optional
-A list containing a set of the class aberration, pass an empty list for
-an unaberrated probe.
-showProgress : bool, optional
-Pass False to disable progress readout
-detector_ranges : array_like, optional
-The acceptance angles of each of the stem detectors should be stored as
+iterations)</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list containing a set of the class aberration, pass an empty list for
+an unaberrated probe.</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>str</code> or <code>bool</code>, optional</dt>
+<dd>Pass False to disable progress readout, pass 'notebook' to get correct
+progress bar behaviour inside a jupyter notebook</dd>
+<dt><strong><code>detector_ranges</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>The acceptance angles of each of the stem detectors should be stored as
 a list of lists: ie [[0,10],[10,20]] will make two detectors spanning
-0 to 10 mrad and 10 to 20 mrad.
-D : (ndet x Y x X) array_like, optional
-A precomputed set of STEM detectors, overrides detector_ranges.
-fractional_occupancy: bool
-Set to false to disable fracitonal occupancy of an atomic site by two
-different atomic species.
-subslicing : bool,optional
-Set to True to allow output at fractions of the unit cell thickness
-nT : int, optional
-Number of transmission functions calculated with independent atomic
-displacements for frozen phonon iteration.
-P : (nslices,Y,X) array_like, optional
-Precomputed Fresnel free-space propagators
-T : (nT,nslices,Y,X) array_like
-Precomputed transmission functions</p>
+0 to 10 mrad and 10 to 20 mrad.</dd>
+<dt><strong><code>D</code></strong> :&ensp;<code>(ndet x Y x X) array_like</code>, optional</dt>
+<dd>A precomputed set of STEM detectors, overrides detector_ranges.</dd>
+<dt><strong><code>fractional_occupancy</code></strong> :&ensp;<code>bool</code></dt>
+<dd>Set to false to disable fracitonal occupancy of an atomic site by two
+different atomic species.</dd>
+<dt><strong><code>subslicing</code></strong> :&ensp;<code>bool</code>,optional</dt>
+<dd>Set to True to allow output at fractions of the unit cell thickness</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>P</code></strong> :&ensp;<code>(nslices,Y,X) array_like</code>, optional</dt>
+<dd>Precomputed Fresnel free-space propagators</dd>
+<dt><strong><code>T</code></strong> :&ensp;<code>(nT,nslices,Y,X) array_like</code></dt>
+<dd>Precomputed transmission functions</dd>
+</dl>
 <h2 id="returns">Returns</h2>
 <dl>
 <dt><strong><code>result</code></strong> :&ensp;<code>dict</code></dt>
 <dd>Can contain up to three entries with keys 'STEM images' which is the
 conventional STEM images simulated, 'datacube' which is a 4D-STEM
-datacube and 'DPC' which are the reconstructions of the specimen phase
-from the centre-of-mass STEM images.</dd>
+datacube, 'PACBED' which is the postion averaged convergent beam
+electron diffraction pattern and 'DPC' which are the reconstructions
+of the specimen phase from the centre-of-mass STEM images.</dd>
 </dl></div>
 <details class="source">
 <summary>
@@ -4049,9 +4493,6 @@ from the centre-of-mass STEM images.</dd>
         Objective aperture in mrad
     thicknesses : float or array_like
         Thickness of the calculation
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -4111,8 +4552,8 @@ from the centre-of-mass STEM images.</dd>
         Seed for random number generator for generating transmission functions
         and frozen phonon passes. Useful for testing purposes
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
         calculation, if contr = 1.0 all ionization transitions will be inlcuded
@@ -4144,8 +4585,9 @@ from the centre-of-mass STEM images.</dd>
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated probe.
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     detector_ranges : array_like, optional
         The acceptance angles of each of the stem detectors should be stored as
         a list of lists: ie [[0,10],[10,20]] will make two detectors spanning
@@ -4158,8 +4600,8 @@ from the centre-of-mass STEM images.</dd>
     subslicing : bool,optional
         Set to True to allow output at fractions of the unit cell thickness
     nT : int, optional
-        Number of transmission functions calculated with independent atomic
-        displacements for frozen phonon iteration.
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     P : (nslices,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (nT,nslices,Y,X) array_like
@@ -4170,8 +4612,9 @@ from the centre-of-mass STEM images.</dd>
     result : dict
         Can contain up to three entries with keys &#39;STEM images&#39; which is the
         conventional STEM images simulated, &#39;datacube&#39; which is a 4D-STEM
-        datacube and &#39;DPC&#39; which are the reconstructions of the specimen phase
-        from the centre-of-mass STEM images.
+        datacube, &#39;PACBED&#39; which is the postion averaged convergent beam
+        electron diffraction pattern and &#39;DPC&#39; which are the reconstructions
+        of the specimen phase from the centre-of-mass STEM images.
     &#34;&#34;&#34;
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -4340,7 +4783,7 @@ from the centre-of-mass STEM images.</dd>
 </details>
 </dd>
 <dt id="pyms.Premixed_routines.multislice_precursor"><code class="name flex">
-<span>def <span class="ident">multislice_precursor</span></span>(<span>sample, gridshape, eV, subslices=[1.0], tiling=[1, 1], specimen_tilt=[0, 0], tilt_units='mrad', nT=5, device=device(type='cuda'), dtype=torch.float32, showProgress=True, displacements=True, fractional_occupancy=True, seed=None, band_width_limiting=[0.6666666666666666, 0.6666666666666666])</span>
+<span>def <span class="ident">multislice_precursor</span></span>(<span>structure, gridshape, eV, subslices=[1.0], tiling=[1, 1], specimen_tilt=[0, 0], tilt_units='mrad', nT=5, device=device(type='cuda'), dtype=torch.float32, showProgress=True, displacements=True, fractional_occupancy=True, seed=None, band_width_limiting=[0.6666666666666666, 0.6666666666666666])</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Make transmission functions and propagators for the multislice algorithm.</p>
@@ -4352,38 +4795,38 @@ from the centre-of-mass STEM images.</dd>
 <dd>Pixel size of the simulation grid</dd>
 <dt><strong><code>eV</code></strong> :&ensp;<code>float</code></dt>
 <dd>Probe energy in electron volts</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>subslices : array_like, optional
-A one dimensional array-like object containing the depths (in fractional
+<dt><strong><code>subslices</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>A one dimensional array-like object containing the depths (in fractional
 coordinates) at which the object will be subsliced. The last entry
 should always be 1.0. For example, to slice the object into four equal
-sized slices pass [0.25,0.5,0.75,1.0]
-tiling : (2,) array_like, optional
-Tiling of a repeat unit cell on simulation grid
-specimen_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
-by shearing the propagator. Units given by input variable tilt_units.
-tilt_units : string, optional
-Units of specimen tilt, can be 'mrad','pixels' or 'invA'
-nT : int, optional
-Number of transmission functions generated to and then selected from
-in the frozen phonon algorithm
-device : torch.device, optional
-torch.device object which will determine which device (CPU or GPU) the
-calculations will run on
-dtype : torch.dtype, optional
-Datatype of the simulation arrays, by default 32-bit floating point
-showProgress : bool, optional
-Pass False to disable progress readout
-displacements : bool, optional
-Pass False to disable thermal vibration of the atoms
-fractional_occupancy : bool, optional
-Pass False to fractional occupancy of atomic sites
-bandwidth_limiting : (2,) array_like, optional
-The bandwidth limiting scheme. The propagator and transmission functions
+sized slices pass [0.25,0.5,0.75,1.0]</dd>
+<dt><strong><code>tiling</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Tiling of a repeat unit cell on simulation grid</dd>
+<dt><strong><code>specimen_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) tilt of the specimen,
+by shearing the propagator. Units given by input variable tilt_units.</dd>
+<dt><strong><code>tilt_units</code></strong> :&ensp;<code>string</code>, optional</dt>
+<dd>Units of specimen tilt, can be 'mrad','pixels' or 'invA'</dd>
+<dt><strong><code>nT</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of independent multislice transmission functions generated and
+then selected from in the frozen phonon algorithm</dd>
+<dt><strong><code>device</code></strong> :&ensp;<code>torch.device</code>, optional</dt>
+<dd>torch.device object which will determine which device (CPU or GPU) the
+calculations will run on</dd>
+<dt><strong><code>dtype</code></strong> :&ensp;<code>torch.dtype</code>, optional</dt>
+<dd>Datatype of the simulation arrays, by default 32-bit floating point</dd>
+<dt><strong><code>showProgress</code></strong> :&ensp;<code>str</code> or <code>bool</code>, optional</dt>
+<dd>Pass False to disable progress readout, pass 'notebook' to get correct
+progress bar behaviour inside a jupyter notebook</dd>
+<dt><strong><code>displacements</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>Pass False to disable thermal vibration of the atoms</dd>
+<dt><strong><code>fractional_occupancy</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>Pass False to fractional occupancy of atomic sites</dd>
+<dt><strong><code>bandwidth_limiting</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>The bandwidth limiting scheme. The propagator and transmission functions
 will be bandwidth limited up to the fraction given by the first and
-second entries of band_width_limiting respectively</p>
+second entries of band_width_limiting respectively</dd>
+</dl>
 <h2 id="returns">Returns</h2>
 <dl>
 <dt><strong><code>P</code></strong> :&ensp;<code>complex np.ndarray (len(subslices),Y,X)</code> or <code>(Y,X)</code></dt>
@@ -4399,7 +4842,7 @@ are returned</dd>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def multislice_precursor(
-    sample,
+    structure,
     gridshape,
     eV,
     subslices=[1.0],
@@ -4426,9 +4869,6 @@ are returned</dd>
         Pixel size of the simulation grid
     eV : float
         Probe energy in electron volts
-
-    Keyword arguments
-    -----------------
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
@@ -4442,15 +4882,16 @@ are returned</dd>
     tilt_units : string, optional
         Units of specimen tilt, can be &#39;mrad&#39;,&#39;pixels&#39; or &#39;invA&#39;
     nT : int, optional
-        Number of transmission functions generated to and then selected from
-        in the frozen phonon algorithm
+        Number of independent multislice transmission functions generated and
+        then selected from in the frozen phonon algorithm
     device : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
     dtype : torch.dtype, optional
         Datatype of the simulation arrays, by default 32-bit floating point
-    showProgress : bool, optional
-        Pass False to disable progress readout
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass &#39;notebook&#39; to get correct
+        progress bar behaviour inside a jupyter notebook
     displacements : bool, optional
         Pass False to disable thermal vibration of the atoms
     fractional_occupancy : bool, optional
@@ -4474,7 +4915,7 @@ are returned</dd>
 
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
-    rsize[:3] = sample.unitcell[:3]
+    rsize[:3] = structure.unitcell[:3]
     rsize[:2] *= np.asarray(tiling)
 
     # If slices are basically equidistant, we can use the same propagator
@@ -4502,7 +4943,7 @@ are returned</dd>
     T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
 
     for i in tqdm(range(nT), desc=&#34;Making projected potentials&#34;, disable=tdisable):
-        T[i] = sample.make_transmission_functions(
+        T[i] = structure.make_transmission_functions(
             gridshape,
             eV,
             subslices=subslices,
@@ -4532,7 +4973,7 @@ are returned</dd>
     window = []
     for i, wind in enumerate(windowsize):
         indices = np.arange(-wind // 2, wind // 2, dtype=np.int) + wind % 2
-        indices += int(round(center[i] * gridshape[i]))
+        indices += int(np.floor(center[i] * gridshape[i]))
         indices = np.mod(indices, gridshape[i])
         window.append(indices)
 

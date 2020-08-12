@@ -43,22 +43,22 @@ class aberration:
 
         Parameters
         ----------
-        Krivanek : string
+        Krivanek : str
             A string describing the aberration coefficient in Krivanek notation
             (C_mn)
-        Haider : string
+        Haider : str
             A string describing the aberration coefficient in Haider notation
             (ie. A1, A2, B2)
-        Description :
+        Description : str
             A string describing the colloqiual name of the aberration ie. 2-fold
             astig.
-        amplitude :
+        amplitude : float
             The amplitude of the aberration in Angstrom
-        angle :
+        angle : float
             The angle of the aberration in radians
-        n :
+        n : int
             The principle aberration order
-        m :
+        m : int
             The rotational order of the aberration.
         &#34;&#34;&#34;
         self.Krivanek = Krivanek
@@ -101,6 +101,10 @@ def depth_of_field(eV, alpha):
         Probe accelerating voltage in electron volts
     alpha : float
         Probe forming semi-angle in mrad
+    Returns
+    -------
+    dof : float
+        The probe full-width-at-half-maximum (FWHM) depth of field
     &#34;&#34;&#34;
     return 1.77 / wavev(eV) / alpha / alpha * 1e6
 
@@ -126,7 +130,7 @@ def aberration_starter_pack():
 
 
 def chi(q, qphi, lam, df=0.0, aberrations=[]):
-    &#34;&#34;&#34;
+    r&#34;&#34;&#34;
     Calculate the aberration function, chi.
 
     Parameters
@@ -137,13 +141,16 @@ def chi(q, qphi, lam, df=0.0, aberrations=[]):
         Azimuth of grid in radians
     lam : float
         Wavelength of electron (Inverse angstroms).
-    Keyword arguments
-    -----------------
     df : float, optional
         Defocus in Angstrom
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated contrast transfer function.
+    Returns
+    -------
+    chi : float or array_like
+        The aberration function, will be the same shape as `q`. This is used to
+        calculate the probe wave function in reciprocal space.
     &#34;&#34;&#34;
     qlam = q * lam
     chi_ = qlam ** 2 / 2 * df
@@ -175,22 +182,35 @@ def make_contrast_transfer_function(
 
     Parameters
     ---------
-    pix_dim --- The pixel size of the grid
-    real_dim --- The size of the grid in Angstrom
-    eV --- The energy of the probe electrons in eV
-    app --- The aperture in units specified by app_units, pass app = None for
-            no aperture
-    optic_axis --- allows the user to specify a different optic
-                    axis
-    aperture_shift --- Shift of the objective aperture relative
-                        to the center of the array
+    pix_dim : (2,) int array_like
+        The pixel size of the grid
+    real_dim : (2,) float array_like
+        The size of the grid in Angstrom
+    eV : float
+        The energy of the probe electrons in eV
+    app : float or None
+        The aperture in units specified by app_units, pass `app` = None for
+        no aperture
+    optic_axis : (2,) array_like, optional
+        allows the user to specify a different optic axis in units specified by
+        `tilt_units`
+    aperture_shift : (2,) array_like, optional
+        Shift of the objective aperture relative to the center of the array
     tilt_units : string
-        Units of the optic_axis or aperture_shift values
-    df --- Probe defocus in A, a negative value indicate overfocus
-    aberrations --- List containing instances of class aberration
-    q --- reciprocal space array, allows the user to reduce computation
-        time somewhat
-    app_units --- The units of the aperture size (A^-1 or mrad)
+        Units of the `optic_axis` or `aperture_shift` values, default is mrad
+    df : float
+        Probe defocus in A, a negative value indicate overfocus
+    aberrations : array_like of aberration objects
+        List containing instances of class aberration
+    q :
+        Precomputed reciprocal space array, allows the user to reduce
+        computation time somewhat
+    app_units : string
+        The units of `app` (A^-1 or mrad)
+    Returns
+    -------
+    ctf : array_like
+        The lens contrast transfer function in reciprocal space
     &#34;&#34;&#34;
     # Make reciprocal space array
     if q is None:
@@ -265,9 +285,6 @@ def focused_probe(
     app : float
         The probe-forming apperture in units specified by app_units, pass None
         if no probe forming aperture is to be used
-
-    Keyword arguments
-    -----------------
     beam_tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) beam tilt. To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -286,6 +303,11 @@ def focused_probe(
     app_units : string, optional
         The units of the aperture size (&#34;invA&#34;, &#34;pixels&#34; or &#34;mrad&#34;)
     qspace : bool, optional
+        If True return the probe in reciprocal space
+    Returns
+    -------
+    probe : complex (Y,X) np.ndarray
+        The requested electron probe wave function
     &#34;&#34;&#34;
     probe = make_contrast_transfer_function(
         gridshape,
@@ -316,7 +338,8 @@ def plane_wave_illumination(
     &#34;&#34;&#34;
     Generate plane wave illumination for input to multislice.
 
-    The wave function will be normalized such that sum of intensity is unity.
+    The wave function will be normalized such that sum of intensity is unity in
+    real space.
 
     Parameters
     ----------
@@ -326,9 +349,6 @@ def plane_wave_illumination(
         Size of the grid in real space
     eV : float
         Probe energy in electron volts (irrelevant for untilted illumination)
-
-    Keyword arguments
-    -----------------
     tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -337,6 +357,9 @@ def plane_wave_illumination(
         Units of beam tilt, can be &#39;mrad&#39;,&#39;pixels&#39; or &#39;invA&#39;
     qspace : bool, optional
         Pass qspace = True to get the probe in momentum (q) space
+    Returns
+    ------
+    illum : np.ndarray (Y,X)
     &#34;&#34;&#34;
     # Initialize array that contains wave function
     illum = np.zeros(gridshape, dtype=np.complex)
@@ -413,9 +436,6 @@ def simulation_result_with_Cc(
         standard deviation )
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     args : list, optional
         Arguments for the method function used to propagate probes to the exit
         surface
@@ -424,6 +444,11 @@ def simulation_result_with_Cc(
         the exit surface
     npoints : int,optional
         Number of integration points in the Cc numerical integration
+    Returns
+    -------
+    average : dict or array_like
+        The simulation requested but averaged over the different defocus values
+        to account for chromatic aberration.
     &#34;&#34;&#34;
     # Check if a defocii has already been specified if not, assume that nominal
     # (mean) defocus is 0
@@ -488,9 +513,6 @@ def Cc_integration_points(Cc, deltaE, eV, npoints=7, deltaEconv=&#34;1/e&#34;):
         standard deviation )
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     npoints : int,optional
         Number of integration points in the Cc numerical integration
     deltaEconv : float,optional
@@ -498,6 +520,10 @@ def Cc_integration_points(Cc, deltaE, eV, npoints=7, deltaEconv=&#34;1/e&#34;):
         the energy point that the probability density function drops to 1/e times
         its maximum value, &#39;std&#39; for standard deviation and &#39;FWHM&#39; for the full
         width at half maximum of the energy spread.
+    Returns
+    -------
+    defocii : (`npoints`,) array_like
+        The defocus integration points
     &#34;&#34;&#34;
     # Import the error function (integral of Gaussian) and inverse error function
     # from scipy&#39;s special functions library
@@ -534,6 +560,8 @@ def Cc_defocus_spread(df, Cc, deltaE, eV, deltaEconv):
 
     Parameters
     ----------
+    df : float or array_like
+        defocus or defocii at which to evaluate the probability density function
     Cc : float
         Chromatic aberration coefficient in Angstroms
     deltaE : float
@@ -541,14 +569,15 @@ def Cc_defocus_spread(df, Cc, deltaE, eV, deltaEconv):
         (1/e measure of spread is default)
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     deltaEconv : string,optional
         The convention for deltaE, the energy spread, acceptable inputs are &#39;1/e&#39;
         the energy point that the probability density function drops to 1/e times
         its maximum value, &#39;std&#39; for standard deviation and &#39;FWHM&#39; for the full
         width at half maximum of the energy spread
+    Returns
+    -------
+    Cc_pdf : float or array_like
+        the probability density function, will be the same size and shape as `df`
     &#34;&#34;&#34;
     # Calculate defocus spread
     df_spread = Cc * convert_deltaE(deltaE, deltaEconv) / eV
@@ -601,8 +630,6 @@ def convert_tilt_angles(tilt, tilt_units, rsize, eV, invA_out=False):
         The size of the grid in Angstrom
     eV : float
         Probe energy in electron volts
-    Keyword arguments
-    -----------------
     invA_out : bool
         Pass True if inverse Angstrom units are desired.
     &#34;&#34;&#34;
@@ -641,6 +668,8 @@ spread of a chromatic aberration (Cc) for (1/e) energy spread deltaE and
 beam energy eV in electron volts.</p>
 <h2 id="parameters">Parameters</h2>
 <dl>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
+<dd>defocus or defocii at which to evaluate the probability density function</dd>
 <dt><strong><code>Cc</code></strong> :&ensp;<code>float</code></dt>
 <dd>Chromatic aberration coefficient in Angstroms</dd>
 <dt><strong><code>deltaE</code></strong> :&ensp;<code>float</code></dt>
@@ -648,13 +677,17 @@ beam energy eV in electron volts.</p>
 (1/e measure of spread is default)</dd>
 <dt><strong><code>eV</code></strong> :&ensp;<code>float</code></dt>
 <dd>(Mean) beam energy in electron volts</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>deltaEconv : string,optional
-The convention for deltaE, the energy spread, acceptable inputs are '1/e'
+<dt><strong><code>deltaEconv</code></strong> :&ensp;<code>string</code>,optional</dt>
+<dd>The convention for deltaE, the energy spread, acceptable inputs are '1/e'
 the energy point that the probability density function drops to 1/e times
 its maximum value, 'std' for standard deviation and 'FWHM' for the full
-width at half maximum of the energy spread</p></div>
+width at half maximum of the energy spread</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>Cc_pdf</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
+<dd>the probability density function, will be the same size and shape as <code>df</code></dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -670,6 +703,8 @@ width at half maximum of the energy spread</p></div>
 
     Parameters
     ----------
+    df : float or array_like
+        defocus or defocii at which to evaluate the probability density function
     Cc : float
         Chromatic aberration coefficient in Angstroms
     deltaE : float
@@ -677,14 +712,15 @@ width at half maximum of the energy spread</p></div>
         (1/e measure of spread is default)
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     deltaEconv : string,optional
         The convention for deltaE, the energy spread, acceptable inputs are &#39;1/e&#39;
         the energy point that the probability density function drops to 1/e times
         its maximum value, &#39;std&#39; for standard deviation and &#39;FWHM&#39; for the full
         width at half maximum of the energy spread
+    Returns
+    -------
+    Cc_pdf : float or array_like
+        the probability density function, will be the same size and shape as `df`
     &#34;&#34;&#34;
     # Calculate defocus spread
     df_spread = Cc * convert_deltaE(deltaE, deltaEconv) / eV
@@ -711,15 +747,19 @@ from FWHM divide by 1.655, and divide by sqrt(2) to convert from
 standard deviation )</dd>
 <dt><strong><code>eV</code></strong> :&ensp;<code>float</code></dt>
 <dd>(Mean) beam energy in electron volts</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>npoints : int,optional
-Number of integration points in the Cc numerical integration
-deltaEconv : float,optional
-The convention for deltaE, the energy spread, acceptable inputs are '1/e'
+<dt><strong><code>npoints</code></strong> :&ensp;<code>int</code>,optional</dt>
+<dd>Number of integration points in the Cc numerical integration</dd>
+<dt><strong><code>deltaEconv</code></strong> :&ensp;<code>float</code>,optional</dt>
+<dd>The convention for deltaE, the energy spread, acceptable inputs are '1/e'
 the energy point that the probability density function drops to 1/e times
 its maximum value, 'std' for standard deviation and 'FWHM' for the full
-width at half maximum of the energy spread.</p></div>
+width at half maximum of the energy spread.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>defocii</code></strong> :&ensp;<code>(</code>npoints<code>,) array_like</code></dt>
+<dd>The defocus integration points</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -742,9 +782,6 @@ width at half maximum of the energy spread.</p></div>
         standard deviation )
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     npoints : int,optional
         Number of integration points in the Cc numerical integration
     deltaEconv : float,optional
@@ -752,6 +789,10 @@ width at half maximum of the energy spread.</p></div>
         the energy point that the probability density function drops to 1/e times
         its maximum value, &#39;std&#39; for standard deviation and &#39;FWHM&#39; for the full
         width at half maximum of the energy spread.
+    Returns
+    -------
+    defocii : (`npoints`,) array_like
+        The defocus integration points
     &#34;&#34;&#34;
     # Import the error function (integral of Gaussian) and inverse error function
     # from scipy&#39;s special functions library
@@ -819,19 +860,24 @@ width at half maximum of the energy spread.</p></div>
 <dd>Azimuth of grid in radians</dd>
 <dt><strong><code>lam</code></strong> :&ensp;<code>float</code></dt>
 <dd>Wavelength of electron (Inverse angstroms).</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>Defocus in Angstrom</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list containing a set of the class aberration, pass an empty list for
+an unaberrated contrast transfer function.</dd>
 </dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>df : float, optional
-Defocus in Angstrom
-aberrations : list, optional
-A list containing a set of the class aberration, pass an empty list for
-an unaberrated contrast transfer function.</p></div>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>chi</code></strong> :&ensp;<code>float</code> or <code>array_like</code></dt>
+<dd>The aberration function, will be the same shape as <code>q</code>. This is used to
+calculate the probe wave function in reciprocal space.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def chi(q, qphi, lam, df=0.0, aberrations=[]):
-    &#34;&#34;&#34;
+    r&#34;&#34;&#34;
     Calculate the aberration function, chi.
 
     Parameters
@@ -842,13 +888,16 @@ an unaberrated contrast transfer function.</p></div>
         Azimuth of grid in radians
     lam : float
         Wavelength of electron (Inverse angstroms).
-    Keyword arguments
-    -----------------
     df : float, optional
         Defocus in Angstrom
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated contrast transfer function.
+    Returns
+    -------
+    chi : float or array_like
+        The aberration function, will be the same shape as `q`. This is used to
+        calculate the probe wave function in reciprocal space.
     &#34;&#34;&#34;
     qlam = q * lam
     chi_ = qlam ** 2 / 2 * df
@@ -926,10 +975,9 @@ tilt to pixel or inverse Angstroms units regardless of input units.</p>
 <dd>The size of the grid in Angstrom</dd>
 <dt><strong><code>eV</code></strong> :&ensp;<code>float</code></dt>
 <dd>Probe energy in electron volts</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>invA_out : bool
-Pass True if inverse Angstrom units are desired.</p></div>
+<dt><strong><code>invA_out</code></strong> :&ensp;<code>bool</code></dt>
+<dd>Pass True if inverse Angstrom units are desired.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -950,8 +998,6 @@ Pass True if inverse Angstrom units are desired.</p></div>
         The size of the grid in Angstrom
     eV : float
         Probe energy in electron volts
-    Keyword arguments
-    -----------------
     invA_out : bool
         Pass True if inverse Angstrom units are desired.
     &#34;&#34;&#34;
@@ -984,6 +1030,11 @@ Pass True if inverse Angstrom units are desired.</p></div>
 <dd>Probe accelerating voltage in electron volts</dd>
 <dt><strong><code>alpha</code></strong> :&ensp;<code>float</code></dt>
 <dd>Probe forming semi-angle in mrad</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>dof</code></strong> :&ensp;<code>float</code></dt>
+<dd>The probe full-width-at-half-maximum (FWHM) depth of field</dd>
 </dl></div>
 <details class="source">
 <summary>
@@ -999,6 +1050,10 @@ Pass True if inverse Angstrom units are desired.</p></div>
         Probe accelerating voltage in electron volts
     alpha : float
         Probe forming semi-angle in mrad
+    Returns
+    -------
+    dof : float
+        The probe full-width-at-half-maximum (FWHM) depth of field
     &#34;&#34;&#34;
     return 1.77 / wavev(eV) / alpha / alpha * 1e6</code></pre>
 </details>
@@ -1019,26 +1074,31 @@ Pass True if inverse Angstrom units are desired.</p></div>
 <dt><strong><code>app</code></strong> :&ensp;<code>float</code></dt>
 <dd>The probe-forming apperture in units specified by app_units, pass None
 if no probe forming aperture is to be used</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>beam_tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) beam tilt. To maintain
+<dt><strong><code>beam_tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) beam tilt. To maintain
 periodicity of the wave function at the boundaries this tilt is rounded
-to the nearest pixel value.
-aperture_shift : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) aperture shift. To
+to the nearest pixel value.</dd>
+<dt><strong><code>aperture_shift</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) aperture shift. To
 maintain periodicity of the wave function at the boundaries this tilt
-is rounded to the nearest pixel value.
-tilt_units : string, optional
-Units of beam tilt and aperture shift, can be 'mrad','pixels' or 'invA'
-df : float, optional
-Probe defocus in A, a negative value indicate overfocus
-aberrations : list, optional
-A list of of probe aberrations of class pyms.Probe.aberration, pass an
-empty list for an un-aberrated probe
-app_units : string, optional
-The units of the aperture size ("invA", "pixels" or "mrad")
-qspace : bool, optional</p></div>
+is rounded to the nearest pixel value.</dd>
+<dt><strong><code>tilt_units</code></strong> :&ensp;<code>string</code>, optional</dt>
+<dd>Units of beam tilt and aperture shift, can be 'mrad','pixels' or 'invA'</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>Probe defocus in A, a negative value indicate overfocus</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>A list of of probe aberrations of class pyms.Probe.aberration, pass an
+empty list for an un-aberrated probe</dd>
+<dt><strong><code>app_units</code></strong> :&ensp;<code>string</code>, optional</dt>
+<dd>The units of the aperture size ("invA", "pixels" or "mrad")</dd>
+<dt><strong><code>qspace</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>If True return the probe in reciprocal space</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>probe</code></strong> :&ensp;<code>complex (Y,X) np.ndarray</code></dt>
+<dd>The requested electron probe wave function</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -1071,9 +1131,6 @@ qspace : bool, optional</p></div>
     app : float
         The probe-forming apperture in units specified by app_units, pass None
         if no probe forming aperture is to be used
-
-    Keyword arguments
-    -----------------
     beam_tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) beam tilt. To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -1092,6 +1149,11 @@ qspace : bool, optional</p></div>
     app_units : string, optional
         The units of the aperture size (&#34;invA&#34;, &#34;pixels&#34; or &#34;mrad&#34;)
     qspace : bool, optional
+        If True return the probe in reciprocal space
+    Returns
+    -------
+    probe : complex (Y,X) np.ndarray
+        The requested electron probe wave function
     &#34;&#34;&#34;
     probe = make_contrast_transfer_function(
         gridshape,
@@ -1123,23 +1185,37 @@ qspace : bool, optional</p></div>
 <div class="desc"><p>Make an electron lens contrast transfer function.</p>
 <h2 id="parameters">Parameters</h2>
 <dl>
-<dt>pix_dim &mdash; The pixel size of the grid</dt>
-<dt>real_dim &mdash; The size of the grid in Angstrom</dt>
-<dt>eV &mdash; The energy of the probe electrons in eV</dt>
-<dt>app &mdash; The aperture in units specified by app_units, pass app = None for</dt>
-<dt>no aperture</dt>
-<dt>optic_axis &mdash; allows the user to specify a different optic</dt>
-<dt>axis</dt>
-<dt>aperture_shift &mdash; Shift of the objective aperture relative</dt>
-<dt>to the center of the array</dt>
+<dt><strong><code>pix_dim</code></strong> :&ensp;<code>(2,) int array_like</code></dt>
+<dd>The pixel size of the grid</dd>
+<dt><strong><code>real_dim</code></strong> :&ensp;<code>(2,) float array_like</code></dt>
+<dd>The size of the grid in Angstrom</dd>
+<dt><strong><code>eV</code></strong> :&ensp;<code>float</code></dt>
+<dd>The energy of the probe electrons in eV</dd>
+<dt><strong><code>app</code></strong> :&ensp;<code>float</code> or <code>None</code></dt>
+<dd>The aperture in units specified by app_units, pass <code>app</code> = None for
+no aperture</dd>
+<dt><strong><code>optic_axis</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>allows the user to specify a different optic axis in units specified by
+<code>tilt_units</code></dd>
+<dt><strong><code>aperture_shift</code></strong> :&ensp;<code>(2,) array_like</code>, optional</dt>
+<dd>Shift of the objective aperture relative to the center of the array</dd>
 <dt><strong><code>tilt_units</code></strong> :&ensp;<code>string</code></dt>
-<dd>Units of the optic_axis or aperture_shift values</dd>
+<dd>Units of the <code>optic_axis</code> or <code>aperture_shift</code> values, default is mrad</dd>
+<dt><strong><code>df</code></strong> :&ensp;<code>float</code></dt>
+<dd>Probe defocus in A, a negative value indicate overfocus</dd>
+<dt><strong><code>aberrations</code></strong> :&ensp;<code>array_like</code> of <code><a title="pyms.Probe.aberration" href="#pyms.Probe.aberration">aberration</a> objects</code></dt>
+<dd>List containing instances of class aberration</dd>
+<dt>q :</dt>
+<dt>Precomputed reciprocal space array, allows the user to reduce</dt>
+<dt>computation time somewhat</dt>
+<dt><strong><code>app_units</code></strong> :&ensp;<code>string</code></dt>
+<dd>The units of <code>app</code> (A^-1 or mrad)</dd>
 </dl>
-<p>df &mdash; Probe defocus in A, a negative value indicate overfocus
-aberrations &mdash; List containing instances of class aberration
-q &mdash; reciprocal space array, allows the user to reduce computation
-time somewhat
-app_units &mdash; The units of the aperture size (A^-1 or mrad)</p></div>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>ctf</code></strong> :&ensp;<code>array_like</code></dt>
+<dd>The lens contrast transfer function in reciprocal space</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -1162,22 +1238,35 @@ app_units &mdash; The units of the aperture size (A^-1 or mrad)</p></div>
 
     Parameters
     ---------
-    pix_dim --- The pixel size of the grid
-    real_dim --- The size of the grid in Angstrom
-    eV --- The energy of the probe electrons in eV
-    app --- The aperture in units specified by app_units, pass app = None for
-            no aperture
-    optic_axis --- allows the user to specify a different optic
-                    axis
-    aperture_shift --- Shift of the objective aperture relative
-                        to the center of the array
+    pix_dim : (2,) int array_like
+        The pixel size of the grid
+    real_dim : (2,) float array_like
+        The size of the grid in Angstrom
+    eV : float
+        The energy of the probe electrons in eV
+    app : float or None
+        The aperture in units specified by app_units, pass `app` = None for
+        no aperture
+    optic_axis : (2,) array_like, optional
+        allows the user to specify a different optic axis in units specified by
+        `tilt_units`
+    aperture_shift : (2,) array_like, optional
+        Shift of the objective aperture relative to the center of the array
     tilt_units : string
-        Units of the optic_axis or aperture_shift values
-    df --- Probe defocus in A, a negative value indicate overfocus
-    aberrations --- List containing instances of class aberration
-    q --- reciprocal space array, allows the user to reduce computation
-        time somewhat
-    app_units --- The units of the aperture size (A^-1 or mrad)
+        Units of the `optic_axis` or `aperture_shift` values, default is mrad
+    df : float
+        Probe defocus in A, a negative value indicate overfocus
+    aberrations : array_like of aberration objects
+        List containing instances of class aberration
+    q :
+        Precomputed reciprocal space array, allows the user to reduce
+        computation time somewhat
+    app_units : string
+        The units of `app` (A^-1 or mrad)
+    Returns
+    -------
+    ctf : array_like
+        The lens contrast transfer function in reciprocal space
     &#34;&#34;&#34;
     # Make reciprocal space array
     if q is None:
@@ -1229,7 +1318,8 @@ app_units &mdash; The units of the aperture size (A^-1 or mrad)</p></div>
 </code></dt>
 <dd>
 <div class="desc"><p>Generate plane wave illumination for input to multislice.</p>
-<p>The wave function will be normalized such that sum of intensity is unity.</p>
+<p>The wave function will be normalized such that sum of intensity is unity in
+real space.</p>
 <h2 id="parameters">Parameters</h2>
 <dl>
 <dt><strong><code>gridshape</code></strong> :&ensp;<code>(2,) array_like</code></dt>
@@ -1238,16 +1328,20 @@ app_units &mdash; The units of the aperture size (A^-1 or mrad)</p></div>
 <dd>Size of the grid in real space</dd>
 <dt><strong><code>eV</code></strong> :&ensp;<code>float</code></dt>
 <dd>Probe energy in electron volts (irrelevant for untilted illumination)</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>tilt : array_like, optional
-Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
+<dt><strong><code>tilt</code></strong> :&ensp;<code>array_like</code>, optional</dt>
+<dd>Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
 periodicity of the wave function at the boundaries this tilt is rounded
-to the nearest pixel value.
-tilt_units : string, optional
-Units of beam tilt, can be 'mrad','pixels' or 'invA'
-qspace : bool, optional
-Pass qspace = True to get the probe in momentum (q) space</p></div>
+to the nearest pixel value.</dd>
+<dt><strong><code>tilt_units</code></strong> :&ensp;<code>string</code>, optional</dt>
+<dd>Units of beam tilt, can be 'mrad','pixels' or 'invA'</dd>
+<dt><strong><code>qspace</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>Pass qspace = True to get the probe in momentum (q) space</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>illum</code></strong> :&ensp;<code>np.ndarray (Y,X)</code></dt>
+<dd>&nbsp;</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -1258,7 +1352,8 @@ Pass qspace = True to get the probe in momentum (q) space</p></div>
     &#34;&#34;&#34;
     Generate plane wave illumination for input to multislice.
 
-    The wave function will be normalized such that sum of intensity is unity.
+    The wave function will be normalized such that sum of intensity is unity in
+    real space.
 
     Parameters
     ----------
@@ -1268,9 +1363,6 @@ Pass qspace = True to get the probe in momentum (q) space</p></div>
         Size of the grid in real space
     eV : float
         Probe energy in electron volts (irrelevant for untilted illumination)
-
-    Keyword arguments
-    -----------------
     tilt : array_like, optional
         Allows the user to simulate a (small &lt; 50 mrad) beam tilt, To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -1279,6 +1371,9 @@ Pass qspace = True to get the probe in momentum (q) space</p></div>
         Units of beam tilt, can be &#39;mrad&#39;,&#39;pixels&#39; or &#39;invA&#39;
     qspace : bool, optional
         Pass qspace = True to get the probe in momentum (q) space
+    Returns
+    ------
+    illum : np.ndarray (Y,X)
     &#34;&#34;&#34;
     # Initialize array that contains wave function
     illum = np.zeros(gridshape, dtype=np.complex)
@@ -1349,16 +1444,21 @@ from FWHM divide by 1.655, and divide by sqrt(2) to convert from
 standard deviation )</dd>
 <dt><strong><code>eV</code></strong> :&ensp;<code>float</code></dt>
 <dd>(Mean) beam energy in electron volts</dd>
+<dt><strong><code>args</code></strong> :&ensp;<code>list</code>, optional</dt>
+<dd>Arguments for the method function used to propagate probes to the exit
+surface</dd>
+<dt><strong><code>kwargs</code></strong> :&ensp;<code>Dict</code>, optional</dt>
+<dd>Keyword arguments for the method function used to propagate probes to
+the exit surface</dd>
+<dt><strong><code>npoints</code></strong> :&ensp;<code>int</code>,optional</dt>
+<dd>Number of integration points in the Cc numerical integration</dd>
 </dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>args : list, optional
-Arguments for the method function used to propagate probes to the exit
-surface
-kwargs : Dict, optional
-Keyword arguments for the method function used to propagate probes to
-the exit surface
-npoints : int,optional
-Number of integration points in the Cc numerical integration</p></div>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>average</code></strong> :&ensp;<code>dict</code> or <code>array_like</code></dt>
+<dd>The simulation requested but averaged over the different defocus values
+to account for chromatic aberration.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -1386,9 +1486,6 @@ Number of integration points in the Cc numerical integration</p></div>
         standard deviation )
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     args : list, optional
         Arguments for the method function used to propagate probes to the exit
         surface
@@ -1397,6 +1494,11 @@ Number of integration points in the Cc numerical integration</p></div>
         the exit surface
     npoints : int,optional
         Number of integration points in the Cc numerical integration
+    Returns
+    -------
+    average : dict or array_like
+        The simulation requested but averaged over the different defocus values
+        to account for chromatic aberration.
     &#34;&#34;&#34;
     # Check if a defocii has already been specified if not, assume that nominal
     # (mean) defocus is 0
@@ -1482,24 +1584,24 @@ Computing in electron microscopy</p></div>
 <p>Intialize the lens aberration object.</p>
 <h2 id="parameters">Parameters</h2>
 <dl>
-<dt><strong><code>Krivanek</code></strong> :&ensp;<code>string</code></dt>
+<dt><strong><code>Krivanek</code></strong> :&ensp;<code>str</code></dt>
 <dd>A string describing the aberration coefficient in Krivanek notation
 (C_mn)</dd>
-<dt><strong><code>Haider</code></strong> :&ensp;<code>string</code></dt>
+<dt><strong><code>Haider</code></strong> :&ensp;<code>str</code></dt>
 <dd>A string describing the aberration coefficient in Haider notation
 (ie. A1, A2, B2)</dd>
-</dl>
-<p>Description :
-A string describing the colloqiual name of the aberration ie. 2-fold
-astig.
-amplitude :
-The amplitude of the aberration in Angstrom
-angle :
-The angle of the aberration in radians
-n :
-The principle aberration order
-m :
-The rotational order of the aberration.</p></div>
+<dt><strong><code>Description</code></strong> :&ensp;<code>str</code></dt>
+<dd>A string describing the colloqiual name of the aberration ie. 2-fold
+astig.</dd>
+<dt><strong><code>amplitude</code></strong> :&ensp;<code>float</code></dt>
+<dd>The amplitude of the aberration in Angstrom</dd>
+<dt><strong><code>angle</code></strong> :&ensp;<code>float</code></dt>
+<dd>The angle of the aberration in radians</dd>
+<dt><strong><code>n</code></strong> :&ensp;<code>int</code></dt>
+<dd>The principle aberration order</dd>
+<dt><strong><code>m</code></strong> :&ensp;<code>int</code></dt>
+<dd>The rotational order of the aberration.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -1513,22 +1615,22 @@ The rotational order of the aberration.</p></div>
 
         Parameters
         ----------
-        Krivanek : string
+        Krivanek : str
             A string describing the aberration coefficient in Krivanek notation
             (C_mn)
-        Haider : string
+        Haider : str
             A string describing the aberration coefficient in Haider notation
             (ie. A1, A2, B2)
-        Description :
+        Description : str
             A string describing the colloqiual name of the aberration ie. 2-fold
             astig.
-        amplitude :
+        amplitude : float
             The amplitude of the aberration in Angstrom
-        angle :
+        angle : float
             The angle of the aberration in radians
-        n :
+        n : int
             The principle aberration order
-        m :
+        m : int
             The rotational order of the aberration.
         &#34;&#34;&#34;
         self.Krivanek = Krivanek

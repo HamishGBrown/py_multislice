@@ -14,22 +14,22 @@ class aberration:
 
         Parameters
         ----------
-        Krivanek : string
+        Krivanek : str
             A string describing the aberration coefficient in Krivanek notation
             (C_mn)
-        Haider : string
+        Haider : str
             A string describing the aberration coefficient in Haider notation
             (ie. A1, A2, B2)
-        Description :
+        Description : str
             A string describing the colloqiual name of the aberration ie. 2-fold
             astig.
-        amplitude :
+        amplitude : float
             The amplitude of the aberration in Angstrom
-        angle :
+        angle : float
             The angle of the aberration in radians
-        n :
+        n : int
             The principle aberration order
-        m :
+        m : int
             The rotational order of the aberration.
         """
         self.Krivanek = Krivanek
@@ -72,6 +72,10 @@ def depth_of_field(eV, alpha):
         Probe accelerating voltage in electron volts
     alpha : float
         Probe forming semi-angle in mrad
+    Returns
+    -------
+    dof : float
+        The probe full-width-at-half-maximum (FWHM) depth of field
     """
     return 1.77 / wavev(eV) / alpha / alpha * 1e6
 
@@ -97,7 +101,7 @@ def aberration_starter_pack():
 
 
 def chi(q, qphi, lam, df=0.0, aberrations=[]):
-    """
+    r"""
     Calculate the aberration function, chi.
 
     Parameters
@@ -108,13 +112,16 @@ def chi(q, qphi, lam, df=0.0, aberrations=[]):
         Azimuth of grid in radians
     lam : float
         Wavelength of electron (Inverse angstroms).
-    Keyword arguments
-    -----------------
     df : float, optional
         Defocus in Angstrom
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated contrast transfer function.
+    Returns
+    -------
+    chi : float or array_like
+        The aberration function, will be the same shape as `q`. This is used to
+        calculate the probe wave function in reciprocal space.
     """
     qlam = q * lam
     chi_ = qlam ** 2 / 2 * df
@@ -146,22 +153,35 @@ def make_contrast_transfer_function(
 
     Parameters
     ---------
-    pix_dim --- The pixel size of the grid
-    real_dim --- The size of the grid in Angstrom
-    eV --- The energy of the probe electrons in eV
-    app --- The aperture in units specified by app_units, pass app = None for
-            no aperture
-    optic_axis --- allows the user to specify a different optic
-                    axis
-    aperture_shift --- Shift of the objective aperture relative
-                        to the center of the array
+    pix_dim : (2,) int array_like
+        The pixel size of the grid
+    real_dim : (2,) float array_like
+        The size of the grid in Angstrom
+    eV : float
+        The energy of the probe electrons in eV
+    app : float or None
+        The aperture in units specified by app_units, pass `app` = None for
+        no aperture
+    optic_axis : (2,) array_like, optional
+        allows the user to specify a different optic axis in units specified by
+        `tilt_units`
+    aperture_shift : (2,) array_like, optional
+        Shift of the objective aperture relative to the center of the array
     tilt_units : string
-        Units of the optic_axis or aperture_shift values
-    df --- Probe defocus in A, a negative value indicate overfocus
-    aberrations --- List containing instances of class aberration
-    q --- reciprocal space array, allows the user to reduce computation
-        time somewhat
-    app_units --- The units of the aperture size (A^-1 or mrad)
+        Units of the `optic_axis` or `aperture_shift` values, default is mrad
+    df : float
+        Probe defocus in A, a negative value indicate overfocus
+    aberrations : array_like of aberration objects
+        List containing instances of class aberration
+    q :
+        Precomputed reciprocal space array, allows the user to reduce
+        computation time somewhat
+    app_units : string
+        The units of `app` (A^-1 or mrad)
+    Returns
+    -------
+    ctf : array_like
+        The lens contrast transfer function in reciprocal space
     """
     # Make reciprocal space array
     if q is None:
@@ -236,9 +256,6 @@ def focused_probe(
     app : float
         The probe-forming apperture in units specified by app_units, pass None
         if no probe forming aperture is to be used
-
-    Keyword arguments
-    -----------------
     beam_tilt : array_like, optional
         Allows the user to simulate a (small < 50 mrad) beam tilt. To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -257,6 +274,11 @@ def focused_probe(
     app_units : string, optional
         The units of the aperture size ("invA", "pixels" or "mrad")
     qspace : bool, optional
+        If True return the probe in reciprocal space
+    Returns
+    -------
+    probe : complex (Y,X) np.ndarray
+        The requested electron probe wave function
     """
     probe = make_contrast_transfer_function(
         gridshape,
@@ -287,7 +309,8 @@ def plane_wave_illumination(
     """
     Generate plane wave illumination for input to multislice.
 
-    The wave function will be normalized such that sum of intensity is unity.
+    The wave function will be normalized such that sum of intensity is unity in
+    real space.
 
     Parameters
     ----------
@@ -297,9 +320,6 @@ def plane_wave_illumination(
         Size of the grid in real space
     eV : float
         Probe energy in electron volts (irrelevant for untilted illumination)
-
-    Keyword arguments
-    -----------------
     tilt : array_like, optional
         Allows the user to simulate a (small < 50 mrad) beam tilt, To maintain
         periodicity of the wave function at the boundaries this tilt is rounded
@@ -308,6 +328,9 @@ def plane_wave_illumination(
         Units of beam tilt, can be 'mrad','pixels' or 'invA'
     qspace : bool, optional
         Pass qspace = True to get the probe in momentum (q) space
+    Returns
+    ------
+    illum : np.ndarray (Y,X)
     """
     # Initialize array that contains wave function
     illum = np.zeros(gridshape, dtype=np.complex)
@@ -384,9 +407,6 @@ def simulation_result_with_Cc(
         standard deviation )
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     args : list, optional
         Arguments for the method function used to propagate probes to the exit
         surface
@@ -395,6 +415,11 @@ def simulation_result_with_Cc(
         the exit surface
     npoints : int,optional
         Number of integration points in the Cc numerical integration
+    Returns
+    -------
+    average : dict or array_like
+        The simulation requested but averaged over the different defocus values
+        to account for chromatic aberration.
     """
     # Check if a defocii has already been specified if not, assume that nominal
     # (mean) defocus is 0
@@ -459,9 +484,6 @@ def Cc_integration_points(Cc, deltaE, eV, npoints=7, deltaEconv="1/e"):
         standard deviation )
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     npoints : int,optional
         Number of integration points in the Cc numerical integration
     deltaEconv : float,optional
@@ -469,6 +491,10 @@ def Cc_integration_points(Cc, deltaE, eV, npoints=7, deltaEconv="1/e"):
         the energy point that the probability density function drops to 1/e times
         its maximum value, 'std' for standard deviation and 'FWHM' for the full
         width at half maximum of the energy spread.
+    Returns
+    -------
+    defocii : (`npoints`,) array_like
+        The defocus integration points
     """
     # Import the error function (integral of Gaussian) and inverse error function
     # from scipy's special functions library
@@ -505,6 +531,8 @@ def Cc_defocus_spread(df, Cc, deltaE, eV, deltaEconv):
 
     Parameters
     ----------
+    df : float or array_like
+        defocus or defocii at which to evaluate the probability density function
     Cc : float
         Chromatic aberration coefficient in Angstroms
     deltaE : float
@@ -512,14 +540,15 @@ def Cc_defocus_spread(df, Cc, deltaE, eV, deltaEconv):
         (1/e measure of spread is default)
     eV : float
         (Mean) beam energy in electron volts
-
-    Keyword arguments
-    -----------------
     deltaEconv : string,optional
         The convention for deltaE, the energy spread, acceptable inputs are '1/e'
         the energy point that the probability density function drops to 1/e times
         its maximum value, 'std' for standard deviation and 'FWHM' for the full
         width at half maximum of the energy spread
+    Returns
+    -------
+    Cc_pdf : float or array_like
+        the probability density function, will be the same size and shape as `df`
     """
     # Calculate defocus spread
     df_spread = Cc * convert_deltaE(deltaE, deltaEconv) / eV
@@ -572,8 +601,6 @@ def convert_tilt_angles(tilt, tilt_units, rsize, eV, invA_out=False):
         The size of the grid in Angstrom
     eV : float
         Probe energy in electron volts
-    Keyword arguments
-    -----------------
     invA_out : bool
         Pass True if inverse Angstrom units are desired.
     """

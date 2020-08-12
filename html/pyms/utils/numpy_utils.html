@@ -83,40 +83,21 @@ def crop_window_to_flattened_indices(indices, shape):
     ).ravel()
 
 
-def crop_to_bandwidth_limit(array, limit=2 / 3, qspace_in=True, qspace_out=True):
+def crop_to_bandwidth_limit(
+    array, limit=2 / 3, norm=&#34;conserve_L2&#34;, qspace_in=True, qspace_out=True
+):
     &#34;&#34;&#34;
     Crop an array to its bandwidth limit (ie remove superfluous array entries).
 
     assumes that input array is in Fourier space with zeroth Fourier component
     in upper-left corner
     &#34;&#34;&#34;
-    if not qspace_in:
-        array = np.fft.fft2(array)
-
-    # Get array shape
-    gridshape = array.shape[-2:]
-
     # New shape of final dimensions
-    newshape = tuple([round(gridshape[i] * limit) for i in range(2)])
+    newshape = tuple([round(array.shape[-2 + i] * limit) for i in range(2)])
 
-    # Indices of values to take
-    ind = [
-        (np.fft.fftfreq(newshape[i], 1 / newshape[i]).astype(np.int) + gridshape[i])
-        % gridshape[i]
-        for i in range(2)
-    ]
-    ind = crop_window_to_flattened_indices(ind, array.shape[-2:])
-
-    # flatten final two dimensions of array
-    flat_shape = array.shape[:-2] + (np.prod(array.shape[-2:]),)
-    newshape = array.shape[:-2] + newshape
-
-    array = array.reshape(flat_shape)[..., ind].reshape(newshape)
-
-    if qspace_out:
-        return array
-    else:
-        return np.fft.ifft2(array)
+    return fourier_interpolate_2d(
+        array, newshape, norm=norm, qspace_in=qspace_in, qspace_out=qspace_out
+    )
 
 
 def bandwidth_limit_array(arrayin, limit=2 / 3, qspace_in=True, qspace_out=True):
@@ -142,6 +123,10 @@ def bandwidth_limit_array(arrayin, limit=2 / 3, qspace_in=True, qspace_out=True)
     qspace_out : bool, optional
         Set to True for reciprocal space output (default), False for real-space
         output.
+    Returns
+    -------
+    array : array_like (...,Ny,Nx)
+        The bandwidth limit of the array
     &#34;&#34;&#34;
     # Transform array to real space if necessary
     if qspace_in:
@@ -264,12 +249,9 @@ def colorize(z, saturation=0.8, minlightness=0.0, maxlightness=0.5):
     ----------
     z : complex, array_like
         Complex array to be plotted using hsl
-
-    Keyword arguments
-    -----------------
-    Saturation : float
+    Saturation : float, optional
         (Uniform) saturation value of the hsl colormap
-    minlightness, maxlightness : float
+    minlightness, maxlightness : float, optional
         The amplitude of the complex array z will be mapped to the lightness of
         the output hsl map. These keyword arguments allow control over the range
         of lightness values in the map
@@ -312,7 +294,8 @@ def fourier_interpolate_2d(
         if &#39;conserve_norm&#39; L2 norm is conserved under interpolation and if
         &#39;conserve_L1&#39; L1 norm is conserved under interpolation
     qspace_in : bool, optional
-        Set to True if the input array is in reciprocal space, False if not (default)
+        Set to True if the input array is in reciprocal space, False if not (default).
+        Be careful with setting this to True for a non-complex array.
     qspace_out : bool, optional
         Set to True for reciprocal space output, False for real-space output (default).
     &#34;&#34;&#34;
@@ -339,14 +322,11 @@ def fourier_interpolate_2d(
 
     # Fourier transform result with appropriate normalization
     if norm == &#34;conserve_val&#34;:
-        aout = np.fft.ifftn(aout, axes=[-2, -1]) * (
-            np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
-        )
+        aout *= np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
     elif norm == &#34;conserve_norm&#34;:
-        aout = np.fft.ifftn(aout, axes=[-2, -1]) * np.sqrt(
-            np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
-        )
-    else:
+        aout *= np.sqrt(np.prod(shapeout) / np.prod(np.shape(ain)[-2:]))
+
+    if not qspace_out:
         aout = np.fft.ifftn(aout, axes=[-2, -1])
 
     # Return correct array data type
@@ -697,6 +677,11 @@ False if not</dd>
 <dt><strong><code>qspace_out</code></strong> :&ensp;<code>bool</code>, optional</dt>
 <dd>Set to True for reciprocal space output (default), False for real-space
 output.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>array</code></strong> :&ensp;<code>array_like (&hellip;,Ny,Nx)</code></dt>
+<dd>The bandwidth limit of the array</dd>
 </dl></div>
 <details class="source">
 <summary>
@@ -725,6 +710,10 @@ output.</dd>
     qspace_out : bool, optional
         Set to True for reciprocal space output (default), False for real-space
         output.
+    Returns
+    -------
+    array : array_like (...,Ny,Nx)
+        The bandwidth limit of the array
     &#34;&#34;&#34;
     # Transform array to real space if necessary
     if qspace_in:
@@ -774,14 +763,13 @@ output.</dd>
 <dl>
 <dt><strong><code>z</code></strong> :&ensp;<code>complex, array_like</code></dt>
 <dd>Complex array to be plotted using hsl</dd>
-</dl>
-<h2 id="keyword-arguments">Keyword Arguments</h2>
-<p>Saturation : float
-(Uniform) saturation value of the hsl colormap
-minlightness, maxlightness : float
-The amplitude of the complex array z will be mapped to the lightness of
+<dt><strong><code>Saturation</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>(Uniform) saturation value of the hsl colormap</dd>
+<dt><strong><code>minlightness</code></strong>, <strong><code>maxlightness</code></strong> :&ensp;<code>float</code>, optional</dt>
+<dd>The amplitude of the complex array z will be mapped to the lightness of
 the output hsl map. These keyword arguments allow control over the range
-of lightness values in the map</p></div>
+of lightness values in the map</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -794,12 +782,9 @@ of lightness values in the map</p></div>
     ----------
     z : complex, array_like
         Complex array to be plotted using hsl
-
-    Keyword arguments
-    -----------------
-    Saturation : float
+    Saturation : float, optional
         (Uniform) saturation value of the hsl colormap
-    minlightness, maxlightness : float
+    minlightness, maxlightness : float, optional
         The amplitude of the complex array z will be mapped to the lightness of
         the output hsl map. These keyword arguments allow control over the range
         of lightness values in the map
@@ -922,7 +907,7 @@ perform zero-padding.</p>
 </details>
 </dd>
 <dt id="pyms.utils.numpy_utils.crop_to_bandwidth_limit"><code class="name flex">
-<span>def <span class="ident">crop_to_bandwidth_limit</span></span>(<span>array, limit=0.6666666666666666, qspace_in=True, qspace_out=True)</span>
+<span>def <span class="ident">crop_to_bandwidth_limit</span></span>(<span>array, limit=0.6666666666666666, norm='conserve_L2', qspace_in=True, qspace_out=True)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Crop an array to its bandwidth limit (ie remove superfluous array entries).</p>
@@ -932,40 +917,21 @@ in upper-left corner</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def crop_to_bandwidth_limit(array, limit=2 / 3, qspace_in=True, qspace_out=True):
+<pre><code class="python">def crop_to_bandwidth_limit(
+    array, limit=2 / 3, norm=&#34;conserve_L2&#34;, qspace_in=True, qspace_out=True
+):
     &#34;&#34;&#34;
     Crop an array to its bandwidth limit (ie remove superfluous array entries).
 
     assumes that input array is in Fourier space with zeroth Fourier component
     in upper-left corner
     &#34;&#34;&#34;
-    if not qspace_in:
-        array = np.fft.fft2(array)
-
-    # Get array shape
-    gridshape = array.shape[-2:]
-
     # New shape of final dimensions
-    newshape = tuple([round(gridshape[i] * limit) for i in range(2)])
+    newshape = tuple([round(array.shape[-2 + i] * limit) for i in range(2)])
 
-    # Indices of values to take
-    ind = [
-        (np.fft.fftfreq(newshape[i], 1 / newshape[i]).astype(np.int) + gridshape[i])
-        % gridshape[i]
-        for i in range(2)
-    ]
-    ind = crop_window_to_flattened_indices(ind, array.shape[-2:])
-
-    # flatten final two dimensions of array
-    flat_shape = array.shape[:-2] + (np.prod(array.shape[-2:]),)
-    newshape = array.shape[:-2] + newshape
-
-    array = array.reshape(flat_shape)[..., ind].reshape(newshape)
-
-    if qspace_out:
-        return array
-    else:
-        return np.fft.ifft2(array)</code></pre>
+    return fourier_interpolate_2d(
+        array, newshape, norm=norm, qspace_in=qspace_in, qspace_out=qspace_out
+    )</code></pre>
 </details>
 </dd>
 <dt id="pyms.utils.numpy_utils.crop_window_to_flattened_indices"><code class="name flex">
@@ -1020,7 +986,8 @@ y and x indices describing a cropping window to a flattened 1d array.</p></div>
 if 'conserve_norm' L2 norm is conserved under interpolation and if
 'conserve_L1' L1 norm is conserved under interpolation</dd>
 <dt><strong><code>qspace_in</code></strong> :&ensp;<code>bool</code>, optional</dt>
-<dd>Set to True if the input array is in reciprocal space, False if not (default)</dd>
+<dd>Set to True if the input array is in reciprocal space, False if not (default).
+Be careful with setting this to True for a non-complex array.</dd>
 <dt><strong><code>qspace_out</code></strong> :&ensp;<code>bool</code>, optional</dt>
 <dd>Set to True for reciprocal space output, False for real-space output (default).</dd>
 </dl></div>
@@ -1045,7 +1012,8 @@ if 'conserve_norm' L2 norm is conserved under interpolation and if
         if &#39;conserve_norm&#39; L2 norm is conserved under interpolation and if
         &#39;conserve_L1&#39; L1 norm is conserved under interpolation
     qspace_in : bool, optional
-        Set to True if the input array is in reciprocal space, False if not (default)
+        Set to True if the input array is in reciprocal space, False if not (default).
+        Be careful with setting this to True for a non-complex array.
     qspace_out : bool, optional
         Set to True for reciprocal space output, False for real-space output (default).
     &#34;&#34;&#34;
@@ -1072,14 +1040,11 @@ if 'conserve_norm' L2 norm is conserved under interpolation and if
 
     # Fourier transform result with appropriate normalization
     if norm == &#34;conserve_val&#34;:
-        aout = np.fft.ifftn(aout, axes=[-2, -1]) * (
-            np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
-        )
+        aout *= np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
     elif norm == &#34;conserve_norm&#34;:
-        aout = np.fft.ifftn(aout, axes=[-2, -1]) * np.sqrt(
-            np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
-        )
-    else:
+        aout *= np.sqrt(np.prod(shapeout) / np.prod(np.shape(ain)[-2:]))
+
+    if not qspace_out:
         aout = np.fft.ifftn(aout, axes=[-2, -1])
 
     # Return correct array data type
