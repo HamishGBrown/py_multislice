@@ -25,7 +25,7 @@ Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-at
 
     $ python Test.py
 
-    You can also run run Orbital_normalization.py to test that the ionization cross-sections are being calculated appropriately.
+    If you didn't instal PFAC in the last step then you will get error messages from the ionization routines, if you only want to perform non-ionization based TEM simulations then you can ignore these failed tests. You can also run run Orbital_normalization.py to test that the ionization cross-sections are being calculated appropriately.
 
 # Documentation and demos
 
