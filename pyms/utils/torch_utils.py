@@ -432,7 +432,7 @@ def crop_to_bandwidth_limit_torch(
     limit=2 / 3,
     qspace_in=True,
     qspace_out=True,
-    norm="conserve_L2",
+    norm="conserve_norm",
 ):
     """Crop an array to its bandwidth limit (remove superfluous array entries)."""
     # Check if array is complex or not

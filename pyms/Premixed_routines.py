@@ -752,9 +752,11 @@ def STEM_multislice(
         DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
             FourD_STEM, real_dim, gridshape
         )
-        scanshape = generate_STEM_raster(
-            real_dim, eV, app, tiling=tiling, ROI=ROI
-        ).shape[:-1]
+        if scan_posn is None:
+            scan_posn = generate_STEM_raster(
+                real_dim, eV, app, tiling=tiling, ROI=ROI
+            )
+        scanshape = scan_posn.shape[:-1]
         Rpix = nyquist_sampling(eV=eV, alpha=app)
 
         # Make a datacube for each thickness of interest
