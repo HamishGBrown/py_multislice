@@ -14,13 +14,19 @@ from re import split, match
 from os.path import splitext
 from .atomic_scattering_params import e_scattering_factors, atomic_symbol
 from .Probe import wavev, relativistic_mass_correction
-from .utils.numpy_utils import bandwidth_limit_array, q_space_array, ensure_array
-from .utils.torch_utils import sinc, torch_c_exp, get_device, cx_from_numpy
+from .utils.numpy_utils import q_space_array, ensure_array
+from .utils.torch_utils import (
+    sinc,
+    get_device,
+    bandwidth_limit_array_torch,
+    complex_to_real_dtype_torch,
+)
+from . import _float, _int, _uint
 
 
 def remove_common_factors(nums):
     """Remove common divisible factors from a set of numbers."""
-    nums = np.asarray(nums, dtype=np.int)
+    nums = np.asarray(nums, dtype=_int)
     g_ = np.gcd.reduce(nums)
     while g_ > 1:
         nums //= g_
@@ -125,7 +131,7 @@ def calculate_scattering_factors(gridshape, gridsize, elements):
     gsq = np.square(g[0]) + np.square(g[1])
 
     # Initialise scattering factor array
-    fe = np.zeros((len(elements), *gridshape), dtype=np.float32)
+    fe = np.zeros((len(elements), *gridshape), dtype=_float)
 
     # Loop over unique elements
     for ielement, element in enumerate(elements):
@@ -150,7 +156,7 @@ def find_equivalent_sites(positions, EPS=1e-3):
 
     # Initialize index of equivalent sites (initially assume all sites are
     # independent)
-    equivalent_sites = np.arange(natoms, dtype=np.int)
+    equivalent_sites = np.arange(natoms, dtype=_int)
 
     # Find equivalent sites
     equiv = distance_matrix < EPS
@@ -197,7 +203,7 @@ def change_of_basis(coords, newuc, olduc):
     return np.mod(coords[:, :3] @ olduc @ np.linalg.inv(newuc), 1.0)
 
 
-def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=np.float)):
+def rot_matrix(theta, u=np.asarray([0, 0, 1], dtype=_float)):
     """
     Generate a 3D rotational matrix.
 
@@ -335,7 +341,7 @@ class structure:
             f.readline()
 
             # Get unit cell vector - WARNING assume an orthorhombic unit cell
-            unitcell = np.loadtxt(f, max_rows=3, dtype=np.float)
+            unitcell = np.loadtxt(f, max_rows=3, dtype=_float)
 
             # Get the atomic symbol of each element
             atomtypes = np.loadtxt(f, max_rows=1, dtype=str, ndmin=1)  # noqa
@@ -356,7 +362,7 @@ class structure:
             for i in range(totnatoms):
                 atominfo = split(r"\s+", f.readline().strip())[:6]
                 # First three entries are the atomic coordinates
-                atoms[i, :3] = np.asarray(atominfo[:3], dtype=np.float)
+                atoms[i, :3] = np.asarray(atominfo[:3], dtype=_float)
                 # Fourth entry is the atomic symbol
                 atoms[i, 3] = atomic_symbol.index(
                     match("([A-Za-z]+)", atominfo[3]).group(0)
@@ -454,7 +460,7 @@ class structure:
     def to_ase_atoms(self):
         """Convert structure to Atomic Simulation Environment (ASE) atoms object."""
         scaled_positions = self.atoms[:, :3]
-        numbers = self.atoms[:, 3].astype(np.int)
+        numbers = self.atoms[:, 3].astype(_int)
         cell = self.unitcell
         pbc = [True, True, True]
         return ase.Atoms(
@@ -619,6 +625,8 @@ class structure:
         tiling=[1, 1],
         displacements=True,
         fractional_occupancy=True,
+        sinc_deconvolution=True,
+        bandwidthlimit=0.2,
         fe=None,
         device=None,
         dtype=torch.float32,
@@ -665,12 +673,17 @@ class structure:
         seed: int
             Seed for random number generator for atomic displacements.
         """
+        # Get equivalent precison real datatype
+        realdtype = complex_to_real_dtype_torch(dtype)
+
+        # Force the subslices to be an array
+        sblce = ensure_array(subslices)
+
         # Initialize device cuda if available, CPU if no cuda is available
         device = get_device(device)
 
         # Ensure pixels is integer
         pixels_ = [int(x) for x in pixels]
-
         # Seed random number generator for displacements
         if seed is not None:
             torch.manual_seed(seed)
@@ -682,11 +695,11 @@ class structure:
         pixperA = np.asarray(pixels_) / np.asarray(self.unitcell[:2]) / tiling_
 
         # Get a list of unique atomic elements
-        elements = list(set(np.asarray(self.atoms[:, 3], dtype=np.int)))
+        elements = list(set(np.asarray(self.atoms[:, 3], dtype=_int)))
 
         # Get number of unique atomic elements
         nelements = len(elements)
-        nsubslices = len(subslices)
+        nsubslices = len(sblce)
         # Build list of equivalent sites if Fractional occupancy is to be
         # taken into account
         if fractional_occupancy and self.fractional_occupancy:
@@ -695,20 +708,20 @@ class structure:
         # FDES method
         # Intialize potential array
         P = torch.zeros(
-            np.prod([nelements, nsubslices, *pixels_, 2]), device=device, dtype=dtype
+            np.prod([nelements, nsubslices, *pixels_]), device=device, dtype=realdtype
         )
 
         # Construct a map of which atom corresponds to which slice
-        islice = np.zeros((self.atoms.shape[0]), dtype=np.int)
-        slice_stride = np.prod(pixels_) * 2
+        islice = np.zeros((self.atoms.shape[0]), dtype=_int)
+        slice_stride = np.prod(pixels_)
         # if nsubslices > 1:
         # Finds which slice atom can be found in
         # WARNING Assumes that the slices list ends with 1.0 and is in
         # ascending order
         for i in range(nsubslices):
-            zmin = 0 if i == 0 else subslices[i - 1]
+            zmin = 0 if i == 0 else sblce[i - 1]
             atoms_in_slice = (self.atoms[:, 2] % 1.0 >= zmin) & (
-                self.atoms[:, 2] % 1.0 < subslices[i]
+                self.atoms[:, 2] % 1.0 < sblce[i]
             )
             islice[atoms_in_slice] = i * slice_stride
         islice = torch.from_numpy(islice).type(torch.long).to(device)
@@ -731,7 +744,7 @@ class structure:
             # Generate thermal displacements
             urms = torch.tensor(
                 np.sqrt(self.atoms[:, 5])[:, np.newaxis] * pixperA[np.newaxis, :],
-                dtype=P.dtype,
+                dtype=realdtype,
                 device=device,
             ).view(self.atoms.shape[0], 2)
 
@@ -749,14 +762,14 @@ class structure:
                 / tiling_
                 * psize
             )
-            posn = torch.from_numpy(posn).to(device).type(P.dtype)
+            posn = torch.from_numpy(posn).to(device).type(realdtype)
 
             if displacements:
 
                 # Add displacement sampled from normal distribution to account
                 # for atomic thermal motion
                 disp = (
-                    torch.randn(self.atoms.shape[0], 2, dtype=P.dtype, device=device)
+                    torch.randn(self.atoms.shape[0], 2, dtype=realdtype, device=device)
                     * urms
                 )
 
@@ -770,20 +783,13 @@ class structure:
             yc = (
                 torch.remainder(torch.ceil(posn[:, 0]).type(torch.long), pixels_[0])
                 * pixels_[1]
-                * 2
             )
             yf = (
                 torch.remainder(torch.floor(posn[:, 0]).type(torch.long), pixels_[0])
                 * pixels_[1]
-                * 2
             )
-            xc = (
-                torch.remainder(torch.ceil(posn[:, 1]).type(torch.long), pixels_[1]) * 2
-            )
-            xf = (
-                torch.remainder(torch.floor(posn[:, 1]).type(torch.long), pixels_[1])
-                * 2
-            )
+            xc = torch.remainder(torch.ceil(posn[:, 1]).type(torch.long), pixels_[1])
+            xf = torch.remainder(torch.floor(posn[:, 1]).type(torch.long), pixels_[1])
 
             yh = torch.remainder(posn[:, 0], 1.0)
             yl = 1.0 - yh
@@ -792,8 +798,8 @@ class structure:
 
             # Account for fractional occupancy of atomic sites if requested
             if fractional_occupancy and self.fractional_occupancy:
-                xh *= torch.from_numpy(self.atoms[:, 4]).type(P.dtype).to(device)
-                xl *= torch.from_numpy(self.atoms[:, 4]).type(P.dtype).to(device)
+                xh *= torch.from_numpy(self.atoms[:, 4]).type(realdtype).to(device)
+                xl *= torch.from_numpy(self.atoms[:, 4]).type(realdtype).to(device)
 
             # Each pixel is set to the overlap of a shifted rectangle in that pixel
             P.scatter_add_(0, ielement + islice + yc + xc, yh * xh)
@@ -802,30 +808,38 @@ class structure:
             P.scatter_add_(0, ielement + islice + yf + xf, yl * xl)
 
         # Now view potential as a 4D array for next bit
-        P = P.view(nelements, nsubslices, *pixels_, 2)
+        P = P.view(nelements, nsubslices, *pixels_)
 
-        # FFT potential to reciprocal space
-        for i in range(P.shape[0]):
-            for j in range(P.shape[1]):
-                P[i, j] = torch.fft(P[i, j], signal_ndim=2)
+        # Use real fast fourier transforms to save memory and time
+        P = torch.fft.rfft2(P, s=pixels_)
+        # fig,ax = plt.subplots(ncols=2)
+        # ax[0].imshow(np.real(P[0,0].cpu()))
+        # ax[1].imshow(np.imag(P[0,0].cpu()))
+        # plt.show(block=True)
 
-        # Make sinc functions with appropriate singleton dimensions for pytorch
-        # broadcasting /gridsize[0]*pixels_[0] /gridsize[1]*pixels_[1]
-        sincy = (
-            sinc(torch.from_numpy(np.fft.fftfreq(pixels_[0])))
-            .view([1, 1, pixels_[0], 1, 1])
-            .to(device)
-            .type(P.dtype)
-        )
-        sincx = (
-            sinc(torch.from_numpy(np.fft.fftfreq(pixels_[1])))
-            .view([1, 1, 1, pixels_[1], 1])
-            .to(device)
-            .type(P.dtype)
-        )
-        # #Divide by sinc functions
-        P /= sincy
-        P /= sincx
+        # pp is number of pixels in x
+        pp = pixels_[1] // 2 + 1
+
+        if sinc_deconvolution:
+            # Make sinc functions with appropriate singleton dimensions for pytorch
+            # broadcasting /gridsize[0]*pixels_[0] /gridsize[1]*pixels_[1]
+            sincy = (
+                sinc(torch.fft.fftfreq(pixels_[0]))
+                .view([1, 1, pixels_[0], 1])
+                .to(device)
+                .type(realdtype)
+            )
+
+            # The real FFT is only half the cell in the x direction, pp stores
+            # this size
+
+            sincx = sinc(torch.fft.rfftfreq(pixels_[1])).to(device).type(realdtype)
+
+            sincx = sincx.view([1, 1, 1, pp])
+
+            # #Divide by sinc functions
+            P /= sincy
+            P /= sincx
 
         # Option to precalculate scattering factors and pass to program which
         # saves computation for
@@ -835,14 +849,26 @@ class structure:
             fe_ = fe
 
         # Convolve with electron scattering factors using Fourier convolution theorem
-        P *= torch.from_numpy(fe_).view(nelements, 1, *pixels_, 1).to(device)
+        P *= (
+            torch.from_numpy(fe_[..., :pp])
+            .view(nelements, 1, pixels_[0], pp)
+            .to(device)
+        )
 
         norm = np.prod(pixels_) / np.prod(self.unitcell[:2]) / np.prod(tiling)
-        # Add atoms together
+
+        # Add different elements atoms together
         P = norm * torch.sum(P, dim=0)
 
-        # Only return real part
-        return torch.ifft(P, signal_ndim=2)[..., 0]
+        # Apply bandwidth limit to remove high frequency numerical artefacts
+        if bandwidthlimit is not None:
+            P = bandwidth_limit_array_torch(P, limit=1, soft=bandwidthlimit, rfft=True)
+
+        # Only return real part, shape of array needs to be given for
+        # correct array shape to be return in the case of an odd numbered
+        # array size
+        return torch.fft.irfft2(P, s=pixels_)
+        # return np.fft.irfft2(P.cpu().numpy(),s=pixels_)
 
     def make_transmission_functions(
         self,
@@ -852,7 +878,7 @@ class structure:
         tiling=[1, 1],
         fe=None,
         displacements=True,
-        fftout=True,
+        fftout=False,
         dtype=None,
         device=None,
         fractional_occupancy=True,
@@ -896,19 +922,15 @@ class structure:
             fractional_occupancy=fractional_occupancy,
             seed=seed,
         )
-
         # Now take the complex exponential of the electrostatic potential
         # scaled by the electron interaction constant
-        T = torch.fft(torch_c_exp(interaction_constant(eV) * T), signal_ndim=2)
+        T = torch.fft.fftn(torch.exp(1j * interaction_constant(eV) * T), dim=[-2, -1])
 
         # Band-width limit the transmission function, see Earl Kirkland's book
         # for an discussion of why this is necessary
-        for i in range(T.shape[0]):
-            T[i] = bandwidth_limit_array(T[i], bandwidth_limit)
-
-        if fftout:
-            return torch.ifft(T, signal_ndim=2)
-        return T
+        return bandwidth_limit_array_torch(
+            T, limit=bandwidth_limit, qspace_in=True, qspace_out=fftout
+        )
 
     def generate_slicing_figure(self, slices, show=True):
         """
@@ -1054,7 +1076,7 @@ class structure:
         # Make copy of original structure
         # new = copy.deepcopy(self)
 
-        tiling = np.asarray([x, y, z], dtype=np.int)
+        tiling = np.asarray([x, y, z], dtype=_int)
 
         # Get atoms in unit cell
         natoms = self.atoms.shape[0]
@@ -1113,7 +1135,7 @@ class structure:
         new = copy.deepcopy(self)
         other_ = copy.deepcopy(other)
 
-        tile1, tile2 = [np.ones(3, dtype=np.int) for i in range(2)]
+        tile1, tile2 = [np.ones(3, dtype=_int) for i in range(2)]
 
         # Check if the two slices are the same size and
         # tile accordingly
@@ -1202,7 +1224,7 @@ class structure:
             frac = [frac]
 
         # Work out which atoms will stay in the sliced structure
-        mask = np.ones((self.atoms.shape[0],), dtype=np.bool)
+        mask = np.ones((self.atoms.shape[0],), dtype=bool)
         for a, f in zip(ax, frac):
             atomsin = np.logical_and(self.atoms[:, a] >= f[0], self.atoms[:, a] <= f[1])
             mask = np.logical_and(atomsin, mask)
@@ -1275,7 +1297,7 @@ class layered_structure_transmission_function:
         tilings=None,
         kwargs={},
         nT=5,
-        dtype=torch.float32,
+        dtype=torch.cfloat,
         device=None,
         specimen_tilt=[0, 0],
     ):
@@ -1294,6 +1316,8 @@ class layered_structure_transmission_function:
             The number of units of each structure in the multilayer
         subslices : array_like (N,) of array_like
             Multislice subslicing for each object in the multilayer structure
+        kwargs : Dict, optional
+            Keyword arguments that are passed to the make_transmission_functions
 
         Returns
         -----
@@ -1375,7 +1399,7 @@ class layered_structure_transmission_function:
                 T = T + struct.unitcell[2]
 
         # Mimics the shape property of a numpy array
-        self.shape = (self.nT, self.N, *self.gridshape, 2)
+        self.shape = (self.nT, self.N, *self.gridshape)
         self.Propagator = layered_structure_propagators(
             self, subslices, propkwargs={"tilt": specimen_tilt}
         )
@@ -1396,9 +1420,7 @@ class layered_structure_transmission_function:
         # First get the proper slice and subslice, self.Ts is a list object
         # with each entry containing the transmission functions for that
         # structure
-        if isinstance(islice, int) or np.issubdtype(
-            np.asarray(islice).dtype, np.integer
-        ):
+        if isinstance(islice, int) or np.issubdtype(np.asarray(islice).dtype, int):
             T = self.Ts[self.slicemap[islice]][:, self.subslicemap[islice]]
         elif isinstance(islice, slice):
             islice_ = np.arange(*islice.indices(self.N))
@@ -1409,7 +1431,7 @@ class layered_structure_transmission_function:
         else:
             raise TypeError("Invalid argument type.")
 
-        if isinstance(it, int) or np.issubdtype(np.asarray(it).dtype, np.integer):
+        if isinstance(it, int) or np.issubdtype(np.asarray(it).dtype, int):
             return T[it]
         elif isinstance(it, slice):
             it_ = np.arange(*it.indices(self.nT))
@@ -1459,11 +1481,11 @@ class layered_structure_propagators:
         ]
 
         self.Ps = [
-            cx_from_numpy(
-                make_propagators(layered_T.gridshape, r, layered_T.eV, s, **propkwargs),
-                layered_T.dtype,
-                layered_T.device,
+            torch.from_numpy(
+                make_propagators(layered_T.gridshape, r, layered_T.eV, s, **propkwargs)
             )
+            .to(layered_T.device)
+            .type(layered_T.dtype)
             for s, r in zip(subslices, self.rsizes)
         ]
         self.slicemap = layered_T.slicemap
@@ -1483,9 +1505,7 @@ class layered_structure_propagators:
         This enables the propagator object to mimic a standard propagator numpy
         or torch.Tensor array
         """
-        if isinstance(islice, int) or np.issubdtype(
-            np.asarray(islice).dtype, np.integer
-        ):
+        if isinstance(islice, int) or np.issubdtype(np.asarray(islice).dtype, int):
             return self.Ps[self.slicemap[islice]][self.subslicemap[islice]]
         elif isinstance(islice, slice):
             islice_ = np.arange(*islice.indices(len(self.slicemap)))

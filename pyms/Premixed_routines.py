@@ -22,14 +22,12 @@ from .py_multislice import (
     thickness_to_slices,
 )
 from .utils.torch_utils import (
-    cx_from_numpy,
     amplitude,
-    complex_matmul,
-    complex_mul,
     get_device,
     crop_to_bandwidth_limit_torch,
     size_of_bandwidth_limited_array,
     torch_dtype_to_numpy,
+    real_to_complex_dtype_torch,
 )
 from .utils.numpy_utils import (
     fourier_shift,
@@ -55,7 +53,7 @@ def window_indices(center, windowsize, gridshape):
     """Generate array indices for a sub-region cropped out of a larger grid."""
     window = []
     for i, wind in enumerate(windowsize):
-        indices = np.arange(-wind // 2, wind // 2, dtype=np.int) + wind % 2
+        indices = np.arange(-wind // 2, wind // 2, dtype=int) + wind % 2
         indices += int(np.floor(center[i] * gridshape[i]))
         indices = np.mod(indices, gridshape[i])
         window.append(indices)
@@ -326,7 +324,7 @@ def STEM_PRISM(
     # to the maximum scattering angle of interest here we work out if the
     # calculation would benefit from this
     maxpix = np.minimum(
-        (maxq * np.asarray(real_dim)).astype(np.int),
+        (maxq * np.asarray(real_dim)).astype(int),
         size_of_bandwidth_limited_array(gridshape),
     )
 
@@ -346,6 +344,7 @@ def STEM_PRISM(
                     potdevice = torch.device("cpu")
                 else:
                     potdevice = device
+
                 P, T = multislice_precursor(
                     structure,
                     gridshape,
@@ -361,7 +360,7 @@ def STEM_PRISM(
                     T = T.to(device)
 
             # Convert thicknesses into number of slices for multislice
-            nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
+            nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(int)
 
             S = scattering_matrix(
                 real_dim[:2],
@@ -695,6 +694,8 @@ def STEM_multislice(
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
+    cdtype = real_to_complex_dtype_torch(dtype)
+
     tdisable, tqdm = tqdm_handler(showProgress)
 
     # Make the STEM probe
@@ -957,7 +958,8 @@ def multislice_precursor(
             bandwidth_limit=band_width_limiting[0],
         )
 
-    T = torch.zeros(nT, len(subslices), *gridshape, 2, device=device, dtype=dtype)
+    T = torch.zeros(nT, len(subslices), *gridshape, device=device, dtype=dtype)
+    T = torch.complex(*(2 * [T]))
 
     for i in tqdm(range(nT), desc="Making projected potentials", disable=tdisable):
         T[i] = structure.make_transmission_functions(
@@ -970,7 +972,7 @@ def multislice_precursor(
             displacements=displacements,
             fractional_occupancy=fractional_occupancy,
             seed=seed,
-            bandwidth_limit=band_width_limiting[0],
+            bandwidth_limit=band_width_limiting[1],
         )
 
     return P, T
@@ -1453,6 +1455,7 @@ def HRTEM(
         the requested array
     """
     tdisable, tqdm = tqdm_handler(showProgress)
+    cdtype = real_to_complex_dtype_torch(dtype)
 
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
@@ -1485,17 +1488,19 @@ def HRTEM(
     # code will set up the lens transfer functions for each case
     defocii = ensure_array(df)
 
-    ctf = cx_from_numpy(
-        np.stack(
-            [
-                make_contrast_transfer_function(
-                    bw_limit_size, rsize, eV, app, df=df_, aberrations=aberrations
-                )
-                for df_ in defocii
-            ]
-        ),
-        dtype=dtype,
-        device=device,
+    ctf = (
+        torch.from_numpy(
+            np.stack(
+                [
+                    make_contrast_transfer_function(
+                        bw_limit_size, rsize, eV, app, df=df_, aberrations=aberrations
+                    )
+                    for df_ in defocii
+                ]
+            )
+        )
+        .type(cdtype)
+        .to(device)
     )
     output = np.zeros((len(defocii), len(nslices), *bw_limit_size))
 
@@ -1520,9 +1525,8 @@ def HRTEM(
             )
             output[:, it, ...] += (
                 amplitude(
-                    torch.ifft(
-                        complex_mul(ctf, crop_to_bandwidth_limit_torch(probe)),
-                        signal_ndim=2,
+                    torch.fft.ifftn(
+                        ctf * crop_to_bandwidth_limit_torch(probe), dim=(-2, -1)
                     )
                 )
                 .cpu()
@@ -1662,7 +1666,7 @@ def EFTEM(
     bw_limit_size = size_of_bandwidth_limited_array(gridshape)
 
     # Calculate lens contrast transfer functions
-    ctfs = cx_from_numpy(
+    ctfs = torch.from_numpy(
         np.stack(
             [
                 make_contrast_transfer_function(
@@ -1671,13 +1675,13 @@ def EFTEM(
                 for df_ in defocii
             ],
             axis=0,
-        ),
-        dtype=dtype,
-        device=device,
+        )
+        .astype(dtype)
+        .to(device)
     )
 
     # Convert thicknesses to number of unit cells
-    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
+    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(pyms.int)
 
     # Get the coordinates of the target atoms in a unit cell
     mask = structure.atoms[:, 3] == Ztarget
@@ -1864,7 +1868,7 @@ def STEM_EELS_PRISM(
 
     tiled_structure = copy.deepcopy(structure).tile(*tiling)
     coords = tiled_structure.atoms[tiled_structure.atoms[:, 3] == Ztarget][:, :3]
-    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(np.int)
+    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(pyms.int)
 
     # Make ionization transition potentials
     if Hn0s is None:
@@ -1947,7 +1951,7 @@ def STEM_EELS_PRISM(
         # On first iteration generate illumination vector and work out transition
         # potential cropping
         if ifph == 0:
-            scan_array = np.zeros((nprobe_posn, S1.S.shape[0]), dtype=np.complex)
+            scan_array = np.zeros((nprobe_posn, S1.S.shape[0]), dtype=complex)
 
             # TODO test aberrations and defocii
             negtwopii = -2 * np.pi * 1j
@@ -1963,7 +1967,7 @@ def STEM_EELS_PRISM(
                 ).ravel()
             # Normalize scan_array and convert to torch array
             scan_array *= 1 / np.sqrt(np.sum(scan_array.shape[1]))
-            scan_array = cx_from_numpy(scan_array, dtype=dtype, device=device)
+            scan_array = torch.from_numpy(scan_array).astype(dtype).to(device)
 
             if Hn0_crop is None:
                 Hn0_crop = [S1.stored_gridshape[i] // PRISM_factor[i] for i in range(2)]
@@ -1975,10 +1979,10 @@ def STEM_EELS_PRISM(
 
             # We achieve cropping of the Hn0 with some abuse of the fourier
             # interpolation routine
-            from .utils import fourier_interpolate_2d
+            from .utils import fourier_interpolate
 
             Hn0s = np.fft.fft2(
-                fourier_interpolate_2d(Hn0s, Hn0_crop, qspace_in=True, qspace_out=True)
+                fourier_interpolate(Hn0s, Hn0_crop, qspace_in=True, qspace_out=True)
             )
 
         total_slices = nslices * len(subslices)
@@ -2053,7 +2057,7 @@ def STEM_EELS_PRISM(
                     ).ravel()
 
                     # Convert Hn0 to pytorch Tensor
-                    Hn0_ = cx_from_numpy(Hn0_, dtype=S1.S.dtype, device=device)
+                    Hn0_ = torch.from_numpy(Hn0_).astype(S1.S.dtype).to(device)
 
                     for i, S1component in enumerate(S1.S):
                         # Multiplication of component of first scattering matrix

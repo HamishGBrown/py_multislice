@@ -17,7 +17,7 @@ setup(
         "nbstripout",
         "numpy >= 1.17",
         "Pillow >= 6.0",
-        "torch >= 1.2",
+        "torch == 1.8",
         "tqdm >= 4.48",
         "ase",
         "pypng",

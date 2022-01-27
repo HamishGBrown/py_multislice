@@ -7,26 +7,24 @@ from .utils.numpy_utils import (
     ensure_array,
     bandwidth_limit_array,
     q_space_array,
-    fourier_interpolate_2d,
+    fourier_interpolate,
     crop,
 )
 from .utils.torch_utils import (
+    complex_to_real_dtype_torch,
     iscomplex,
     # roll_n,
-    cx_from_numpy,
-    cx_to_numpy,
-    complex_matmul,
-    complex_mul,
     fourier_shift_array,
     amplitude,
     get_device,
     ensure_torch_array,
     crop_to_bandwidth_limit_torch,
     size_of_bandwidth_limited_array,
-    fourier_interpolate_2d_torch,
+    fourier_interpolate_torch,
     crop_window_to_flattened_indices_torch,
     crop_window_to_periodic_indices,
     crop_torch,
+    fourier_shift_array_1d,
 )
 
 
@@ -46,12 +44,14 @@ def thickness_to_slices(
     thicknesses, slice_thickness, subslicing=False, subslices=[1.0]
 ):
     """Convert thickness in Angstroms to number of multislice slices."""
+    from .__init__ import _int
+
     t = np.asarray(ensure_array(thicknesses))
     if subslicing:
         # Work out how many slice of the structure is closest to the desired
         # output thicknesses
         m = len(subslices)
-        nslices = (t // slice_thickness).astype(np.int) * m
+        nslices = (t // slice_thickness).astype(_int) * m
         from scipy.spatial.distance import cdist
 
         # Work out which subslices of the structure
@@ -64,7 +64,8 @@ def thickness_to_slices(
         z = [0] + (nslices + np.asarray([i for i in np.argmin(dist, axis=1)])).tolist()
         return [np.arange(z[i], z[i + 1]) for i in range(len(z) - 1)]
     else:
-        return np.ceil(t / slice_thickness).astype(np.int)
+
+        return np.ceil(t / slice_thickness).astype(_int)
 
 
 def make_propagators(
@@ -114,7 +115,7 @@ def make_propagators(
     app = np.hypot(*gridmax)
 
     # Intitialize array
-    prop = np.zeros((len(subslices), *gridshape), dtype=np.complex)
+    prop = np.zeros((len(subslices), *gridshape), dtype=complex)
     for islice, s_ in enumerate(subslices):
         if islice == 0:
             deltaz = s_ * gridsize[2]
@@ -178,10 +179,10 @@ def multislice(
         Electron probe wave function(s)
     nslices : int, array_like
         The number of slices (iterations) to perform multislice over, if an
-    propagators : (Z,Y,X,2) or (Y,X,2) torch.array
+    propagators : (Z,Y,X) or (Y,X) complex array_like
         Fresnel free space operators required for the multislice algorithm
         used to propagate the scattering matrix
-    transmission_functions : (Z,nT,Y,X,2)
+    transmission_functions : (Z,nT,Y,X) complex array_like
         The transmission functions describing the electron's interaction
         with the specimen for the multislice algorithm
     tiling : (2,) array_like
@@ -227,6 +228,9 @@ def multislice(
         depending on whether return_numpy is True or False. If the input `probes`
         is two dimensional then n = 1
     """
+    # Dimensions for FFT
+    d_ = (-2, -1)
+
     # If a single integer is passed to the routine then Seed random number generator,
     # , if None then np.random.RandomState will use the system clock as a seed
     seed_provided = not (seed is None)
@@ -243,14 +247,21 @@ def multislice(
     T = ensure_torch_array(transmission_functions, device=device)
     P = ensure_torch_array(propagators, dtype=T.dtype, device=device)
     psi = ensure_torch_array(probes, dtype=T.dtype, device=device)
+    # sys.exit()
 
     nT, nsubslices, nopiy, nopix = T.shape[:4]
 
     # Probe needs to start multislice algorithm in real space
     if qspace_in:
-        psi = torch.ifft(psi, signal_ndim=2)
+        psi = torch.fft.ifftn(psi, dim=d_)
 
     slices = generate_slice_indices(nslices, nsubslices, subslicing)
+
+    def conjugateornot(array, conjugate):
+        if conjugate:
+            return torch.conj(array)
+        else:
+            return array
 
     for i, islice in enumerate(slices):
 
@@ -266,7 +277,7 @@ def multislice(
 
         # To save memory in the case of equally sliced sample, there is the option
         # of only using one propagator, this statement catches this case.
-        if P.dim() < 4:
+        if P.dim() < 3:
             P_ = P
         else:
             P_ = P[subslice]
@@ -274,35 +285,28 @@ def multislice(
         # If the transmission function is from a tiled unit cell then
         # there is the option of randomly shifting it around to
         # generate "more" psuedo-random transmission functions
-        if tiling[0] == 1 & tiling[1] == 1:
-            T_ = T[it, subslice]
-        elif nopiy % tiling[0] == 0 and nopix % tiling[1] == 0:
+        def shift(array, tiling, dim):
+            if tiling == 1:
+                # No shift
+                return array
 
-            T_ = T[it, subslice]
-            if tiling[0] > 1:
-                # Shift an integer number of pixels in y
-                T_ = torch.roll(T_, r.randint(0, tiling[0]) * (nopiy // tiling[0]), 0)
-            if tiling[1] > 1:
-                # Shift an integer number of pixels in x
-                T_ = torch.roll(T_, r.randint(1, tiling[1]) * (nopix // tiling[1]), 1)
-        else:
-            # Case of a non-integer pixel shifting of the unit cell
-            yshift = r.randint(0, tiling[0]) * (nopiy / tiling[0])
-            xshift = r.randint(0, tiling[1]) * (nopix / tiling[1])
-            shift = torch.tensor([yshift, xshift])
+            pix = array.shape[dim]
+            s = r.randint(0, tiling) * (pix // tiling)
+            if pix % tiling == 0:
+                # Shift by an integer number of pixels
+                return torch.roll(array, s, dim)
+            else:
+                # Sub-integer pixel shift
+                v = [1, 1]
+                v[dim] = pix
+                FFT_shift_array = fourier_shift_array_1d(
+                    pix, s, dtype=torch.float, device=array.device
+                ).view(v)
+                return torch.fft.ifft(
+                    FFT_shift_array * torch.fft.fft(T[it, subslice], dim=dim), dim=dim
+                )
 
-            # Generate an array to perform Fourier shift of transmission
-            # function
-            FFT_shift_array = fourier_shift_array(
-                [nopiy, nopix], shift, dtype=T.dtype, device=T.device
-            )
-
-            # Apply Fourier shift theorem for sub-pixel shift
-            T_ = torch.ifft(
-                complex_mul(FFT_shift_array, torch.fft(T[it, subslice], signal_ndim=2)),
-                signal_ndim=2,
-            )
-
+        T_ = shift(shift(T[it, subslice], tiling[0], 0), tiling[1], 1)
         # Perform multislice iteration
         if transpose or reverse:
             # Reverse multislice complex conjugates the transmission and
@@ -310,18 +314,18 @@ def multislice(
             # the order of the transmission and conjugation operations
             # probe should start in real space and finish this iteration in
             # real space
-            psi = complex_mul(
-                torch.ifft(
-                    complex_mul(torch.fft(psi, signal_ndim=2), P_, reverse),
-                    signal_ndim=2,
-                ),
-                T_,
-                reverse,
+            psi = (
+                torch.fft.ifftn(
+                    torch.fft.fftn(psi, dim=d_) * conjugateornot(P_, reverse),
+                    dim=d_,
+                )
+                * conjugateornot(T_, reverse)
             )
+
         else:
             # Standard multislice iteration - probe should start in real space
             # and finish this iteration in reciprocal space
-            psi = complex_mul(torch.fft(complex_mul(psi, T_), signal_ndim=2), P_)
+            psi = torch.fft.fftn(psi * T_, dim=d_) * P_
 
         # The probe can be cropped to the bandwidth limit, this removes
         # superfluous array entries in reciprocal space that are zero
@@ -339,13 +343,12 @@ def multislice(
             )
         elif not (transpose or reverse):
             # Inverse Fourier transform back to real space for next iteration
-            psi = torch.ifft(psi, signal_ndim=2)
+            psi = torch.fft.ifftn(psi, dim=d_)
 
     if len(slices) < 1 and qspace_out:
-        psi = torch.fft(psi, signal_ndim=2)
-
+        psi = torch.fft.fftn(psi, dim=d_)
     if return_numpy:
-        return cx_to_numpy(psi)
+        return psi.cpu().numpy()
     return psi
 
 
@@ -447,7 +450,7 @@ def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
     if rsize is None:
         return step_size
     else:
-        return np.ceil(rsize / step_size).astype(np.int)
+        return np.ceil(rsize / step_size).astype(int)
 
 
 def generate_STEM_raster(
@@ -552,14 +555,14 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
 
             #
             diff_pat_crop = np.round(np.asarray(Ksize) * np.asarray(rsize[:2])).astype(
-                np.int
+                int
             )
 
             # Define resampling function to crop and interpolate
             # diffraction patterns
             def resize(array):
                 cropped = crop(np.fft.fftshift(array, axes=(-1, -2)), diff_pat_crop)
-                return fourier_interpolate_2d(cropped, gridout, norm="conserve_L1")
+                return fourier_interpolate(cropped, gridout, norm="conserve_L1")
 
         else:
             # The size in inverse Angstrom of the grid
@@ -691,7 +694,7 @@ def generate_probe_spread_plot(
         gridshape, structure.unitcell[:2] * np.asarray(tiling), eV, app, df=df
     )
     pos = np.asarray(probe_posn) / np.asarray(tiling)
-    from .utils import fourier_shift, fourier_interpolate_2d
+    from .utils import fourier_shift, fourier_interpolate
 
     probe = fourier_shift(probe, pos, pixel_units=False)
 
@@ -709,7 +712,7 @@ def generate_probe_spread_plot(
     crossection = np.zeros((maxslices, gridshape[0]))
 
     # Array must be shifted to center probe position
-    shift = (pos * np.asarray(gridshape)).astype(np.int)
+    shift = (pos * np.asarray(gridshape)).astype(int)
 
     for i in range(maxslices):
         probe = multislice(
@@ -745,7 +748,6 @@ def generate_probe_spread_plot(
 
     ax2 = ax[0, 0].twinx()  # instantiate a second axes that shares the same x-axis
 
-    print(thicknesses.shape, variances.shape)
     ax2.plot(thicknesses, variances, "b-")
     ax2.tick_params(axis="y", labelcolor="b")
     ax2.plot([0, thickness], [0.2, 0.2], "b--")
@@ -756,7 +758,7 @@ def generate_probe_spread_plot(
     nz, ny = crossection.shape
     if showcrossection:
         ax[0, 1].imshow(
-            fourier_interpolate_2d(
+            fourier_interpolate(
                 np.fft.fftshift(np.sqrt(crossection), axes=1), [ny, ny]
             ),
             extent=[0, gridshape[0], thickness, 0],
@@ -875,6 +877,7 @@ def STEM(
     from .utils.torch_utils import detect
 
     tdisable, tqdm = tqdm_handler(showProgress)
+    rdtype = complex_to_real_dtype_torch(dtype)
 
     # Get number of thicknesses in the series
     nthick = len(nslices)
@@ -888,10 +891,7 @@ def STEM(
         device = get_device(device)
 
     # Get shape of grid
-    if torch.is_tensor(probe):
-        gridshape = probe.shape[-3:-1]
-    else:
-        gridshape = probe.shape[-2:]
+    gridshape = probe.shape[-2:]
 
     # Generate scan positions in units of pixels if not supplied
     if scan_posn is None:
@@ -904,12 +904,12 @@ def STEM(
 
     # Ensure scan_posn is a pytorch tensor with same device and datatype as other
     # arrays
-    scan_posn = torch.as_tensor(scan_posn).to(device).type(dtype)
+    scan_posn = torch.as_tensor(scan_posn).to(device).type(rdtype)
 
     # Assume real space probe is passed in so perform Fourier transform in
     # anticipation of application of Fourier shift theorem
-    probe_ = ensure_torch_array(probe, dtype=dtype, device=device)
-    probe_ = torch.fft(probe_, signal_ndim=2)
+    probe_ = ensure_torch_array(probe, device=device)
+    probe_ = torch.fft.fftn(probe_, dim=[-2, -1])
 
     # Work out whether to perform conventional STEM or not
     conventional_STEM = detectors is not None
@@ -966,25 +966,24 @@ def STEM(
 
         # Make shifted probes
         scan_index = np.arange(
-            i * batch_size, min((i + 1) * batch_size, nscantot), dtype=np.int
+            i * batch_size, min((i + 1) * batch_size, nscantot), dtype=int
         )
 
         # The shift operator array array will be of size batch_size x Y x X
         probes = fourier_shift_array(
             gridshape,
-            torch.as_tensor(scan_posn[scan_index]),
+            scan_posn[scan_index],
             dtype=dtype,
             device=device,
             units="fractional",
         )
 
         # Apply shift to original probe
-        probes = complex_mul(probe_.view(1, *probe_.size()), probes)
+        probes = probe_.view(1, *probe_.size()) * probes
 
         # Thickness series
         #  - need to take the difference between sequential thickness variations
         for it, t in enumerate(nslices_):
-
             # Evaluate exit surface wave function from input probes
             probes = method(
                 probes, t, *method_args, posn=scan_posn[scan_index], **method_kwargs
@@ -995,7 +994,7 @@ def STEM(
             # normalization to be in units of fractional intensity
             cmplxout = iscomplex(probes)
             if cmplxout:
-                amp = amplitude(probes) / np.prod(probes.size()[-3:-1])
+                amp = amplitude(probes) / np.prod(probes.size()[-2:])
             else:
                 amp = probes / np.prod(probes.size()[-2:])
 
@@ -1150,10 +1149,11 @@ class scattering_matrix:
             computational accuracy.
         """
         # Get size of grid
-        gridshape = transmission_functions.shape[-3:-1]
+        gridshape = transmission_functions.shape[-2:]
 
         # Datatype (precision) is inferred from transmission functions
         self.dtype = transmission_functions.dtype
+        self.rdtype = complex_to_real_dtype_torch(self.dtype)
 
         # Device (CPU or GPU) is also inferred from transmission functions
         self.device = device
@@ -1174,7 +1174,7 @@ class scattering_matrix:
         q = q_space_array(gridshape, rsize)
         inside_aperture = np.less_equal(q[0] ** 2 + q[1] ** 2, self.alpha_ ** 2)
         mody, modx = [
-            np.mod(np.fft.fftfreq(x, 1 / x).astype(np.int), p) == 0
+            np.mod(np.fft.fftfreq(x, 1 / x).astype(int), p) == 0
             for x, p in zip(gridshape, self.PRISM_factor)
         ]
         self.beams = np.nonzero(
@@ -1217,7 +1217,7 @@ class scattering_matrix:
 
         else:
             self.stored_gridshape = size_of_bandwidth_limited_array(
-                transmission_functions.shape[-3:-1]
+                transmission_functions.shape[-2:]
             )
 
             # We will only store output of the scattering matrix up to the band
@@ -1313,21 +1313,21 @@ class scattering_matrix:
 
         # Initialize scattering matrix if necessary
         if not self.initialized:
+
             if self.Fourier_space_output:
                 self.S = torch.zeros(
-                    self.nbeams, self.nbout, 2, dtype=self.dtype, device=self.device
+                    self.nbeams, self.nbout, dtype=self.dtype, device=self.device
                 )
             else:
                 self.S = torch.zeros(
                     self.nbeams,
                     *self.stored_gridshape,
-                    2,
                     dtype=self.dtype,
                     device=self.device
                 )
             for ibeam in range(self.nbeams):
                 # Initialize S-matrix to plane-waves
-                psi = cx_from_numpy(
+                psi = torch.from_numpy(
                     plane_wave_illumination(
                         self.gridshape,
                         self.rsize[:2],
@@ -1348,7 +1348,7 @@ class scattering_matrix:
                 if self.Fourier_space_output:
                     self.S[ibeam] = psi[self.bw_mapping[:, 0], self.bw_mapping[:, 1], :]
                 else:
-                    self.S[ibeam] = fourier_interpolate_2d_torch(
+                    self.S[ibeam] = fourier_interpolate_torch(
                         psi,
                         self.stored_gridshape,
                         qspace_in=True,
@@ -1396,8 +1396,10 @@ class scattering_matrix:
         # that propagators and transmission functions for the multislice are
         # already on the GPU
         if self.GPU_streaming:
-            propagators = ensure_torch_array(propagators).cuda()
-            transmission_functions = ensure_torch_array(transmission_functions).cuda()
+            propagators = ensure_torch_array(propagators, dtype=self.dtype).cuda()
+            transmission_functions = ensure_torch_array(
+                transmission_functions, dtype=self.dtype
+            ).cuda()
 
         self.current_slice = nslice_
         if len(slices) < 1:
@@ -1410,15 +1412,15 @@ class scattering_matrix:
             disable=tdisable,
             desc="Calculating S-matrix",
         ):
-            # Initialize array that will be used as input to the multislice routine
-            psi = torch.zeros(
-                batch_size, *self.gridshape, 2, dtype=self.dtype, device=self.device
-            )
-            beams = np.arange(
-                i * batch_size, min((i + 1) * batch_size, self.nbeams), dtype=np.int
-            )
 
+            beams = np.arange(
+                i * batch_size, min((i + 1) * batch_size, self.nbeams), dtype=int
+            )
             if self.Fourier_space_output:
+                # Initialize array that will be used as input to the multislice routine
+                psi = torch.zeros(
+                    batch_size, *self.gridshape, dtype=self.dtype, device=self.device
+                )
                 # Expand S-matrix input to full grid for multislice propagation
                 psi[
                     : beams.shape[0], self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
@@ -1426,7 +1428,7 @@ class scattering_matrix:
             else:
                 # Fourier interpolate stored real space S-matrix column onto
                 # multislice grid
-                psi = fourier_interpolate_2d_torch(
+                psi = fourier_interpolate_torch(
                     self.S[beams], self.gridshape, norm="conserve_norm"
                 )
 
@@ -1458,7 +1460,7 @@ class scattering_matrix:
                     :, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
                 ] * np.sqrt(np.prod(self.stored_gridshape) / np.prod(self.gridshape))
             else:
-                output = fourier_interpolate_2d_torch(
+                output = fourier_interpolate_torch(
                     output, self.stored_gridshape, norm="conserve_norm"
                 )
                 self.S[beams] = output
@@ -1511,20 +1513,20 @@ class scattering_matrix:
         # Ensure posn and probes are pytorch arrays
         probes = ensure_torch_array(probes, dtype=self.dtype, device=device)
 
-        # Ensure probes tensors correspond to the shape N x Y x X x 2
-        # If they have the shape Y x X x 2 then reshape to 1 x Y x X x 2
-        if probes.ndim < 4:
+        # Ensure probes tensors correspond to the shape N x Y x X
+        # If they have the shape Y x X then reshape to 1 x Y x X
+        if probes.ndim < 3:
             probes = probes.view(1, *probes.shape)
 
         # Get number of probes
         nprobes = probes.shape[0]
 
         if posn is None:
-            posn = torch.zeros(nprobes, 2, device=device, dtype=self.dtype)
+            posn = torch.zeros(nprobes, 2, device=device, dtype=float)
         else:
-            posn = torch.as_tensor(posn, device=device, dtype=self.dtype).view(
-                (nprobes, 2)
-            )
+            if isinstance(posn, list):
+                posn = np.array(posn)
+        posn = torch.as_tensor(posn, device=device, dtype=float).view((nprobes, 2))
 
         if scan_transform is not None:
             posn = scan_transform(posn)
@@ -1536,7 +1538,7 @@ class scattering_matrix:
             # with sum_squared intensity of 1, but the STEM routine applies an
             # FFT so the sum_squared intensity is now equal to # pixels
             # For a correct matrix multiplication we must now divide by sqrt(# pixels)
-            probe_vec = complex_matmul(
+            probe_vec = torch.matmul(
                 probes[:, self.beams[0], self.beams[1]], Smat
             ) / np.sqrt(np.prod(self.gridshape))
 
@@ -1550,7 +1552,7 @@ class scattering_matrix:
             if self.doPRISM:
                 shape = probes.size()
 
-                probes = torch.ifft(probes, signal_ndim=2).flatten(-3, -2)
+                probes = torch.fft.ifftn(probes, dim=[-2, -1]).flatten(-3, -2)
                 for k in range(nprobes):
 
                     # Calculate windows in vertical and horizontal directions
@@ -1569,58 +1571,59 @@ class scattering_matrix:
                 probes = probes.reshape(shape)
 
                 # Transform probe back to Fourier space
-                return torch.fft(probes, signal_ndim=2)
+                return torch.fft.fftn(probes, dim=[-2, -1])
 
             return probes
         else:
             # Flatten the array dimensions
             Smatshape = Smat.shape
-            flattened_shape = [Smatshape[0], Smatshape[-3] * Smatshape[-2], 2]
+            flattened_shape = [Smatshape[0], Smatshape[-2] * Smatshape[-1]]
             N = probes.shape[0]
             output = torch.zeros(
-                N, *Smat.shape[-3:-1], 2, dtype=self.dtype, device=Smat.device
+                N, *Smat.shape[-2:], dtype=self.dtype, device=Smat.device
             )
 
             # For evaluating the probes in real space we only want to perform the matrix
             # multiplication and summation within the real space PRISM cropping region
-
+            # Stride is pixel size of real space PRISM cropping region
             stride = [x // y for x, y in zip(self.stored_gridshape, self.PRISM_factor)]
             halfstride = [x // 2 for x in stride]
 
-            # for k in range(probes.size(0)):
             for probe, pos, out in zip(probes, posn, output):
 
                 if self.doPRISM:
+
                     start = [
-                        int(torch.round(pos[i] * Sshape[-3 + i])) - halfstride[i]
+                        int(torch.round(pos[i] * Sshape[-2 + i])) - halfstride[i]
                         for i in range(2)
                     ]
                     windows = crop_window_to_periodic_indices(
-                        [start[0], stride[0], start[1], stride[1]], Sshape[-3:-1]
+                        [start[0], stride[0], start[1], stride[1]], Sshape[-2:]
                     )
 
                     for wind in windows:
-                        outview = out.narrow(-3, wind[0][0], wind[0][1]).narrow(
-                            -2, wind[1][0], wind[1][1]
-                        )
-                        sview = Smat.narrow(-3, wind[0][0], wind[0][1]).narrow(
-                            -2, wind[1][0], wind[1][1]
-                        )
-                        p = probe[self.beams[0], self.beams[1]].view(
-                            self.nbeams, 1, 1, 2
-                        )
-                        outview += torch.sum(complex_mul(p, sview), axis=0)
+                        # Narrow returns a cropped window the the input tensor
+                        outview, sview = [
+                            x.narrow(-2, wind[0][0], wind[0][1]).narrow(
+                                -1, wind[1][0], wind[1][1]
+                            )
+                            for x in [out, Smat]
+                        ]
+
+                        p = probe[self.beams[0], self.beams[1]].view(self.nbeams, 1, 1)
+                        outview += torch.sum(p * sview, axis=0)
                 else:
-                    output += complex_matmul(
+                    output += torch.matmul(
                         probe[self.beams[0], self.beams[1]], Smat.view(flattened_shape)
                     ).view(Smatshape[1:])
 
-            output /= np.sqrt(np.prod(probes.size()[-3:-1]))
+            output /= np.sqrt(np.prod(probes.size()[-2:]))
             output = crop_torch(
-                output.reshape(probes.size(0), *Smat.size()[-3:]), self.stored_gridshape
+                output.reshape(probes.size(0), *(Smat.size()[-2:])),
+                self.stored_gridshape,
             )
 
-            return torch.fft(output, signal_ndim=2)
+            return torch.fft.fftn(output, dim=[-2, -1])
 
     def STEM_with_GPU_streaming(
         self,
@@ -1709,7 +1712,7 @@ class scattering_matrix:
             aberrations=aberrations,
             app_units="invA",
         )
-        probe = cx_from_numpy(probe, device=device, dtype=self.dtype)
+        probe = torch.from_numpy(probe).to(device).type(self.dtype)
 
         # Make scan positions if none already provided
         if scan_posns is None:
@@ -1771,7 +1774,7 @@ class scattering_matrix:
         # only the necessary bits of the scattering matrix to the GPU.
         Datacube_segment = None
         STEM_image_segment = None
-        FlatS = self.S.reshape((self.nbeams, np.prod(self.stored_gridshape), 2))
+        FlatS = self.S.reshape((self.nbeams, np.prod(self.stored_gridshape)))
 
         # Loop over probe positions clusters. This would be a good candidate
         # for multi-GPU work.
@@ -1807,14 +1810,14 @@ class scattering_matrix:
 
             # Get segment of the scattering matrix to stream to GPU
             segmentshape = [len(x) for x in window]
-            SegmentS = FlatS[:, indices, :].reshape((self.nbeams, *segmentshape, 2))
+            SegmentS = FlatS[:, indices].reshape((self.nbeams, *segmentshape))
 
             # Define a function that will map probe positions for the global
             # scattering matrix to their correct place on the smaller scattering
             # matrix streamed to the GPU.
-            gshape = torch.as_tensor(self.stored_gridshape).to(device).type(self.dtype)
-            Origin = torch.as_tensor([ymin, xmin]).to(device).type(self.dtype)
-            segment_size = torch.as_tensor(size).to(device).type(self.dtype)
+            gshape = torch.as_tensor(self.stored_gridshape).to(device).type(torch.int)
+            Origin = torch.as_tensor([ymin, xmin]).to(device).type(self.rdtype)
+            segment_size = torch.as_tensor(size).to(device).type(self.rdtype)
 
             def scan_transform(posn):
                 return (posn * gshape - Origin) / segment_size
@@ -1873,6 +1876,7 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     # Get shape of arrays
     ny, nx = com.shape[1:]
     s = (ny, nx)
+    s = None
 
     d = np.asarray(rsize) / np.asarray([ny, nx])
     # Calculate Fourier coordinates for array
@@ -1881,9 +1885,7 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
 
     # Calculate numerator and denominator expressions for solution of
     # phase from centre of mass measurements
-    numerator = ky[:, None] * np.fft.rfft2(com[0], s=s) + kx[None, :] * np.fft.rfft2(
-        com[1], s=s
-    )
+    numerator = ky[:, None] * np.fft.rfft2(com[0]) + kx[None, :] * np.fft.rfft2(com[1])
     denominator = 1j * ((kx ** 2)[None, :] + (ky ** 2)[:, None]) + reg
 
     # Avoid a divide by zero for the origin of the Fourier coordinates
@@ -1891,4 +1893,4 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     denominator[0, 0] = 1
 
     # Return real part of the inverse Fourier transform
-    return np.fft.irfft2(numerator / denominator, s=s)
+    return np.fft.irfft2(numerator / denominator)

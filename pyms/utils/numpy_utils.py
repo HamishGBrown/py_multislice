@@ -12,38 +12,95 @@ def ensure_array(input):
         return np.asarray([input])
 
 
-def r_space_array(pixels, gridsize):
+def is_array_like(input):
+    return hasattr(input, "__len__")
+
+
+def broadcast_from_unmeshed(coords):
     """
-    Return the appropriately scaled 2D real space coordinates.
+    For an unmeshed set of coordinates broadcast to a meshed ND array.
+
+    Examples
+    --------
+    >>> broadcast_from_unmeshed([np.arange(5),np.arange(6)])
+    [array([[0, 0, 0, 0, 0, 0],
+       [1, 1, 1, 1, 1, 1],
+       [2, 2, 2, 2, 2, 2],
+       [3, 3, 3, 3, 3, 3],
+       [4, 4, 4, 4, 4, 4]]), array([[0, 1, 2, 3, 4, 5],
+       [0, 1, 2, 3, 4, 5],
+       [0, 1, 2, 3, 4, 5],
+       [0, 1, 2, 3, 4, 5],
+       [0, 1, 2, 3, 4, 5]])]
+    """
+
+    N = len(coords)
+    pixels = [a.shape[0] for a in coords]
+
+    # Broadcasting patterns
+    R = np.ones((N, N), dtype=np.int16) + np.diag(pixels) - np.eye(N, dtype=np.int16)
+
+    # Broadcast unmeshed grids
+    return [np.broadcast_to(a.reshape(rr), pixels) for a, rr in zip(coords, R)]
+
+
+def r_space_array(pixels, gridsize, meshed=True):
+    """
+    Return the appropriately scaled ND real space coordinates.
 
     Parameters
     -----------
-    pixels : (2,) array_like
-        Pixels in each dimension of a 2D array
-    gridsize : (2,) array_like
+    pixels : (N,) array_like
+        Pixels in each dimension of a ND array
+    gridsize : (N,) array_like
         Dimensions of the array in real space units
+    meshed : bool, optional
+        Option to output dense meshed grid (True) or output unbroadcasted
+        arrays (False)
     """
-    rspace = [np.fft.fftfreq(pixels[i], d=1 / gridsize[i]) for i in [0, 1]]
-    return [
-        np.broadcast_to(r, pixels) for r in [rspace[0][:, None], rspace[1][None, :]]
-    ]
+    # N is the dimensionality of grid
+    N = len(pixels)
+
+    # Calculate unmeshed grids
+    rspace = [np.fft.fftfreq(pixels[i], d=1 / gridsize[i]) for i in range(N)]
+
+    # At this point we can return the arrays without broadcasting
+    if meshed:
+        return broadcast_from_unmeshed(rspace)
+    else:
+        return rspace
 
 
-def q_space_array(pixels, gridsize):
+def q_space_array(pixels, gridsize, meshed=True):
     """
     Return the appropriately scaled 2D reciprocal space coordinates.
 
     Parameters
     -----------
-    pixels : (2,) array_like
+    pixels : (N,) array_like
+        Pixels in each dimension of a ND array
+    gridsize : (N,) array_like
+        Dimensions of the array in real space units
+    meshed : bool, optional
+        Option to output dense meshed grid (True) or output unbroadcasted
+        arrays (False)
+
+    Parameters
+    -----------
+    pixels : (N,) array_like
         Pixels in each dimension of a 2D array
-    gridsize : (2,) array_like
+    gridsize : (N,) array_like
         Dimensions of the array in real space units
     """
-    qspace = [np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in [0, 1]]
-    return [
-        np.broadcast_to(q, pixels) for q in [qspace[0][:, None], qspace[1][None, :]]
-    ]
+    # N is the dimensionality of grid
+    N = len(pixels)
+
+    qspace = [np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in range(N)]
+    # At this point we can return the arrays without broadcasting
+    if meshed:
+        return broadcast_from_unmeshed(qspace)
+    else:
+        return qspace
 
 
 def crop_window_to_flattened_indices(indices, shape):
@@ -66,7 +123,7 @@ def crop_to_bandwidth_limit(
     # New shape of final dimensions
     newshape = tuple([round(array.shape[-2 + i] * limit) for i in range(2)])
 
-    return fourier_interpolate_2d(
+    return fourier_interpolate(
         array, newshape, norm=norm, qspace_in=qspace_in, qspace_out=qspace_out
     )
 
@@ -107,30 +164,26 @@ def bandwidth_limit_array(arrayin, limit=2 / 3, qspace_in=True, qspace_out=True)
 
     # Case where band-width limiting has been turned off
     if limit is not None:
-        if isinstance(array, np.ndarray):
-            pixelsize = array.shape[:2]
-            array[
-                (
-                    np.square(np.fft.fftfreq(pixelsize[0]))[:, np.newaxis]
-                    + np.square(np.fft.fftfreq(pixelsize[1]))[np.newaxis, :]
-                )
-                * (2 / limit) ** 2
-                >= 1
-            ] = 0
+        if is_array_like(limit):
+            lmt = limit[-2:]
         else:
-            pixelsize = array.size()[:2]
-            array[
-                (
-                    torch.from_numpy(np.fft.fftfreq(pixelsize[0]) ** 2).view(
-                        pixelsize[0], 1
-                    )
-                    + torch.from_numpy(np.fft.fftfreq(pixelsize[1]) ** 2).view(
-                        1, pixelsize[1]
-                    )
-                )
-                * (2 / limit) ** 2
-                >= 1
-            ] = 0
+            lmt = limit * np.ones(2)
+
+        shp = array.shape
+
+        mask = (
+            np.square(np.fft.fftfreq(shp[-2]) * 2 / lmt[0])[:, np.newaxis]
+            + np.square(np.fft.fftfreq(shp[-1]) * 2 / lmt[1])[np.newaxis, :]
+        ) >= 1
+        import matplotlib.pyplot as plt
+
+        if len(shp) > 2:
+            array = array.reshape((np.prod(shp[:-2]), *shp[-2:]))
+            for i in range(array.shape[0]):
+                array[i][mask] = 0
+            array = array.reshape(shp)
+        else:
+            array[mask] = 0
 
     if qspace_out:
         return array
@@ -142,7 +195,7 @@ def Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout):
     """Calculate a mask of array entries to be included in Fourier interpolation."""
     # Construct input and output fft grids
     qyin, qxin, qyout, qxout = [
-        (np.fft.fftfreq(x, 1 / x)).astype(np.int)
+        (np.fft.fftfreq(x, 1 / x)).astype(np.int32)
         for x in [npiyin, npixin, npiyout, npixout]
     ]
 
@@ -248,22 +301,62 @@ def colorize(z, saturation=0.8, minlightness=0.0, maxlightness=0.5):
     return c
 
 
-def fourier_interpolate_2d(
-    ain, shapeout, norm="conserve_val", qspace_in=False, qspace_out=False
+def fourier_crop(ain, shapeout):
+    """ "
+    Crop or pad a Fourier shifted array
+    """
+
+    def crop1d(array, s, d):
+        # Number of dimensions of array
+        N = len(array.shape)
+        # Size of array that will be transferred to new grid
+        s_ = min(array.shape[d], s)
+        # Indices of grid region to transfer to new grid
+        ind1 = (
+            (np.s_[:],) * ((N + d) % N)
+            + (np.s_[: s_ // 2 + s_ % 2],)
+            + (np.s_[:],) * (N - (N + d) % N - 1)
+        )
+        ind2 = (
+            (np.s_[:],) * ((N + d) % N)
+            + (np.s_[-s_ // 2 + s_ % 2 :],)
+            + (np.s_[:],) * (N - (N + d) % N - 1)
+        )
+        if s > array.shape[d]:
+            xtra = list(array.shape)
+            xtra[d] = s - array.shape[d]
+            return np.concatenate(
+                [array[ind1], np.zeros(xtra, dtype=array.dtype), array[ind2]], axis=d
+            )
+        else:
+            return np.concatenate([array[ind1], array[ind2]], axis=d)
+
+    array = copy.deepcopy(ain)
+    for i, s in enumerate(shapeout):
+        array = crop1d(array, s, i - len(shapeout))
+    return array
+
+
+def fourier_interpolate(
+    ain, shapeout, norm="conserve_val", N=None, qspace_in=False, qspace_out=False
 ):
     """
     Perfom fourier interpolation on array ain so that its shape matches shapeout.
 
     Arguments
     ---------
-    ain : (...,Ny,Nx) array_like
-        Input numpy array
-    shapeout : int (2,) , array_like
+    ain : (...,Ni,..,Ny,Nx) array_like
+        Input numpy array, interpolation will be applied to the n trailing
+        dimensions where n is the length of shapeout.
+    shapeout : int (n,) , array_like
         Desired shape of output array
     norm : str, optional  {'conserve_val','conserve_norm','conserve_L1'}
         Normalization of output. If 'conserve_val' then array values are preserved
         if 'conserve_norm' L2 norm is conserved under interpolation and if
         'conserve_L1' L1 norm is conserved under interpolation
+    N : int, optional
+        Number of (trailing) dimensions to Fourier interpolate. By default take
+        the length of shapeout
     qspace_in : bool, optional
         Set to True if the input array is in reciprocal space, False if not (default).
         Be careful with setting this to True for a non-complex array.
@@ -271,34 +364,36 @@ def fourier_interpolate_2d(
         Set to True for reciprocal space output, False for real-space output (default).
     """
     # Import required FFT functions
-    from numpy.fft import fft2
+    from numpy.fft import fftn
+
+    if N is None:
+        N = len(shapeout)
 
     # Make input complex
-    aout = np.zeros(np.shape(ain)[:-2] + tuple(shapeout), dtype=np.complex)
+    aout = np.zeros(np.shape(ain)[:-N] + tuple(shapeout), dtype=complex)
 
     # Get input dimensions
-    npiyin, npixin = np.shape(ain)[-2:]
-    npiyout, npixout = shapeout
+    shapein = np.shape(ain)[-N:]
 
-    # Get Fourier interpolation masks
-    maskin, maskout = Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)
+    # axes to Fourier transform
+    axes = np.arange(-N, 0)
 
     if qspace_in:
-        a = np.asarray(ain, dtype=np.complex)
+        a = np.asarray(ain, dtype=complex)
     else:
-        a = fft2(np.asarray(ain, dtype=np.complex))
+        a = fftn(np.asarray(ain, dtype=complex), axes=axes)
 
-    # Now transfer over Fourier coefficients from input to output array
-    aout[..., maskout] = a[..., maskin]
+    aout = fourier_crop(a, shapeout)
+    # aout = np.fft.fftshift(crop(np.fft.fftshift(a,axes=axes),shapeout),axes=axes)
 
     # Fourier transform result with appropriate normalization
     if norm == "conserve_val":
-        aout *= np.prod(shapeout) / np.prod(np.shape(ain)[-2:])
+        aout *= np.prod(shapeout) / np.prod(np.shape(ain)[-N:])
     elif norm == "conserve_norm":
-        aout *= np.sqrt(np.prod(shapeout) / np.prod(np.shape(ain)[-2:]))
+        aout *= np.sqrt(np.prod(shapeout) / np.prod(np.shape(ain)[-N:]))
 
     if not qspace_out:
-        aout = np.fft.ifftn(aout, axes=[-2, -1])
+        aout = np.fft.ifftn(aout, axes=axes)
 
     # Return correct array data type
     if not np.iscomplexobj(ain):
@@ -361,7 +456,7 @@ def fourier_shift(arrayin, shift, qspacein=False, qspaceout=False, pixel_units=T
     real = not np.iscomplexobj(arrayin)
 
     if real:
-        array = np.asarray(arrayin, dtype=np.complex)
+        array = np.asarray(arrayin, dtype=complex)
     else:
         array = arrayin
 
@@ -396,47 +491,51 @@ def add_noise(arrayin, Total_counts):
 
 def crop(arrayin, shapeout):
     """
-    Crop the last two dimensions of arrayin to grid size shapeout.
+    Crop the last n dimensions of arrayin to grid size shapeout.
 
     For entries of shapeout which are larger than the shape of the input array,
     perform zero-padding.
 
     Parameters
     ----------
-    arrayin : (...,Ny,Nx) array_like
+    arrayin : (...,N1,N2,...Nn) array_like
         Array to be cropped or zero-padded.
-    shapeout : (2,) array_like
-        Desired output shape of the final two dimensions of arrayin
+    shapeout : (n,) array_like
+        Desired output shape of the final n dimensions of arrayin
     """
     # Number of dimensions in input array
     ndim = arrayin.ndim
 
+    # Trailing dimensions to be cropped/padded
+    n = len(shapeout)
+
     # Number of dimensions not covered by shapeout (ie not to be cropped)
-    nUntouched = ndim - 2
+    nUntouched = ndim - n
 
     # Shape of output array
     shapeout_ = arrayin.shape[:nUntouched] + tuple(shapeout)
 
     arrayout = np.zeros(shapeout_, dtype=arrayin.dtype)
 
-    y, x = arrayin.shape[-2:]
-    y_, x_ = shapeout[-2:]
+    oldshape = arrayin.shape[-n:]
+    newshape = shapeout[-n:]
 
     def indices(y, y_):
         if y > y_:
             # Crop in y dimension
-            y1, y2 = [(y - y_) // 2, (y + y_) // 2]
+            y1, y2 = [(y - y_) // 2 + (y - y_) % 2, (y + y_) // 2 + (y - y_) % 2]
             y1_, y2_ = [0, y_]
         else:
             # Zero pad in y dimension
             y1, y2 = [0, y]
-            y1_, y2_ = [(y_ - y) // 2, (y + y_) // 2]
-        return y1, y2, y1_, y2_
+            y1_, y2_ = [(y_ - y) // 2 + (y - y_) % 2, (y + y_) // 2 + (y - y_) % 2]
+        return np.index_exp[y1:y2][0], np.index_exp[y1_:y2_][0]
 
-    y1, y2, y1_, y2_ = indices(y, y_)
-    x1, x2, x1_, x2_ = indices(x, x_)
-
-    arrayout[..., y1_:y2_, x1_:x2_] = arrayin[..., y1:y2, x1:x2]
+    ind = [indices(x, x_) for x, x_ in zip(oldshape, newshape)]
+    inind, outind = map(tuple, zip(*ind))
+    arrayout[nUntouched * np.index_exp[:] + outind] = arrayin[
+        nUntouched * np.index_exp[:] + inind
+    ]
     return arrayout
 
 

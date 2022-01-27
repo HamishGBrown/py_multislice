@@ -2,6 +2,8 @@
 
 import copy
 import unittest
+
+from sklearn.datasets import make_swiss_roll
 import pyms
 import numpy as np
 import os
@@ -30,6 +32,16 @@ def clean_temp_structure():
     """Remove the temporary files made by the unit tests."""
     if os.path.exists(scratch_cell_name):
         os.remove(scratch_cell_name)
+
+
+def Single_atom(Z=79, r=[0.5, 0.5, 0.5], R=[10.0, 10.0, 10.0]):
+    """Single atom structure for testing."""
+    atoms = np.asarray(
+        [
+            [*r, Z, 1.0, 0.0],
+        ]
+    )
+    return pyms.structure(R, atoms[:, :4], dwf=atoms[:, 5])
 
 
 def SrTiO3():
@@ -78,7 +90,7 @@ def make_graphene_file(fnam):
     f.close()
 
 
-def make_temp_structure(atoms=None, title="scratch", ucell=None, seed=0):
+def make_temp_structure(atoms=None, title="scratch", ucell=None, seed=0, natoms=None):
     """
     Make a random temporary structure to test routines on.
 
@@ -93,7 +105,8 @@ def make_temp_structure(atoms=None, title="scratch", ucell=None, seed=0):
     if atoms is None:
 
         # Number of atoms to be included in cell
-        natoms = np.random.randint(1, 50, size=1)[0]
+        if natoms is None:
+            natoms = np.random.randint(1, 50, size=1)[0]
         shape = (natoms, 1)
 
         # Random atomic numbers
@@ -151,7 +164,7 @@ class Test_Structure_Methods(unittest.TestCase):
 
         Test that the electron scattering factor function can replicate the
         results for Ag in Doyle, P. A. & Turner, P. S. (1968). Acta Cryst. A24,
-        390–397
+        390-397
         """
         # Reciprocal space points
         g = 2 * np.concatenate(
@@ -194,25 +207,31 @@ class Test_Structure_Methods(unittest.TestCase):
                 0.030,
             ]
         )
+        # fig,ax = plt.subplots()
+        # ax.plot(g,pyms.electron_scattering_factor(47, g ** 2, units="A"),'b-')
+        # ax.plot(g,fe,'r--')
+
+        # plt.show(block=True)
+
         sse = np.sum(
             np.square(fe - pyms.electron_scattering_factor(47, g ** 2, units="A"))
         )
         self.assertTrue(sse < 0.01)
 
-    def test_calculate_scattering_factors(self):
-        """Test calculate scattering factors against precomputed standard."""
-        calc = pyms.calculate_scattering_factors([3, 3], [1, 1], [49])
-        known = np.asarray(
-            [
-                [
-                    [499.59366, 107.720055, 107.720055],
-                    [107.720055, 65.67732, 65.67732],
-                    [107.720055, 65.67732, 65.67732],
-                ]
-            ],
-            dtype=np.float32,
-        )
-        self.assertTrue(np.sum(np.square(known - calc)) < 0.01)
+    # def test_calculate_scattering_factors(self):
+    #     """Test calculate scattering factors against precomputed standard."""
+    #     calc = pyms.calculate_scattering_factors([3, 3], [1, 1], [49])
+    #     known = np.asarray(
+    #         [
+    #             [
+    #                 [499.59366, 107.720055, 107.720055],
+    #                 [107.720055, 65.67732, 65.67732],
+    #                 [107.720055, 65.67732, 65.67732],
+    #             ]
+    #         ],
+    #         dtype=pyms._float,
+    #     )
+    #     self.assertTrue(np.sum(np.square(known - calc)) < 0.01)
 
     def test_find_equivalent_sites(self):
         """
@@ -227,7 +246,7 @@ class Test_Structure_Methods(unittest.TestCase):
             np.all(
                 np.equal(
                     pyms.find_equivalent_sites(positions),
-                    np.asarray([0, 1, 0], dtype=np.int),
+                    np.asarray([0, 1, 0], dtype=int),
                 )
             )
         )
@@ -312,52 +331,163 @@ class Test_Structure_Methods(unittest.TestCase):
         self.assertTrue(atomspass and celldimpass)
 
     def test_make_potential(self):
-        """Test the make potential function against a precomputed standard."""
-        make_temp_structure(seed=0)
-        cell = pyms.structure.fromfile(scratch_cell_name)
-        tiling = [2, 2]
-        pot = (
-            cell.make_potential([4, 4], subslices=[0.5, 1.0], tiling=tiling, seed=0)
-            .cpu()
-            .numpy()
-        )
-        precalc = np.asarray(
+        """Test the make potential function against the values in Kirkland's book."""
+
+        Kirkland = np.asarray(
             [
-                7.0271377563e00,
-                1.0801711082e01,
-                7.5602140426e00,
-                9.8008451461e00,
-                2.3832376480e01,
-                3.2159790992e00,
-                2.2516759872e01,
-                2.6229567527e00,
-                7.7249503135e00,
-                9.8236846923e00,
-                7.3711028099e00,
-                1.0093936920e01,
-                2.2842248916e01,
-                2.7207412719e00,
-                2.2528783798e01,
-                2.6203308105e00,
-                4.4570851325e00,
-                1.3123485565e01,
-                3.9715085029e00,
-                1.1828842163e01,
-                2.2986445426e00,
-                5.0166683197e00,
-                2.2372388839e00,
-                5.0104198455e00,
-                4.8299803733e00,
-                1.1613823890e01,
-                4.7839732170e00,
-                1.1727484703e01,
-                1.6152291297e00,
-                4.5633144378e00,
-                2.1869301795e00,
-                5.7718343734e00,
+                0.022206387004698444,
+                4938.406696881273,
+                0.023349930244864578,
+                4706.494070900851,
+                0.025310290085149373,
+                4510.422487117403,
+                0.027270649925434168,
+                4336.488017632086,
+                0.029231009765718963,
+                4172.040882845968,
+                0.031191369606003758,
+                4023.405972558515,
+                0.03315172944628855,
+                3884.2583969702614,
+                0.03560217924664455,
+                3721.919558783966,
+                0.038542719007071735,
+                3546.9309409987377,
+                0.04148325876749892,
+                3386.7003994122633,
+                0.04442379852792612,
+                3243.336230624366,
+                0.047854428248424494,
+                3087.3222822375365,
+                0.051775147928994084,
+                2926.0375923511515,
+                0.05569586760956367,
+                2782.1463494132986,
+                0.06010667725020445,
+                2634.4601725957655,
+                0.06500757685091645,
+                2483.927795368473,
+                0.07039856641169963,
+                2332.552099501252,
+                0.07709646253267267,
+                2165.996668115312,
+                0.08363099533362199,
+                2029.258574355426,
+                0.09098234473468995,
+                1884.8026091140496,
+                0.09931387405590035,
+                1742.2290515510854,
+                0.1086255832972531,
+                1600.9731793630094,
+                0.11891747245874827,
+                1465.2755436653733,
+                0.12969945158031465,
+                1342.8026775484395,
+                0.14048143070188102,
+                1234.704560975747,
+                0.15126340982344738,
+                1140.4062039655255,
+                0.16204538894501375,
+                1056.4576666271578,
+                0.17282736806658006,
+                984.5839189059525,
+                0.18360934718814642,
+                917.3100910389039,
+                0.1943913263097128,
+                858.0861229166303,
+                0.20517330543127915,
+                804.6120546120546,
+                0.21595528455284552,
+                758.0378660887127,
+                0.22673726367441188,
+                712.6136575289111,
+                0.23751924279597825,
+                672.3643588050363,
+                0.2483012219175446,
+                634.9900099900096,
+                0.259083201039111,
+                601.6405910473704,
+                0.26986518016067734,
+                569.4411520682697,
+                0.2806471592822437,
+                540.116662998018,
+                0.2914291384038101,
+                512.5171438730749,
+                0.30221111752537644,
+                487.2175846752107,
+                0.3129930966469428,
+                463.6429954226551,
+                0.32377507576850917,
+                442.3683660971792,
+                0.33455705489007553,
+                419.36876682639286,
+                0.3453390340116419,
+                402.11906737330446,
+                0.35612101313320826,
+                382.56940799313634,
+                0.36592281233463225,
+                366.9169029338518,
+                0.38846695049790736,
+                334.27024952448664,
+                0.3992489296194737,
+                321.0454799437839,
+                0.4100309087410401,
+                307.82071036308207,
+                0.4208128878626065,
+                295.1709307641504,
+                0.4315948669841728,
+                283.096141146988,
+                0.44237684610573924,
+                272.17133149336496,
+                0.45315882522730555,
+                260.09654187620254,
+                0.46688134410929916,
+                247.44676227726995,
+                0.47766332323086547,
+                239.396902532495,
+                0.4884453023524319,
+                230.7720528059508,
+                0.4953065617934287,
+                222.1472030794057,
             ]
+        ).reshape([392 - 335, 2])
+
+        # Make single Silver atom
+        R = 10
+        cell = Single_atom(r=[0, 0, 0], Z=92, R=[R, R, 2])
+        tiling = [2, 2]
+        # Note that this sampling is insufficient sampling for agreement <0.1 A
+        # but is chosen for faster testing
+        # For better agreement increaes this to [1024,1024]
+        gridshape = [128, 1024]
+
+        pot = cell.make_potential(gridshape).cpu().numpy()
+
+        # fig,a = plt.subplots(ncols=1)
+        # xlim = [0.0,0.5]
+        # ylim = [0,5e3]
+        # a.plot(np.fft.fftfreq(gridshape[1],d=1)[:gridshape[1]//2]*R,pot[0,:gridshape[1]//2],'b-',label='pyms')
+        # a.plot(Kirkland[:,0],Kirkland[:,1],'r--',label='Kirkland')
+        # a.set_title('Potential of U atom')
+        # a.legend()
+        # a.set_ylabel('V(r)')
+        # a.set_xlabel('r ($\\AA$)')
+        # a.set_xlim(xlim)
+        # a.set_ylim(ylim)
+
+        # plt.show(block=True)
+
+        from scipy.interpolate import interp1d
+
+        kirk = interp1d(Kirkland[:, 0], Kirkland[:, 1])
+        x = np.fft.fftfreq(gridshape[1], d=1)[: gridshape[1] // 2] * R
+        pyms_pot = interp1d(x, pot[0, 0, : gridshape[1] // 2])
+        xtest = np.linspace(0.1, 0.45)
+
+        K = kirk(xtest)
+        within_spec = (
+            np.sum(np.square(kirk(xtest) - pyms_pot(xtest)) / np.sum(K ** 2)) < 1e-4
         )
-        within_spec = np.sum(np.square(precalc - pot.ravel())) < 1e-10
         self.assertTrue(within_spec)
 
     def test_resize(self):
@@ -441,20 +571,20 @@ class Test_Structure_Methods(unittest.TestCase):
             gridshape,
             eV,
             subslices[0],
-            **kwargs,
             showProgress=False,
             tiling=tiling,
-            nT=nT
+            nT=nT,
+            **kwargs
         )
         P2, T2 = pyms.multislice_precursor(
             BTO,
             gridshape,
             eV,
             subslices[1],
-            **kwargs,
             showProgress=False,
             tiling=tiling,
-            nT=nT
+            nT=nT,
+            **kwargs
         )
         # fig,ax = plt.subplots(ncols=3)
         # ax[0].imshow(P1.imag)
@@ -463,11 +593,12 @@ class Test_Structure_Methods(unittest.TestCase):
         # plt.show(block=True)
 
         # Check transmission function and propagators are the same
+
         sameT = sumsqr_diff(T[:, 0 : len(subslices[0])], T1) < 1e-10
         N = len(subslices[0]) * nslices[0]
         sameT = sameT and sumsqr_diff(T[:, N : N + len(subslices[1])], T2) < 1e-10
-        sameP = sumsqr_diff(pyms.cx_to_numpy(T.Propagator[:N]), P1) < 1e-10
-        PP = pyms.cx_to_numpy(T.Propagator[N : N + len(subslices[1])])
+        sameP = sumsqr_diff(T.Propagator[:N].cpu().numpy(), P1) < 1e-10
+        PP = T.Propagator[N : N + len(subslices[1])].cpu().numpy()
         sameP = sameP and sumsqr_diff(PP, P2) < 1e-10
 
         # Multislice with equivalent multislice objects
@@ -482,7 +613,6 @@ class Test_Structure_Methods(unittest.TestCase):
         )
         midwave = copy.deepcopy(exit_wave)
         exit_wave = pyms.multislice(exit_wave, nslices[1], P2, T2, tiling=tiling)
-
         # Multislice with multilayer object
         illum = pyms.plane_wave_illumination(gridshape, rsize, eV)
 
@@ -683,7 +813,7 @@ class Test_ionization_methods(unittest.TestCase):
         # plt.imshow(STEM_images[0])
         # plt.show(block=True)
         STEM_images = np.fft.fftshift(
-            pyms.utils.fourier_interpolate_2d(
+            pyms.utils.fourier_interpolate(
                 STEM_images, result.shape, norm="conserve_val"
             )
         )
@@ -691,10 +821,10 @@ class Test_ionization_methods(unittest.TestCase):
         # The image of the transition is "lensed" by the atom that it is passed
         # through so we must account for this by multiplying the Hn0 by the transmission
         # function
-        Hn0 *= pyms.utils.cx_to_numpy(T[0, 0]) / np.sqrt(np.prod(gridshape))
+        Hn0 *= T[0, 0].cpu().numpy() / np.sqrt(np.prod(gridshape))
 
         reference = np.fft.fftshift(
-            pyms.utils.fourier_interpolate_2d(
+            pyms.utils.fourier_interpolate(
                 np.abs(np.fft.ifft2(ctf * np.fft.fft2(Hn0[0]))) ** 2,
                 result.shape,
                 "conserve_L1",
@@ -716,7 +846,6 @@ class Test_ionization_methods(unittest.TestCase):
         # ax[0].imshow(reference)
         # ax[1].imshow(result)
         # ax[2].imshow(np.squeeze(STEM_images))
-        # print(np.mean(reference),np.mean(result),np.mean(STEM_images))
         # plt.show(block=True)
 
         passEFTEM = np.sum(np.abs(result - reference) ** 2) < 1e-7
@@ -849,7 +978,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         """Test the reverse multislice option."""
         structure = SrTiO3()
         gridshape = [512, 512]
-        tiling = [1, 1]
+        tiling = [4, 4]
         eV = 3e5
         subslicing = [0.5, 1.0]
         slices = pyms.generate_slice_indices(5, len(subslicing), subslicing=False)
@@ -858,11 +987,24 @@ class Test_py_multislice_Methods(unittest.TestCase):
             structure,
             gridshape,
             eV,
-            tiling=[5, 5],
+            tiling=tiling,
             band_width_limiting=[1, 1],
             displacements=True,
             subslices=subslicing,
         )
+        # print(T.shape)
+        # fig,ax = plt.subplots(ncols=3)
+        # ax[0].imshow(np.angle(P))
+        # ax[1].imshow(np.imag(np.fft.ifft2(T[0,0].cpu().numpy())))
+        # pot = structure.make_potential(
+        #     gridshape,
+        #     subslicing,
+        #     [5,5],
+        # )[0]
+
+        # ax[2].imshow(pot.cpu().numpy())
+        # ax[2].imshow(np.angle())
+        # plt.show(block=True)
 
         rsize = structure.unitcell[:2] * np.asarray(tiling)
 
@@ -881,7 +1023,8 @@ class Test_py_multislice_Methods(unittest.TestCase):
             subslicing=True,
             seed=seed,
         )
-        eprobe = pyms.utils.cx_to_numpy(exitprobe)
+
+        eprobe = exitprobe.cpu().numpy()
 
         # Now propagate back
         entranceprobe = pyms.multislice(
@@ -893,8 +1036,8 @@ class Test_py_multislice_Methods(unittest.TestCase):
             reverse=True,
             subslicing=True,
             seed=seed,
+            output_to_bandwidth_limit=False,
         )
-
         # Make sure that errors are low
         self.assertTrue(
             np.std(np.angle(entranceprobe)) / np.std(np.angle(eprobe)) < 1e-2
@@ -955,7 +1098,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         """Test the method for resizing diffraction patterns."""
         from skimage.data import astronaut
 
-        im = np.fft.fftshift(np.sum(astronaut(), axis=2).astype(np.float32))
+        im = np.fft.fftshift(np.sum(astronaut(), axis=2).astype(pyms._float))
         im /= np.sum(im)
         # Assume that the original pattern measures 1 x 1 inverse Angstroms and is
         # 512 x 512 (size of astronaut image)
@@ -1012,14 +1155,15 @@ class Test_py_multislice_Methods(unittest.TestCase):
         cell.atoms[:, 3] = 3
 
         # Parameters for test
-        tiling = [4, 4]
-        sampling = 0.05
+        tiling = [2, 2]
+        sampling = 0.01
         gridshape = np.ceil(cell.unitcell[:2] * np.asarray(tiling) / sampling).astype(
-            np.int
+            int
         )
         eV = 3e5
         app = 20
-        df = 100
+        df = -100
+        # df=0
 
         rsize = np.asarray(tiling) * cell.unitcell[:2]
         probe = pyms.focused_probe(gridshape, rsize, eV, app, df=df, qspace=True)
@@ -1029,37 +1173,47 @@ class Test_py_multislice_Methods(unittest.TestCase):
         PCTF = np.real(
             np.fft.ifft2(pyms.STEM_phase_contrast_transfer_function(probe, detector))
         )
+
         P, T = pyms.multislice_precursor(
-            cell, gridshape, eV, tiling=tiling, displacements=False, showProgress=False
-        )
-
-        # Calculate phase of transmission function
-        phase = np.angle(pyms.utils.cx_to_numpy(T[0, 0]))
-
-        # Weak phase object approximation = meansignal + PCTF * phase
-        meansignal = np.sum(np.abs(probe) ** 2 * detector) / np.sum(np.abs(probe) ** 2)
-        WPOA = meansignal + np.real(pyms.utils.convolve(PCTF, phase))
-
-        # Perform Multislice calculation and then compare to weak phase object
-        # result
-        images = pyms.STEM_multislice(
             cell,
             gridshape,
             eV,
-            app,
-            thicknesses=1.01,
-            df=df,
-            detector_ranges=[[app / 2, app]],
-            nfph=1,
-            P=P,
-            T=T,
             tiling=tiling,
+            displacements=False,
             showProgress=False,
-        )["STEM images"]
+            nT=1,
+        )
+
+        # Calculate phase of transmission function
+        phase = np.angle(T[0, 0].cpu().numpy())
+
+        # Weak phase object approximation = meansignal + PCTF * phase
+        meansignal = np.sum(np.abs(probe) ** 2 * detector) / np.sum(np.abs(probe) ** 2)
+        WPOA = np.real(pyms.utils.convolve(PCTF, phase))
+
+        # Perform Multislice calculation and then compare to weak phase object
+        # result
+        images = (
+            pyms.STEM_multislice(
+                cell,
+                gridshape,
+                eV,
+                app,
+                thicknesses=1.01,
+                df=df,
+                detector_ranges=[[app / 2, app]],
+                nfph=1,
+                P=P,
+                T=T,
+                tiling=tiling,
+                showProgress=False,
+            )["STEM images"]
+            - meansignal
+        )
 
         # Testing the PRISM code takes ~3 mins on a machine with a consumer
         # GPU so generally this part of the test is skipped
-        testPRISM = False
+        testPRISM = True
         if testPRISM:
             PRISMimages = pyms.STEM_PRISM(
                 cell,
@@ -1076,27 +1230,37 @@ class Test_py_multislice_Methods(unittest.TestCase):
                 tiling=tiling,
                 showProgress=False,
             )["STEM images"]
-            PRISMimages = pyms.utils.fourier_interpolate_2d(
-                np.tile(PRISMimages, tiling), gridshape
-            )
-        images = pyms.utils.fourier_interpolate_2d(np.tile(images, tiling), gridshape)
+            PRISMimages = np.tile(PRISMimages, tiling)
+
+        images = np.tile(images, tiling)
+        WPOA = pyms.utils.fourier_interpolate(WPOA, images.shape[-2:])
 
         # fig,ax = plt.subplots(nrows = 3+testPRISM)
         # ax[0].imshow(WPOA)
         # ax[1].imshow(images)
+        # ax[2].imshow(images-WPOA)
         # if testPRISM:
-        #     ax[2].imshow(PRISMimages)
+        #     ax[-1].imshow(PRISMimages-meansignal)
         # plt.show(block=True)
 
         # Test is passed if sum squared difference with weak phase object
         # approximation is within reason
-        passTest = sumsqr_diff(WPOA, images) < 1e-8
+        passTest = (
+            sumsqr_diff(WPOA, images) / np.sum(np.square(images)) / np.prod(gridshape)
+            < 1e-5
+        )
         if testPRISM:
-            passTest = passTest and sumsqr_diff(PRISMimages, images) < 1e-8
+            passTest = (
+                passTest
+                and sumsqr_diff(PRISMimages - meansignal, images)
+                / np.sum(np.square(images))
+                / np.prod(gridshape)
+                < 1e-5
+            )
         self.assertTrue(passTest)
 
     def test_DPC(self):
-        """Test DPC routine by comparing reconstruction to input potential."""
+        """Test DPC, and by extension STEM, routine by comparing reconstruction to input potential."""
         gridshape = [256, 256]
         eV = 6e4
         app = 30
@@ -1137,15 +1301,29 @@ class Test_py_multislice_Methods(unittest.TestCase):
         rsize = Graphene.unitcell[:2] * np.asarray(tiling)
         probe = pyms.focused_probe(gridshape, rsize, eV, app)
         convolved_phase = pyms.utils.convolve(
-            np.abs(probe) ** 2, np.angle(pyms.utils.cx_to_numpy(T[0, 0]))
+            np.abs(probe) ** 2, np.angle(T[0, 0].cpu().numpy())
         )
         convolved_phase -= np.amin(convolved_phase)
 
-        reconstructed_phase = pyms.utils.fourier_interpolate_2d(
+        reconstructed_phase = pyms.utils.fourier_interpolate(
             np.tile(result["DPC"], tiling), gridshape
         )
         reconstructed_phase -= np.amin(reconstructed_phase)
-        self.assertTrue(sumsqr_diff(convolved_phase, reconstructed_phase) < 1e-4)
+
+        # fig,ax = plt.subplots(ncols=4)
+        # from PIL import Image
+        # Image.fromarray(convolved_phase).save('convolvedphase.tif')
+        # ax[0].imshow(convolved_phase)
+        # ax[1].imshow(reconstructed_phase)
+        # Image.fromarray(reconstructed_phase).save('reconstructed_phase.tif')
+        # ax[2].imshow(convolved_phase-reconstructed_phase)
+        # ax[3].imshow((convolved_phase-reconstructed_phase),vmin=convolved_phase.min(),vmax=convolved_phase.max())
+        # plt.show(block=True)
+        # print(sumsqr_diff(convolved_phase, reconstructed_phase)/sumsqr(convolved_phase))
+        self.assertTrue(
+            sumsqr_diff(convolved_phase, reconstructed_phase) / sumsqr(convolved_phase)
+            < 1e-3
+        )
 
     def test_Smatrix(self):
         """
@@ -1173,7 +1351,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         thicknesses = [20]
         subslices = [0.5, 1.0]
         df = -300
-        probe_posn = [1.0, 1.0]
+        probe_posn = np.asarray([1.0, 1.0])
         # probe_posn = [0.5, 0.5]
 
         PRISM_factor = [2, 2]
@@ -1194,11 +1372,12 @@ class Test_py_multislice_Methods(unittest.TestCase):
             showProgress=False,
             band_width_limiting=[None, None],
         )
+        device = pyms.utils.get_device()
 
         # S matrix calculation
         # Calculate scattering matrix
         rsize = np.asarray(tiling) * cell.unitcell[:2]
-        nslices = np.ceil(thicknesses[0] / cell.unitcell[2]).astype(np.int)
+        nslices = np.ceil(thicknesses[0] / cell.unitcell[2]).astype(int)
         S = pyms.scattering_matrix(
             rsize,
             P,
@@ -1215,7 +1394,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
         # Calculate probe and shift it to required position
         probe = pyms.focused_probe(gridshape, rsize, eV, app, df=df, qspace=True)
-        probe = pyms.utils.cx_from_numpy(
+        probe = torch.from_numpy(
             pyms.utils.fourier_shift(
                 probe,
                 np.asarray(probe_posn) / np.asarray(tiling),
@@ -1223,7 +1402,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
                 qspaceout=True,
                 pixel_units=False,
             )
-        )
+        ).to(device)
 
         probe_ = copy.deepcopy(probe)
         # Calculate Smatrix result
@@ -1254,8 +1433,8 @@ class Test_py_multislice_Methods(unittest.TestCase):
         )["datacube"]
 
         # Remove every nth beam where n is the PRISM cropping factor
-        yy = np.fft.fftfreq(gridshape[0], 1.0 / gridshape[0]).astype(np.int)
-        xx = np.fft.fftfreq(gridshape[1], 1.0 / gridshape[1]).astype(np.int)
+        yy = np.fft.fftfreq(gridshape[0], 1.0 / gridshape[0]).astype(pyms._int)
+        xx = np.fft.fftfreq(gridshape[1], 1.0 / gridshape[1]).astype(pyms._int)
         mask = np.logical_and(
             np.logical_and(
                 (yy % PRISM_factor[0] == 0)[:, None],
@@ -1266,23 +1445,21 @@ class Test_py_multislice_Methods(unittest.TestCase):
         probe[np.logical_not(mask)] = 0
 
         # Transform probe back to real space
-        probe = torch.ifft(probe, signal_ndim=2)
+        probe = torch.fft.ifftn(probe, dim=(-2, -1))
 
         # Adjust normalization to account for prism cropping
         probe *= np.prod(PRISM_factor)
 
         # Do multislice
         probe = pyms.multislice(
-            probe.view([1, *gridshape, 2]), nslices, P, T, return_numpy=False
+            probe.view([1, *gridshape]), nslices, P, T, return_numpy=False
         )
-        # ax[1].imshow(np.abs(pyms.utils.cx_to_numpy(probe[0])))
-        # plt.show(block=True)
 
         # Get output gridsize
         gridout = torch.squeeze(probe).shape[:2]
 
         # Now crop multislice result in real space
-        grid = probe.shape[-3:-1]
+        grid = probe.shape[-2:]
         stride = [x // y for x, y in zip(grid, PRISM_factor)]
         halfstride = [x // 2 for x in stride]
         start = [
@@ -1292,23 +1469,19 @@ class Test_py_multislice_Methods(unittest.TestCase):
             [start[0], stride[0], start[1], stride[1]], gridout
         )
 
-        new = torch.zeros(*gridout, 2, dtype=S.dtype, device=probe.device)
+        new = torch.zeros(*gridout, dtype=S.dtype, device=probe.device)
         for wind in windows:
             new[
                 wind[0][0] : wind[0][0] + wind[0][1],
                 wind[1][0] : wind[1][0] + wind[1][1],
-                :,
             ] = probe[
                 0,
                 wind[0][0] : wind[0][0] + wind[0][1],
                 wind[1][0] : wind[1][0] + wind[1][1],
-                :,
             ]
         probe = new
-        probe = torch.fft(probe, signal_ndim=2) / np.sqrt(np.prod(gridout))
-        ms_CBED = np.fft.fftshift(
-            np.squeeze(np.abs(pyms.utils.cx_to_numpy(probe)) ** 2)
-        )
+        probe = torch.fft.fftn(probe, dim=[-2, -1]) / np.sqrt(np.prod(gridout))
+        ms_CBED = np.fft.fftshift(np.squeeze(np.abs(probe.cpu().numpy()) ** 2))
 
         # fig, ax = plt.subplots(ncols=3)
         # ax[0].imshow(ms_CBED)
@@ -1418,7 +1591,7 @@ class Test_util_Methods(unittest.TestCase):
         torchpass = sumsqr_diff(grid, reference).item() < 1e-7
 
         # Test numpy function
-        grid = np.zeros(gridshape, dtype=np.int).ravel()
+        grid = np.zeros(gridshape, dtype=pyms._int).ravel()
         ind = pyms.utils.crop_window_to_flattened_indices(
             indices.cpu().numpy(), gridshape
         )
@@ -1432,27 +1605,25 @@ class Test_util_Methods(unittest.TestCase):
         """Test the function that crops arrays to the maximum bandwidth limit."""
         passtest = True
         # refoutputshape = [85, 85]
-        gridshape = [128, 128]
-        in_ = np.ones(gridshape)
+        oddgridshape = [5, 128, 128]
+        evengridshape = [5, 127, 127]
+        in_ = np.ones(evengridshape)
         bwlimited = pyms.utils.bandwidth_limit_array(in_)
         cropped = pyms.utils.crop_to_bandwidth_limit(bwlimited)
         passtest = passtest and sumsqr_diff(np.sum(bwlimited), np.sum(cropped)) < 1e-10
-        gridshape = [127, 127]
-        in_ = np.ones(gridshape)
+        in_ = np.ones(oddgridshape)
         bwlimited = pyms.utils.bandwidth_limit_array(in_)
         cropped = pyms.utils.crop_to_bandwidth_limit(bwlimited)
         passtest = passtest and sumsqr_diff(np.sum(bwlimited), np.sum(cropped)) < 1e-10
 
         # Now test torch version
-        gridshape = [128, 128]
-        in_ = np.ones(gridshape)
+        in_ = np.ones(oddgridshape)
         bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
         cropped = pyms.utils.crop_to_bandwidth_limit_torch(bwlimited)
         passtest = (
             passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
         )
-        gridshape = [127, 127]
-        in_ = np.ones(gridshape)
+        in_ = np.ones(evengridshape)
         bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
         cropped = pyms.utils.crop_to_bandwidth_limit_torch(bwlimited)
         passtest = (
@@ -1460,16 +1631,14 @@ class Test_util_Methods(unittest.TestCase):
         )
 
         # pytorch test with complex numbers
-        gridshape = [128, 128]
-        in_ = np.ones(gridshape, dtype=np.complex64)
-        bwlimited = pyms.utils.bandwidth_limit_array(pyms.utils.cx_from_numpy(in_))
+        in_ = np.ones(oddgridshape, dtype=complex)
+        bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
         cropped = pyms.utils.crop_to_bandwidth_limit_torch(bwlimited)
         passtest = (
             passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
         )
-        gridshape = [127, 127]
-        in_ = np.ones(gridshape)
-        bwlimited = pyms.utils.bandwidth_limit_array(pyms.utils.cx_from_numpy(in_))
+        in_ = np.ones(evengridshape, dtype=complex)
+        bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
         cropped = pyms.utils.crop_to_bandwidth_limit_torch(bwlimited)
         passtest = (
             passtest and sumsqr_diff(torch.sum(bwlimited), torch.sum(cropped)) < 1e-10
@@ -1533,8 +1702,12 @@ class Test_util_Methods(unittest.TestCase):
                 1,
             ]
         ).reshape(grid)
+        testarray = np.broadcast_to(testarray, [7] + grid)
         bandlimited = pyms.utils.bandwidth_limit_array(testarray, 2 / 3)
-        passeven = np.all(bandlimited - referencearray == 0)
+        passeven = np.all(bandlimited[3] - referencearray == 0)
+        testtensor = torch.from_numpy(copy.deepcopy(testarray))
+        bandlimited = pyms.utils.bandwidth_limit_array_torch(testtensor, 2 / 3)
+        torchpasseven = np.all(bandlimited[3].cpu().numpy() - referencearray == 0)
         grid = [8, 8]
         testarray = np.ones(grid)
         referencearray = np.asarray(
@@ -1605,9 +1778,13 @@ class Test_util_Methods(unittest.TestCase):
                 1,
             ]
         ).reshape(grid)
+        testarray = np.broadcast_to(testarray, [7] + grid)
         bandlimited = pyms.utils.bandwidth_limit_array(testarray, 2 / 3)
-        passodd = np.all(bandlimited - referencearray == 0)
-        self.assertTrue(np.all([passeven, passodd]))
+        passodd = np.all(bandlimited[3] - referencearray == 0)
+        testtensor = torch.from_numpy(copy.deepcopy(testarray))
+        bandlimited = pyms.utils.bandwidth_limit_array_torch(testtensor, 2 / 3)
+        torchpassodd = np.all(bandlimited[3].cpu().numpy() - referencearray == 0)
+        self.assertTrue(np.all([passeven, torchpasseven, passodd, torchpassodd]))
 
     def test_convolution(self):
         """Test Fourier convolution by convolving with shifted delta function."""
@@ -1626,77 +1803,88 @@ class Test_util_Methods(unittest.TestCase):
 
     def test_fourier_interpolation(self):
         """Test fourier interpolation of a cosine function."""
-        a = np.zeros((4, 4), dtype=np.float32)
+        oddgrid = [5, 5]
+        evengrid = [4, 4]
+        numpyVersionPass = True
+        pytorchVersionPass = True
+        for g in [evengrid, oddgrid]:
+            a = np.zeros(g, dtype=pyms._float)
+            device = pyms.utils.get_device()
+            # Put in one full period of a cosine function
+            a[:, :] = np.cos(2 * np.pi * np.fft.fftfreq(g[0]))
+            a = a.T
 
-        # Put in one full period of a cosine function (a checkerboard 1,0,-1,0)
-        a[0, :] = 1
-        a[2, :] = -1
-
-        # In the fourier interpolated version we should recover the value of
-        # cos(pi/2) = 1/sqrt(2) at the interpolated intermediate points
-        passY = (
-            pyms.utils.fourier_interpolate_2d(a, (8, 8))[1, 0] - 1 / np.sqrt(2) < 1e-10
-        )
-
-        # Test in x direction for completeness
-        passX = (
-            pyms.utils.fourier_interpolate_2d(a.T, (8, 8)).T[1, 0] - 1 / np.sqrt(2)
-            < 1e-10
-        )
-
-        # Test that the option 'conserve_norm' works too.
-        passNorm = (
-            np.sum(
-                pyms.utils.fourier_interpolate_2d(a, (8, 8), norm="conserve_L2") ** 2
+            # In the fourier interpolated version we should recover the value of
+            # cos(pi/2) = 1/sqrt(2) at the interpolated intermediate points
+            passY = (
+                np.abs(pyms.utils.fourier_interpolate(a, (8, 8))[1, 0] - 1 / np.sqrt(2))
+                < 1e-8
             )
-            - np.sum(a ** 2)
-            < 1e-10
-        )
 
-        numpyVersionPass = (passY and passX) and passNorm
-
-        # test pytorch versions
-        passY = (
-            pyms.utils.fourier_interpolate_2d_torch(
-                pyms.utils.cx_from_numpy(a), (8, 8)
-            )[1, 0, 0]
-            - 1 / np.sqrt(2)
-            < 1e-10
-        )
-        # print(pyms.utils.fourier_interpolate_2d_torch(pyms.utils.cx_from_numpy(a.T),(8,8)).shape)
-        passX = (
-            pyms.utils.fourier_interpolate_2d_torch(
-                pyms.utils.cx_from_numpy(a.T), (8, 8)
-            )[0, 1, 0]
-            - 1 / np.sqrt(2)
-            < 1e-10
-        )
-
-        # Test that the option 'conserve_norm' works too.
-        passNorm = (
-            torch.sum(
-                pyms.utils.fourier_interpolate_2d_torch(
-                    pyms.utils.cx_from_numpy(a.T), (8, 8), norm="conserve_norm"
+            # Test in x direction for completeness
+            passX = (
+                np.abs(
+                    pyms.utils.fourier_interpolate(a.T, (8, 8)).T[1, 0] - 1 / np.sqrt(2)
                 )
-                ** 2
+                < 1e-8
             )
-            - torch.sum(pyms.utils.cx_from_numpy(a) ** 2)
-            < 1e-10
-        )
-        pytorchVersionPass = passY.item() and passX.item() and passNorm.item()
+
+            # Test that the option 'conserve_norm' works too.
+            passNorm = (
+                np.sum(
+                    pyms.utils.fourier_interpolate(a, (8, 8), norm="conserve_L2") ** 2
+                )
+                - np.sum(a ** 2)
+                < 1e-8
+            )
+
+            numpyVersionPass = numpyVersionPass and ((passY and passX) and passNorm)
+
+            # test pytorch versions
+            passY = (
+                pyms.utils.fourier_interpolate_torch(
+                    torch.from_numpy(a).to(device), (8, 8)
+                )[1, 0]
+                - 1 / np.sqrt(2)
+                < 1e-8
+            )
+
+            passX = (
+                pyms.utils.fourier_interpolate_torch(
+                    torch.from_numpy(a.T).to(device), (8, 8)
+                )[0, 1]
+                - 1 / np.sqrt(2)
+                < 1e-8
+            )
+
+            # Test that the option 'conserve_norm' works too.
+            passNorm = (
+                torch.sum(
+                    pyms.utils.fourier_interpolate_torch(
+                        torch.from_numpy(a.T).to(device), (8, 8), norm="conserve_norm"
+                    ).abs()
+                    ** 2
+                )
+                - torch.sum(torch.from_numpy(a).to(device) ** 2)
+                < 1e-8
+            )
+
+            ptorchpass = passY.item() and passX.item() and passNorm.item()
+            pytorchVersionPass = pytorchVersionPass and ptorchpass
 
         self.assertTrue(pytorchVersionPass and numpyVersionPass)
 
-    def test_numpy_fft_shift(self):
+    def test_fft_shift(self):
         """Test to see if fourier shift correctly shifts a pixel 2 to the right."""
         test_array = np.zeros((5, 5))
         test_array[0, 0] = 1
         shifted1 = pyms.utils.fourier_shift(test_array, [2, 3])
+        shifted2 = pyms.utils.fourier_shift_torch(torch.from_numpy(test_array), [2, 3])
         test_array[0, 0] = 0
         test_array[2, 3] = 1
         self.assertTrue(
             sumsqr_diff(shifted1, test_array) < 1e-10
-            and sumsqr_diff(shifted1, test_array) < 1e-10
+            and sumsqr_diff(shifted2.cpu().numpy(), test_array) < 1e-10
         )
 
     def test_crop(self):
@@ -1704,7 +1892,7 @@ class Test_util_Methods(unittest.TestCase):
         # Get astonaut image
         from skimage.data import astronaut
 
-        im = np.sum(astronaut(), axis=2).astype(np.float32)
+        im = np.sum(astronaut(), axis=2).astype(pyms._float)
 
         passTest = True
 
@@ -1745,50 +1933,6 @@ class Test_util_Methods(unittest.TestCase):
         )
         self.assertTrue(passTest)
 
-    def test_torch_complex_matmul(self):
-        """Test complex matmul against numpy complex matrix multiplication."""
-        k, m, n = 2, 3, 4
-        a = np.random.randint(-5, 5, size=k * m).reshape(
-            (k, m)
-        ) + 1j * np.random.randint(-5, 5, size=k * m).reshape((k, m))
-        b = np.random.randint(-5, 5, size=m * n).reshape(
-            (m, n)
-        ) + 1j * np.random.randint(-5, 5, size=m * n).reshape((m, n))
-
-        c = sumsqr_diff(
-            a @ b,
-            pyms.utils.cx_to_numpy(
-                pyms.utils.complex_matmul(
-                    *[pyms.utils.cx_from_numpy(x) for x in [a, b]]
-                )
-            ),
-        )
-        self.assertTrue(c < 1e-10)
-
-    def test_torch_complex_mul(self):
-        """Multiply 1 + i and 3 + 4i to give -1 + 7 i."""
-        a = torch.as_tensor([1, 1])
-        b = torch.as_tensor([3, 4])
-        c = pyms.utils.complex_mul(a, b)
-        self.assertTrue(float(sumsqr_diff(c, torch.as_tensor([-1, 7]))) < 1e-10)
-
-    def test_torch_c_exp(self):
-        """Test exponential function by calculating e^{i pi} and e^{1 + i pi}."""
-        # Test e^{i pi} = -1
-        # Test complex input
-        arg = np.asarray(np.pi + 1j)
-        a = pyms.utils.torch_c_exp(pyms.utils.cx_from_numpy(arg))
-        passcomplex = (a.data[0] + 1 / np.exp(1.0)) ** 2 < 1e-10 and a.data[
-            1
-        ] ** 2 < 1e-10
-
-        # Test real input
-        arg = torch.as_tensor([np.pi])
-        a = pyms.utils.torch_c_exp(arg)
-        passreal = (a[0, 0] + 1) ** 2 < 1e-10
-        passtest = passreal and passcomplex
-        self.assertTrue(passtest.item())
-
     def test_torch_sinc(self):
         """Test sinc function by calculating [sinc(0),sinc(pi/2),sinc(pi)]."""
         x = torch.as_tensor([0, 1 / 2, 1, 3 / 2])
@@ -1798,7 +1942,7 @@ class Test_util_Methods(unittest.TestCase):
     def test_amplitude(self):
         """Test modulus square function by calculating a few known examples."""
         # 1 + i, 1-i and i
-        x = torch.as_tensor([[1, 1], [1, -1], [0, 1]])
+        x = torch.as_tensor([1 + 1j, 1 - 1j, 1j])
         y = torch.as_tensor([2, 2, 1])
         passcomplex = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
         # 1,2,4 (test function for real numbers)
@@ -1807,39 +1951,52 @@ class Test_util_Methods(unittest.TestCase):
         passreal = sumsqr_diff(y, pyms.utils.amplitude(x)).item() < 1e-7
         self.assertTrue(passcomplex and passreal)
 
-    def test_cx_from_numpy(self):
-        """Test function for converting complex numpy arrays to complex tensors."""
-        in_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
-        out_ = torch.as_tensor([[1.0, 1.0], [2.0, -2.0]], device=torch.device("cpu"))
-        self.assertTrue(
-            sumsqr_diff(
-                out_, pyms.utils.cx_from_numpy(in_, device=torch.device("cpu"))
-            ).item()
-            < 1e-7
-        )
+    # def test_fftfreq(self):
+    #     """Test function for calculating Fourier frequency grid."""
+    #     even = torch.as_tensor([0.0, 1.0, -2.0, -1.0])
+    #     odd = torch.as_tensor([0.0, 1.0, 2.0, -2.0, -1.0])
+    #     passeven = sumsqr_diff(pyms.utils.fftfreq(4), even) < 1e-8
+    #     passodd = sumsqr_diff(pyms.utils.fftfreq(5), odd) < 1e-8
+    #     self.assertTrue(passeven and passodd)
 
-    def test_cx_to_numpy(self):
-        """Test function for converting complex numpy arrays to complex tensors."""
-        out_ = np.asarray([1.0 + 1.0j, 2.0 - 2.0j])
-        in_ = torch.as_tensor([[1.0, 1.0], [2.0, -2.0]], device=torch.device("cpu"))
-        self.assertTrue(sumsqr_diff(out_, pyms.utils.cx_to_numpy(in_)).item() < 1e-7)
 
-    def test_fftfreq(self):
-        """Test function for calculating Fourier frequency grid."""
-        even = torch.as_tensor([0.0, 1.0, -2.0, -1.0])
-        odd = torch.as_tensor([0.0, 1.0, 2.0, -2.0, -1.0])
-        passeven = sumsqr_diff(pyms.utils.fftfreq(4), even) < 1e-8
-        passodd = sumsqr_diff(pyms.utils.fftfreq(5), odd) < 1e-8
-        self.assertTrue(passeven and passodd)
+# def suite():
+#     suite = unittest.TestSuite()
+#     suite.addTest(Test_util_Methods())
+#     return suite
 
+# if __name__ == '__main__':
+#     runner = unittest.TextTestRunner()
+#     runner.run(suite())
 
 if __name__ == "__main__":
     # test = Test_util_Methods()
     # test.test_crop_tobandwidthlimit()
+    # import sys; sys.exit()
+    # test = Test_py_multislice_Methods()
+    # test.test_nyquist_and_probe_raster()
+    # test.test_DPC()
 
+    # test.test_STEM_routine()
+    # test.test_Smatrix()
+    # import sys; sys.exit()
+    # # test.test_propagator()
+    # sys.exit()
     # test = Test_ionization_methods()
     # test.test_PRISM_STEM_EELS()
     # import sys;sys.exit()
+    # suite = unittest.TestSuite(tests = (Test_util_Methods(),))
+    # suite.run()
+    # test.run()
+    # test = Test_Structure_Methods()
+    # test.test_multilayer_objects()
+
+    # test.test_electron_scattering_factor()
+    # test.test_make_potential()
+    # import sys; sys.exit()
+    # test.test_fourier_interpolation()
+    # test = Test_py_multislice_Methods()
+    # test.test_reverse_multislice()
 
     unittest.main()
     clean_temp_structure()

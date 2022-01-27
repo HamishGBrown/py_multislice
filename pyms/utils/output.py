@@ -1,16 +1,21 @@
 """Utility functions for outputting data to file."""
 import os
+from matplotlib import pyplot as plt
 import numpy as np
-import matplotlib.pyplot as plt
+
+# import matplotlib.pyplot as plt
 import png
 import h5py
 from PIL import Image
+import pyms
+
+from .. import _float, _int, _uint
 
 
 def stack_to_animated_gif(
     arrayin,
     fnam,
-    cmap=plt.get_cmap("viridis"),
+    cmap=None,
     vmin=None,
     vmax=None,
     optimize=False,
@@ -45,6 +50,9 @@ def stack_to_animated_gif(
         Number of times to loop the gif, 0 means infinite loop and -1 means that
         gif animation is played a single time
     """
+    if cmap is None:
+        cmap = plt.get_cmap("viridis")
+
     # Flatten dimensions leading up to the final two dimensions
     shapein = arrayin.shape
     nimgs = np.prod(shapein[:-2])
@@ -119,7 +127,7 @@ def save_array_as_png(array, fnam, cmap=plt.get_cmap("viridis"), vmin=None, vmax
 def initialize_h5_datacube_object(
     datacube_shape,
     filename,
-    dtype=np.float32,
+    dtype=_float,
     Rpix=None,
     diffsize=None,
     eV=None,

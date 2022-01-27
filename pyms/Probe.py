@@ -205,7 +205,7 @@ def make_contrast_transfer_function(
         app_ = convert_tilt_angles(app, app_units, real_dim, eV, invA_out=True)
 
     # Initialize the array to contain the CTF
-    CTF = np.zeros(pix_dim, dtype=np.complex)
+    CTF = np.zeros(pix_dim, dtype=complex)
 
     # Calculate the magnitude of the reciprocal lattice grid
     # qarray1 accounts for a shift of the optic axis
@@ -333,7 +333,7 @@ def plane_wave_illumination(
     illum : np.ndarray (Y,X)
     """
     # Initialize array that contains wave function
-    illum = np.zeros(gridshape, dtype=np.complex)
+    illum = np.zeros(gridshape, dtype=complex)
 
     # Convert tilt to units of pixels
     tilt_ = convert_tilt_angles(tilt, tilt_units, gridsize, eV)

@@ -22,7 +22,6 @@ from .utils.numpy_utils import fourier_shift
 from .py_multislice import multislice, tqdm_handler
 from .utils.torch_utils import (
     amplitude,
-    complex_mul,
     ensure_torch_array,
     fourier_shift_torch,
     get_device,
@@ -298,7 +297,7 @@ class orbital:
             r_ = np.asarray([r])
 
         # Initialize output array
-        wvfn = np.zeros(r_.shape, dtype=np.float)
+        wvfn = np.zeros(r_.shape, dtype=pyms._float)
 
         # Region I and II refer to the two solution regions used in the
         # Flexible Atomic Code for continuum wave functions. Region I
@@ -445,7 +444,7 @@ def transition_potential(
         qmax = np.amax(qabs)
 
     # Initialize output array
-    Hn0 = np.zeros(gridshape, dtype=np.complex)
+    Hn0 = np.zeros(gridshape, dtype=complex)
 
     # Get spherical Bessel functions, spherical harmonics and Wigner 3j symbols
     from scipy.special import spherical_jn, sph_harm
@@ -514,7 +513,7 @@ def transition_potential(
     # only non-zero for certain values of lprimeprime:
     # |l-lprime|<=lprimeprime<=|l+lprime|
     lprimeprimes = np.arange(
-        np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=np.int
+        np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=pyms.int
     )
     if lprimeprimes.shape[0] < 1:
         return None
@@ -522,7 +521,7 @@ def transition_potential(
     for lprimeprime in lprimeprimes:
         jq = None
         # Set of projection quantum numbers
-        mlprimeprimes = np.arange(-lprimeprime, lprimeprime + 1, dtype=np.int)
+        mlprimeprimes = np.arange(-lprimeprime, lprimeprime + 1, dtype=pyms.int)
 
         # Non mlprimeprime dependent part of prefactor from Eq (13) from
         # Dwyer Ultramicroscopy 104 (2005) 141-151
@@ -539,8 +538,8 @@ def transition_potential(
             # Evaluate Eq (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
             prefactor2 = (
                 (-1.0) ** (mlprime + mlprimeprime)
-                * np.float(wigner_3j(lprime, lprimeprime, ell, 0, 0, 0))
-                * np.float(
+                * pyms._float(wigner_3j(lprime, lprimeprime, ell, 0, 0, 0))
+                * pyms._float(
                     wigner_3j(lprime, lprimeprime, ell, -mlprime, -mlprimeprime, ml)
                 )
             )
@@ -684,7 +683,7 @@ def transition_potential_multislice(
             trigger[i] = threshhold * torch.sum(amplitude(ionization_potential))
 
     # Ionization potentials must be in reciprocal space
-    ionization_potentials = torch.fft(ionization_potentials, signal_ndim=2)
+    ionization_potentials = fft(ionization_potentials, signal_ndim=2)
 
     # Output array
     from .utils.torch_utils import size_of_bandwidth_limited_array
@@ -726,7 +725,7 @@ def transition_potential_multislice(
                 )
 
                 Hn0 = fourier_shift_torch(ionization_potential, p_, qspace_in=True)
-                psi_n = complex_mul(Hn0, probes)
+                psi_n = Hn0 * probes
 
                 # Only propagate this wave to the exit surface if it is deemed
                 # to contribute significantly (above a user-determined threshhold)
@@ -752,9 +751,7 @@ def transition_potential_multislice(
                 if image_CTF is None:
                     output += amplitude(psi_n)
                 else:
-                    output += amplitude(
-                        torch.ifft(complex_mul(psi_n, image_CTF), signal_ndim=2)
-                    )
+                    output += amplitude(torch.ifft(psi_n * image_CTF, signal_ndim=2))
 
         # Propagate probe one slice
         if i < niterations - 1:

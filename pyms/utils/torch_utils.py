@@ -2,15 +2,29 @@
 import torch
 import numpy as np
 from itertools import product
+import copy
+from .numpy_utils import is_array_like, q_space_array
 
 
 re = np.s_[..., 0]
 im = np.s_[..., 1]
 
 
+def complex_dtype_to_real(dtype):
+    a = torch.ones(1, dtype=dtype)
+    if torch.is_complex(a):
+        return a.real.dtype
+    else:
+        return dtype
+
+
+# def numpy_real_dtype_to_complex(dtype):
+#     a = np.ones(1,dtype=dtype)
+
+
 def iscomplex(a: torch.Tensor):
     """Return True if a is complex, False otherwise."""
-    return a.shape[-1] == 2
+    return torch.is_complex(a)
 
 
 def check_complex(A):
@@ -20,16 +34,6 @@ def check_complex(A):
             raise RuntimeWarning(
                 "taking complex_mul of non-complex tensor! a.shape " + str(a.shape)
             )
-
-
-def to_complex(real, imag=None):
-    """Convert real and imaginary tensors to a complex tensor."""
-    if imag is None:
-        return torch.stack(
-            [real, torch.zeros(real.size(), dtype=real.dtype, device=real.device)], -1
-        )
-    else:
-        return torch.stack([real, imag], -1)
 
 
 def get_device(device_type=None):
@@ -43,71 +47,13 @@ def get_device(device_type=None):
     return device
 
 
-def complex_matmul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tensor:
-    """
-    Complex matrix multiplication of tensors a and b.
-
-    Pass conjugate = True to conjugate tensor b in the multiplication.
-    """
-    check_complex([a, b])
-    are = a[re]
-    aim = a[im]
-    bre = b[re]
-    bim = b[im]
-    if conjugate:
-        real = are @ bre + aim @ bim
-        imag = -are @ bim + aim @ bre
-    else:
-        real = are @ bre - aim @ bim
-        imag = are @ bim + aim @ bre
-
-    return torch.stack([real, imag], -1)
-
-
-def complex_mul(a: torch.Tensor, b: torch.Tensor, conjugate=False) -> torch.Tensor:
-    """
-    Complex array multiplication of tensors a and b.
-
-    Pass conjugate = True to conjugate tensor b in the multiplication.
-    """
-    check_complex([a, b])
-    are = a[re]
-    aim = a[im]
-    bre = b[re]
-    bim = b[im]
-    if conjugate:
-        real = are * bre + aim * bim
-        imag = -are * bim + aim * bre
-    else:
-        real = are * bre - aim * bim
-        imag = are * bim + aim * bre
-
-    return torch.stack([real, imag], -1)
-
-
-def torch_c_exp(angle):
-    """Calculate exp(1j*angle)."""
-    if angle.size()[-1] != 2:
-        # Case of a real exponent
-        result = torch.zeros(*angle.shape, 2, dtype=angle.dtype, device=angle.device)
-        result[re] = torch.cos(angle)
-        result[im] = torch.sin(angle)
-    else:
-        # Case of a complex valued exponent
-        exp = torch.exp(-angle[im])
-        result = torch.zeros(*angle.shape, dtype=angle.dtype, device=angle.device)
-        result[re] = exp * torch.cos(angle[re])
-        result[im] = exp * torch.sin(angle[re])
-    return result
-
-
 def sinc(x):
     """Calculate the sinc function ie. sin(pi x)/(pi x)."""
     y = torch.where(torch.abs(x) < 1.0e-20, torch.tensor([1.0e-20], dtype=x.dtype), x)
     return torch.sin(np.pi * y) / np.pi / y
 
 
-def ensure_torch_array(array, dtype=torch.float, device=None):
+def ensure_torch_array(array, dtype=None, device=None):
     """
     Ensure that the input array is a pytorch tensor.
 
@@ -120,7 +66,8 @@ def ensure_torch_array(array, dtype=torch.float, device=None):
     )
 
     if device is None:
-        device = get_device(device)
+        dv = get_device(device)
+
     if isinstance(array, torch.Tensor):
         return array.to(device)
     elif isinstance(array, layered_structure_transmission_function):
@@ -132,10 +79,11 @@ def ensure_torch_array(array, dtype=torch.float, device=None):
             array.Ps[i] = array.Ps[i].to(device)
         return array
     else:
-        if np.iscomplexobj(np.asarray(array)):
-            return cx_from_numpy(np.asarray(array), dtype=dtype, device=device)
+        arrayout = torch.from_numpy(np.asarray(array)).to(device)
+        if dtype is None:
+            return arrayout
         else:
-            return torch.from_numpy(np.asarray(array)).type(dtype).to(device)
+            return arrayout.type(dtype)
 
 
 def amplitude(r):
@@ -144,74 +92,10 @@ def amplitude(r):
 
     If the tensor is not complex then calculate square.
     """
-    if r.size(-1) == 2:
-        return r[..., 0] * r[..., 0] + r[..., 1] * r[..., 1]
+    if torch.is_complex(r):
+        return torch.abs(r) ** 2
     else:
         return r * r
-
-
-# def roll_n(X, axis, n):
-#     """Roll a pytorch tensor X n entries along a given axis."""
-#     f_idx = tuple(
-#         slice(None, None, None) if i != axis % X.dim() else slice(0, n, None)
-#         for i in range(X.dim())
-#     )
-#     b_idx = tuple(
-#         slice(None, None, None) if i != axis % X.dim() else slice(n, None, None)
-#         for i in range(X.dim())
-#     )
-#     front = X[f_idx]
-#     back = X[b_idx]
-#     return torch.cat([back, front], axis)
-
-
-def cx_from_numpy(
-    x: np.array, dtype=torch.float32, device=get_device()
-) -> torch.Tensor:
-    """
-    Turn a complex numpy array into the required pytorch array format.
-
-    Parameters
-    ----------
-    x : complex np.ndarray
-        A complex numpy array
-
-    Keyword arguments
-    -----------------
-    dtype : torch.dtype
-        The datatype of the output array
-    device : torch.device
-        The device (CPU or GPU) of the output array
-    """
-    if "complex" in str(x.dtype):
-        out = torch.zeros(*x.shape, 2)
-        out[re] = torch.from_numpy(x.real)
-        out[im] = torch.from_numpy(x.imag)
-    else:
-        if x.shape[-1] != 2:
-            out = torch.zeros(x.shape + (2,))
-            out[re] = torch.from_numpy(x.real)
-        else:
-            out = torch.zeros(x.shape + (2,))
-            out[re] = torch.from_numpy(x[re])
-            out[im] = torch.from_numpy(x[im])
-    return out.to(device).type(dtype)
-
-
-def cx_to_numpy(x: torch.Tensor) -> np.ndarray:
-    """Convert a complex pytorch tensor to a complex numpy array."""
-    check_complex(x)
-
-    return x[re].cpu().numpy() + 1j * x[im].cpu().numpy()
-
-
-def fftfreq(n, dtype=torch.float, device=torch.device("cpu")):
-    """
-    Generate an array of Fourier coordinates in units of pixels.
-
-    Same as numpy.fft.fftfreq(n)*n but for a torch array.
-    """
-    return (torch.arange(n, dtype=dtype, device=device) + n // 2) % n - n // 2
 
 
 def torch_dtype_to_numpy(dtype):
@@ -220,17 +104,42 @@ def torch_dtype_to_numpy(dtype):
     return scratch_array.cpu().numpy().dtype
 
 
+def numpy_dtype_to_torch(dtype):
+    """Convert a numpy datatype to a torch datatype."""
+    return torch.from_numpy(np.zeros(1, dtype=dtype)).dtype
+
+
+def real_to_complex_dtype_torch(dtype):
+    return (torch.ones(1, dtype=dtype) * 1j).dtype
+
+
+def complex_to_real_dtype_torch(dtype):
+    return torch.abs(torch.zeros(1, dtype=dtype)).dtype
+
+
 def fourier_shift_array_1d(
     y, posn, dtype=torch.float, device=torch.device("cpu"), units="pixels"
 ):
     """Apply Fourier shift theorem for sub-pixel shift to a 1 dimensional array."""
-    ramp = torch.empty(y, 2, dtype=dtype, device=device)
-    ky = 2 * np.pi * fftfreq(y) * posn
     if units == "pixels":
-        ky /= y
-    ramp[..., 0] = torch.cos(ky)
-    ramp[..., 1] = -torch.sin(ky)
-    return ramp
+        n = 1
+    else:
+        n = y
+    d_ = complex_dtype_to_real(dtype)
+    if is_array_like(posn):
+
+        return torch.exp(
+            -2
+            * np.pi
+            * 1j
+            * n
+            * torch.fft.fftfreq(y, dtype=d_).to(device).view(1, y)
+            * posn.view(len(posn), 1)
+        )
+    else:
+        return torch.exp(
+            -2 * np.pi * 1j * n * torch.fft.fftfreq(y, dtype=d_).to(device) * posn
+        )
 
 
 def fourier_shift_torch(
@@ -252,24 +161,22 @@ def fourier_shift_torch(
     posn : torch.tensor (K x 2) or (2,)
         Shift(s) to be applied
     """
-    if not qspace_in:
-        array = torch.fft(array, signal_ndim=2)
 
-    array = complex_mul(
-        array,
-        fourier_shift_array(
-            array.size()[-3:-1],
-            posn,
-            dtype=array.dtype,
-            device=array.device,
-            units=units,
-        ),
+    if not qspace_in:
+        array = torch.fft.fftn(array, dim=(-2, -1))
+
+    array = array * fourier_shift_array(
+        array.shape[-2:],
+        posn,
+        dtype=array.dtype,
+        device=array.device,
+        units=units,
     )
 
     if qspace_out:
         return array
 
-    return torch.ifft(array, signal_ndim=2)
+    return torch.fft.ifftn(array, dim=[-2, -1])
 
 
 def fourier_shift_array(
@@ -287,7 +194,8 @@ def fourier_shift_array(
     posn
     """
     # Get number of dimensions
-    nn = len(posn.shape)
+    p_ = torch.as_tensor(posn)
+    nn = len(p_.shape)
 
     # Get size of array
     y, x = size
@@ -295,49 +203,28 @@ def fourier_shift_array(
     if nn == 1:
         # Make y ramp exp(-2pi i ky y)
         yramp = fourier_shift_array_1d(
-            y, posn[0], units=units, dtype=dtype, device=device
+            y, p_[0].item(), units=units, dtype=dtype, device=device
         )
 
         # Make y ramp exp(-2pi i kx x)
         xramp = fourier_shift_array_1d(
-            x, posn[1], units=units, dtype=dtype, device=device
+            x, p_[1].item(), units=units, dtype=dtype, device=device
         )
 
         # Multiply both arrays together, view statements for
         # appropriate broadcasting to 2D
-        return complex_mul(yramp.view(y, 1, 2), xramp.view(1, x, 2))
+        return yramp.view(y, 1) * xramp.view(1, x)
     else:
-        K = posn.shape[0]
+        K = p_.shape[0]
         # Make y ramp exp(-2pi i ky y)
-        yramp = torch.empty(K, y, 2, dtype=dtype, device=device)
-        ky = (
-            2
-            * np.pi
-            * fftfreq(y, dtype=dtype, device=device).view(1, y)
-            * posn[:, 0].view(K, 1)
-        )
-        if units == "pixels":
-            ky /= y
-        yramp[..., 0] = torch.cos(ky)
-        yramp[..., 1] = -torch.sin(ky)
-
-        # Make y ramp exp(-2pi i kx x)
-        xramp = torch.empty(K, x, 2, dtype=dtype, device=device)
-        kx = (
-            2
-            * np.pi
-            * fftfreq(x, dtype=dtype, device=device).view(1, x)
-            * posn[:, 1].view(K, 1)
-        )
-        if units == "pixels":
-            kx /= x
-
-        xramp[..., 0] = torch.cos(kx)
-        xramp[..., 1] = -torch.sin(kx)
+        yramp, xramp = [
+            fourier_shift_array_1d(xx, pos, units=units, dtype=dtype, device=device)
+            for xx, pos in zip([y, x], p_.T)
+        ]
 
         # Multiply both arrays together, view statements for
         # appropriate broadcasting to 2D
-        return complex_mul(yramp.view(K, y, 1, 2), xramp.view(K, 1, x, 2))
+        return yramp.view(K, y, 1) * xramp.view(K, 1, x)
 
 
 def crop_window_to_periodic_indices(win, shape):
@@ -427,6 +314,89 @@ def crop_window_to_flattened_indices_torch(indices: torch.Tensor, shape: list):
     return (xind + yind * shape[-1]).flatten().type(torch.LongTensor)
 
 
+def bandwidth_limit_array_torch(
+    arrayin, limit=2 / 3, qspace_in=True, qspace_out=True, soft=None, rfft=False
+):
+    """
+    Band-width limit an array in Fourier space.
+
+    Band width limiting of the propagator and transmission functions is necessary
+    in multislice to prevent "aliasing", wrapping round of high-angle scattering
+    due the periodic boundary conditions implicit in the multislice algorithm.
+    See sec. 6.8 of "Kirkland's Advanced Computing in Electron Microscopy" for
+    more detail.
+
+    Parameters
+    ----------
+    arrayin : array_like (...,Ny,Nx)
+        Array to be bandwidth limited.
+    limit : float
+        Bandwidth limit as a fraction of the maximum reciprocal space frequency
+        of the array.
+    qspace_in : bool, optional
+        Set to True if the input array is in reciprocal space (default),
+        False if not
+    qspace_out : bool, optional
+        Set to True for reciprocal space output (default), False for real-space
+        output.
+    soft : None or float, optional
+        Apply a soft bandwidth limit, pass None (default) for a hardbandwidth limit,
+        pass a floating point number for soft bandwidth limit where the number is the
+        characteristic length of the error function edge of the bandwidth limit
+    rfft: bool, optional
+        Assume real space fft coordinates
+    Returns
+    -------
+    array : array_like (...,Ny,Nx)
+        The bandwidth limit of the array
+    """
+    # Transform array to Fourier space if necessary
+    if qspace_in:
+        array = copy.deepcopy(arrayin)
+    else:
+        array = torch.fft.fftn(arrayin, dim=[-2, -1])
+
+    hardbandwidthlimit = soft is None
+
+    # Case where band-width limiting has been turned off
+    if limit is not None:
+        if is_array_like(limit):
+            lmt = limit[-2:]
+        else:
+            lmt = limit * np.ones(2)
+
+        shp = array.shape
+
+        q = [torch.square(torch.fft.fftfreq(s) * 2 / l) for s, l in zip(shp[-2:], lmt)]
+        if rfft:
+            q[1] = torch.square(torch.fft.rfftfreq((shp[-1] - 1) * 2) * 2 / lmt[-1])
+        qgrid = q[0][:, np.newaxis] + q[1][np.newaxis, :]
+
+        if hardbandwidthlimit:
+            # Mask is a boolean array
+            mask = qgrid >= 1
+
+            if len(shp) > 2:
+                array = array.reshape((np.prod(shp[:-2]), *shp[-2:]))
+                for i in range(array.shape[0]):
+                    array[i][mask] = 0
+                array = array.reshape(shp)
+            else:
+                array[mask] = 0
+        else:
+            # Mask is a floating point array
+            from scipy.special import erf
+
+            grid = np.clip(-(np.sqrt(qgrid) - 1), 0, None) / soft
+            mask = torch.as_tensor(erf(grid), dtype=torch.float32, device=array.device)
+            array *= torch.as_tensor(mask, dtype=torch.float32, device=array.device)
+
+    if qspace_out:
+        return array
+    else:
+        return torch.fft.ifft2(array)
+
+
 def crop_to_bandwidth_limit_torch(
     array: torch.Tensor,
     limit=2 / 3,
@@ -435,17 +405,15 @@ def crop_to_bandwidth_limit_torch(
     norm="conserve_L2",
 ):
     """Crop an array to its bandwidth limit (remove superfluous array entries)."""
-    # Check if array is complex or not
-    complx = iscomplex(array)
 
     # Get array shape, taking into account final dimension of size 2 if the array
     # is complex
-    gridshape = array.shape[-2 - int(complx) :][:2]
+    gridshape = array.shape[-2:]
 
     # New shape of final dimensions
     newshape = tuple([int(round(gridshape[i] * limit)) for i in range(2)])
 
-    return fourier_interpolate_2d_torch(
+    return fourier_interpolate_torch(
         array, newshape, norm=norm, qspace_in=qspace_in, qspace_out=qspace_out
     )
 
@@ -466,7 +434,12 @@ def detect(detector, diffraction_pattern):
     """
     minsize = min(detector.size()[-2:], diffraction_pattern.size()[-2:])
 
-    wind = [fftfreq(minsize[i], torch.long, detector.device) for i in [0, 1]]
+    wind = [
+        torch.fft.fftfreq(
+            minsize[i], d=1 / minsize[i], dtype=torch.float, device=detector.device
+        ).type(torch.int)
+        for i in [0, 1]
+    ]
     Dwind = crop_window_to_flattened_indices_torch(wind, detector.size())
     DPwind = crop_window_to_flattened_indices_torch(wind, diffraction_pattern.size())
     return torch.sum(
@@ -476,8 +449,8 @@ def detect(detector, diffraction_pattern):
     )
 
 
-def fourier_interpolate_2d_torch(
-    ain, shapeout, norm="conserve_val", qspace_in=False, qspace_out=False
+def fourier_interpolate_torch(
+    ain, shapeout, norm="conserve_val", N=None, qspace_in=False, qspace_out=False
 ):
     """
     Fourier interpolation of array ain to shape shapeout.
@@ -487,14 +460,17 @@ def fourier_interpolate_2d_torch(
 
     Parameters
     ----------
-    ain : (...,Ny,Nx,2) torch.tensor
+    ain : (...,Nn,..,Ny,Nx) torch.tensor
         Input array
-    shapeout : (2,) array_like
+    shapeout : (n,) array_like
         Shape of output array
     norm : str, optional  {'conserve_val','conserve_norm','conserve_L1'}
         Normalization of output. If 'conserve_val' then array values are preserved
         if 'conserve_norm' L2 norm is conserved under interpolation and if
         'conserve_L1' L1 norm is conserved under interpolation
+    N : int, optional
+        Number of (trailing) dimensions to Fourier interpolate. By default take
+        the length of shapeout
     qspace_in : bool, optional
         If True expect a Fourier space input, otherwise (default) expect a
         real space input
@@ -503,60 +479,46 @@ def fourier_interpolate_2d_torch(
         real space
     """
     dtype = ain.dtype
+
+    if N is None:
+        N = len(shapeout)
+
     inputComplex = iscomplex(ain)
-    # Make input complex
-    aout = torch.zeros(
-        ain.shape[: -2 - int(inputComplex)] + (np.prod(shapeout), 2),
-        dtype=dtype,
-        device=ain.device,
-    )
 
     # Get input dimensions
-    npiyin, npixin = ain.size()[-2 - int(inputComplex) :][:2]
-    npiyout, npixout = shapeout
+    shapein = ain.size()[-N:]
 
-    # Get Fourier interpolation masks
-    # PyTorch does not yet do element-wise logic operations, so we have to do
-    # this bit in numpy. Additionally, in Windows pytorch does not support
-    # bool types so we have to convert this to a unsigned 8-bit integer.
-    from .numpy_utils import Fourier_interpolation_masks
-
-    maskin, maskout = [
-        torch.from_numpy(x).flatten()
-        for x in Fourier_interpolation_masks(npiyin, npixin, npiyout, npixout)
-    ]
+    # axes to Fourier transform
+    axes = np.arange(-N, 0).tolist()
 
     # Now transfer over Fourier coefficients from input to output array
     if inputComplex:
         ain_ = ain
     else:
-        ain_ = to_complex(ain)
+        ain_ = torch.complex(
+            ain, torch.zeros(ain.shape, dtype=ain.dtype, device=ain.device)
+        )
 
     if not qspace_in:
-        ain_ = torch.fft(ain_, signal_ndim=2)
+        ain_ = torch.fft.fftn(ain_, dim=axes)
 
-    aout[..., maskout, :] = ain_.flatten(-3, -2)[..., maskin, :]
+    aout = torch.fft.ifftshift(
+        crop_torch(torch.fft.fftshift(ain_, dim=axes), shapeout), dim=axes
+    )
 
     # Fourier transform result with appropriate normalization
     if norm == "conserve_val":
-        factor = npiyout * npixout / (npiyin * npixin)
+        aout *= np.prod(shapeout) / np.prod(np.shape(ain)[-N:])
     elif norm == "conserve_norm":
-        factor = np.sqrt(npiyout * npixout / (npiyin * npixin))
-    else:
-        factor = 1
-
-    # Fourier transform result with appropriate normalization
-    aout = factor * aout.reshape(
-        ain.shape[: -2 - int(inputComplex)] + tuple(shapeout) + (2,)
-    )
+        aout *= np.sqrt(np.prod(shapeout) / np.prod(np.shape(ain)[-N:]))
 
     if not qspace_out:
-        aout = torch.ifft(aout, signal_ndim=2)
+        aout = torch.fft.ifftn(aout, dim=axes)
 
     # Return correct array data type
     if inputComplex:
         return aout
-    return aout[re]
+    return torch.real(aout)
 
 
 def crop_torch(arrayin, shapeout):
@@ -571,36 +533,34 @@ def crop_torch(arrayin, shapeout):
     # Number of dimensions in input array
     ndim = arrayin.ndim
 
-    # Number of dimensions not covered by shapeout (ie not to be cropped)
-    nUntouched = ndim - 2 - C
+    # Trailing dimensions to be cropped/padded
+    n = len(shapeout)
 
+    # Number of dimensions not covered by shapeout (ie not to be cropped)
+    nUntouched = ndim - n
     # Shape of output array
     shapeout_ = arrayin.shape[:nUntouched] + tuple(shapeout)
-    if C:
-        shapeout_ += (2,)
 
     arrayout = torch.zeros(shapeout_, dtype=arrayin.dtype, device=arrayin.device)
 
-    y, x = arrayin.shape[-2 - C :][:2]
-    y_, x_ = shapeout[-2:]
+    oldshape = arrayin.shape[-n:]
+    newshape = shapeout[-n:]
 
     def indices(y, y_):
+        """Get slice objects for cropping or padding a 1D array from size y to size y_"""
         if y > y_:
             # Crop in y dimension
-            y1, y2 = [(y - y_) // 2, (y + y_) // 2]
+            y1, y2 = [(y - y_) // 2 + (y - y_) % 2, (y + y_) // 2 + (y - y_) % 2]
             y1_, y2_ = [0, y_]
         else:
             # Zero pad in y dimension
             y1, y2 = [0, y]
-            y1_, y2_ = [(y_ - y) // 2, (y + y_) // 2]
-        return y1, y2, y1_, y2_
+            y1_, y2_ = [(y_ - y) // 2 + (y - y_) % 2, (y + y_) // 2 + (y - y_) % 2]
+        return slice(y1, y2), slice(y1_, y2_)
 
-    y1, y2, y1_, y2_ = indices(y, y_)
-    x1, x2, x1_, x2_ = indices(x, x_)
-
-    if C:
-        arrayout[..., y1_:y2_, x1_:x2_, :] = arrayin[..., y1:y2, x1:x2, :]
-    else:
-        arrayout[..., y1_:y2_, x1_:x2_] = arrayin[..., y1:y2, x1:x2]
-
+    ind = [indices(x, x_) for x, x_ in zip(oldshape, newshape)]
+    inind, outind = map(tuple, zip(*ind))
+    arrayout[nUntouched * (Ellipsis,) + outind] = arrayin[
+        nUntouched * (Ellipsis,) + inind
+    ]
     return arrayout
