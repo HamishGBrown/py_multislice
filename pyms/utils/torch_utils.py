@@ -93,7 +93,7 @@ def amplitude(r):
     If the tensor is not complex then calculate square.
     """
     if torch.is_complex(r):
-        return torch.abs(r) ** 2
+        return torch.real(r*torch.conj(r))
     else:
         return r * r
 

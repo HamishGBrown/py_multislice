@@ -112,7 +112,7 @@ def crop_window_to_flattened_indices(indices, shape):
 
 
 def crop_to_bandwidth_limit(
-    array, limit=2 / 3, norm="conserve_L2", qspace_in=True, qspace_out=True
+    array, limit=2 / 3, norm="conserve_norm", qspace_in=True, qspace_out=True
 ):
     """
     Crop an array to its bandwidth limit (ie remove superfluous array entries).
