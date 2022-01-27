@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/209026254.svg)](https://zenodo.org/badge/latestdoi/209026254)
 # py_multislice
 
 ![](cbed.png)

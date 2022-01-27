@@ -982,7 +982,6 @@ def STEM(
         probes = probe_.view(1, *probe_.size()) * probes
 
         # Thickness series
-        #  - need to take the difference between sequential thickness variations
         for it, t in enumerate(nslices_):
             # Evaluate exit surface wave function from input probes
             probes = method(
