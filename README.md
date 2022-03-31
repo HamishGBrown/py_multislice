@@ -14,17 +14,33 @@ Ionization based off [Flexible Atomic Code (FAC)](https://github.com/flexible-at
 
 1. Clone or branch this repo into a directory on your computer
 
-2. In the command-line (Linux or Mac) or your Python interpreter (Windows) in the root directory of your local copy of the repo run
+```bash
+    $ git clone https://github.com/HamishGBrown/py_multislice.git
+```
 
+2. (Optional) create a new conda environment for py_multislice:
+
+```bash
+    $ conda create --name py_multislice
+    $ conda activate py_multislice
+```
+
+3. In the command-line (Linux or Mac) or your Python interpreter (Windows) install pytorch, you will need to choose the conda version appropriate for your GPU (or CPU only version if required) see [here](https://pytorch.org/get-started/locally/), and in the root directory of your local copy of the repo run the install command for py_multislice
+
+```bash
+    $ conda install pytorch torchvision torchaudio cudatoolkit=10.2 -c pytorch
     $ pip install -e .
+```
 
-   All necessary dependencies (pytorch etc.) should also be installed, if you have issues try installing in a fresh anaconda environment.
+   All necessary dependencies should also be installed, if you have issues try installing in a fresh anaconda environment (step 2).
 
-3. If you would like to perform ionization based TEM simulations, download and install the flexible atomic code (FAC), including the python interface (pfac), from [here](https://github.com/flexible-atomic-code/fac). I've only successfully got this working on Linux, your mileage may vary on Windows operating systems. 
+4. If you would like to perform ionization based TEM simulations, download and install the flexible atomic code (FAC), including the python interface (pfac), from [here](https://github.com/flexible-atomic-code/fac). I've only successfully got this working on Linux, your mileage may vary on Windows operating systems. 
 
-4. As an added precaution, run the Test.py script to ensure everything is working as expected
+5. As an added precaution, run the Test.py script to ensure everything is working as expected
 
+```bash
     $ python Test.py
+```
 
     If you didn't instal PFAC in the last step then you will get error messages from the ionization routines, if you only want to perform non-ionization based TEM simulations then you can ignore these failed tests. You can also run run Orbital_normalization.py to test that the ionization cross-sections are being calculated appropriately.
 
