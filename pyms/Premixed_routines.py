@@ -904,6 +904,8 @@ def multislice_precursor(
     nT : int, optional
         Number of independent multislice transmission functions generated and
         then selected from in the frozen phonon algorithm
+        If nt<=0, calculates transmission functions for thermally-smeared elastic
+        potential plus TDS absorptive potential
     device : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
@@ -960,11 +962,30 @@ def multislice_precursor(
             bandwidth_limit=band_width_limiting[0],
         )
 
-    T = torch.zeros(nT, len(subslices), *gridshape, device=device, dtype=dtype)
-    T = torch.complex(*(2 * [T]))
+    if (nT>=1): # If at least one independent multislice transmission functions sought, assume frozen phonon calculation
+        T = torch.zeros(nT, len(subslices), *gridshape, device=device, dtype=dtype)
+        T = torch.complex(*(2 * [T]))
 
-    for i in tqdm(range(nT), desc="Making projected potentials", disable=tdisable):
-        T[i] = structure.make_transmission_functions(
+        for i in tqdm(range(nT), desc="Making projected potentials", disable=tdisable):
+            T[i] = structure.make_transmission_functions(
+                gridshape,
+                eV,
+                subslices=subslices,
+                tiling=tiling,
+                device=device,
+                dtype=dtype,
+                displacements=displacements,
+                fractional_occupancy=fractional_occupancy,
+                seed=seed,
+                bandwidth_limit=band_width_limiting[1],
+            )
+
+    else: # Otherwise, assume absorptive calculation sought
+        print('Note: will use thermally-smeared elastic potential plus TDS absorptive potential')
+        T = torch.zeros(1, len(subslices), *gridshape, device=device, dtype=dtype) # Hardcodes for single transmission function
+        T = torch.complex(*(2 * [T]))
+
+        T[0] = structure.make_transmission_functions_absorptive(
             gridshape,
             eV,
             subslices=subslices,
@@ -1366,7 +1387,7 @@ def CBED(
             output[it] += np.abs(np.fft.fftshift(crop_to_bandwidth_limit(probe))) ** 2
 
     # Divide output by # of pixels to compensate for Fourier transform
-    return output / np.prod(gridshape)
+    return output / np.prod(gridshape) / nfph
 
 
 def HRTEM(

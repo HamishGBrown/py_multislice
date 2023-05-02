@@ -870,6 +870,230 @@ class structure:
         return torch.fft.irfft2(P, s=pixels_)
         # return np.fft.irfft2(P.cpu().numpy(),s=pixels_)
 
+    def make_potential_absorptive(
+        self,
+        pixels,
+        eV,
+        subslices=[1.0],
+        tiling=[1, 1],
+        displacements=True,
+        fractional_occupancy=True,
+        sinc_deconvolution=True,
+        bandwidthlimit=0.2,
+        fe_DWF=None,
+        fe_TDS=None,
+        device=None,
+        dtype=torch.float32,
+    ):
+        """
+        Generate the projected potential of the structure, assuming an absorptive
+        model whereby the elastic potential is thermally-smeared and the inelastic
+        potential describes absorption for TDS electrons.
+
+        Calculate the projected electrostatic potential for a structure on a
+        pixel grid with dimensions specified by pixels. Subslicing the unit
+        cell is achieved by passing an array subslices that contains as its
+        entries the depths at which each subslice should be terminated in units
+        of fractional coordinates. Tiling of the unit cell (often necessary to
+        make a sufficiently large simulation grid to fit the probe) is achieved
+        by passing the tiling factors in the array tiling.
+
+        Parameters
+        ----------
+        pixels: int, (2,) array_like
+            The pixel size of the grid on which to calculate the projected
+            potentials
+        subslices: float, array_like, optional
+            An array containing the depths at which each slice ends as a fraction
+            of the simulation unit-cell
+        tiling: int, (2,) array_like, optional
+            Tiling of the simulation object (often necessary to  make a
+            sufficiently large simulation grid to fit the probe)
+        displacements: bool, optional
+            Pass displacements = False to turn off random displacements of the
+            atoms due to thermal motion
+        fractional_occupancy: bool, optional
+            Pass fractional_occupancy = False to turn off fractional occupancy
+            of atomic sites
+        fe_DWF: float, array_like
+            An array containing the electron scattering factors for the elements
+            in the structure as calculated by the function
+            calculate_scattering_factors_DWF, can be passed to save recalculating
+            each time new potentials are generated
+        fe_TDS: float, array_like
+            An array containing the inelastic (TDS) electron scattering factors for 
+            the elements in the structure as calculated by the function
+            calculate_scattering_factors_DWF(TDS=True), can be passed to save 
+            recalculating each time new potentials are generated
+        device: torch.device
+            Allows the user to control which device the calculations will occur
+            on
+        dtype: torch.dtype
+            Controls the data-type of the output
+        seed: int
+            Seed for random number generator for atomic displacements.
+        """
+        # Get equivalent precison real datatype
+        realdtype = complex_to_real_dtype_torch(dtype)
+
+        # Force the subslices to be an array
+        sblce = ensure_array(subslices)
+
+        # Initialize device cuda if available, CPU if no cuda is available
+        device = get_device(device)
+
+        # Ensure pixels is integer
+        pixels_ = [int(x) for x in pixels]
+
+        tiling_ = np.asarray(tiling[:2])
+        gsize = np.asarray(self.unitcell[:2]) * tiling_
+        psize = np.asarray(pixels_)
+
+        pixperA = np.asarray(pixels_) / np.asarray(self.unitcell[:2]) / tiling_
+
+        # Get a list of unique atomic elements
+        # elements = list(set(np.asarray(self.atoms[:, 3], dtype=_int)))
+        # Note: now unique is defined by having same atomic number AND DWF
+        elements_dwf, ielement_np = np.unique(np.stack((np.asarray(self.atoms[:, 3]),np.asarray(self.atoms[:, 5])),axis=-1),axis=0, return_inverse=True)
+
+        # Get number of unique atomic elements
+        nelements = len(elements_dwf)
+        nsubslices = len(sblce)
+        # Build list of equivalent sites if Fractional occupancy is to be
+        # taken into account
+        if fractional_occupancy and self.fractional_occupancy:
+            equivalent_sites = find_equivalent_sites(self.atoms[:, :3], EPS=1e-3)
+
+        # FDES method
+        # Intialize potential array
+        P = torch.zeros(
+            np.prod([nelements, nsubslices, *pixels_]), device=device, dtype=realdtype
+        )
+
+        # Construct a map of which atom corresponds to which slice
+        islice = np.zeros((self.atoms.shape[0]), dtype=_int)
+        slice_stride = np.prod(pixels_)
+        # if nsubslices > 1:
+        # Finds which slice atom can be found in
+        # WARNING Assumes that the slices list ends with 1.0 and is in
+        # ascending order
+        for i in range(nsubslices):
+            zmin = 0 if i == 0 else sblce[i - 1]
+            atoms_in_slice = (self.atoms[:, 2] % 1.0 >= zmin) & (
+                self.atoms[:, 2] % 1.0 < sblce[i]
+            )
+            islice[atoms_in_slice] = i * slice_stride
+        islice = torch.from_numpy(islice).type(torch.long).to(device)
+        # else:
+        #     islice = 0
+        # Make map a pytorch Tensor
+
+        # Construct a map of which atom corresponds to which element
+        element_stride = nsubslices * slice_stride
+        ielement = torch.tensor(element_stride * ielement_np,dtype=torch.long,device=device)
+
+        # FDES algorithm implemented using the pytorch scatter_add function,
+        # which takes a list of numbers and adds them to a corresponding list
+        # of coordinates
+        for tile in range(tiling[0] * tiling[1]):
+            # For these atomic coordinates (in fractional coordinates) convert
+            # to pixel coordinates
+            posn = (
+                (
+                    self.atoms[:, :2]
+                    + np.asarray([tile % tiling[0], tile // tiling[0]])[np.newaxis, :]
+                )
+                / tiling_
+                * psize
+            )
+            posn = torch.from_numpy(posn).to(device).type(realdtype)
+
+            yc = (
+                torch.remainder(torch.ceil(posn[:, 0]).type(torch.long), pixels_[0])
+                * pixels_[1]
+            )
+            yf = (
+                torch.remainder(torch.floor(posn[:, 0]).type(torch.long), pixels_[0])
+                * pixels_[1]
+            )
+            xc = torch.remainder(torch.ceil(posn[:, 1]).type(torch.long), pixels_[1])
+            xf = torch.remainder(torch.floor(posn[:, 1]).type(torch.long), pixels_[1])
+
+            yh = torch.remainder(posn[:, 0], 1.0)
+            yl = 1.0 - yh
+            xh = torch.remainder(posn[:, 1], 1.0)
+            xl = 1.0 - xh
+
+            # Account for fractional occupancy of atomic sites if requested
+            if fractional_occupancy and self.fractional_occupancy:
+                xh *= torch.from_numpy(self.atoms[:, 4]).type(realdtype).to(device)
+                xl *= torch.from_numpy(self.atoms[:, 4]).type(realdtype).to(device)
+
+            # Each pixel is set to the overlap of a shifted rectangle in that pixel
+            P.scatter_add_(0, ielement + islice + yc + xc, yh * xh)
+            P.scatter_add_(0, ielement + islice + yc + xf, yh * xl)
+            P.scatter_add_(0, ielement + islice + yf + xc, yl * xh)
+            P.scatter_add_(0, ielement + islice + yf + xf, yl * xl)
+
+        # Now view potential as a 4D array for next bit
+        P = P.view(nelements, nsubslices, *pixels_)
+
+        # Use real fast fourier transforms to save memory and time
+        P = torch.fft.rfft2(P, s=pixels_)
+        # fig,ax = plt.subplots(ncols=2)
+        # ax[0].imshow(np.real(P[0,0].cpu()))
+        # ax[1].imshow(np.imag(P[0,0].cpu()))
+        # plt.show(block=True)
+
+        # Copy P tensor to P_abs - has position info but will use different scattering factors to store (real) absorptive potential
+        P_abs = P.clone().detach()
+
+        # pp is number of pixels in x
+        pp = pixels_[1] // 2 + 1
+
+        # Option to precalculate scattering factors (including DWFs) and pass to program which
+        # saves computation for
+        if fe_DWF is None:
+            fe_DWF_ = calculate_scattering_factors_dwf(psize, gsize, elements_dwf)
+        else:
+            fe_DWF_ = fe_DWF
+
+        # Option to precalculate inelastic (TDS) scattering factors and pass to program which
+        # saves computation for
+        if fe_TDS is None:
+            fe_TDS_ = calculate_scattering_factors_dwf(psize, gsize, elements_dwf,TDS=True,eV=eV)
+        else:
+            fe_TDS_ = fe_TDS
+
+        # Convolve with electron scattering factors using Fourier convolution theorem
+        P *= (
+            torch.from_numpy(fe_DWF_[..., :pp])
+            .view(nelements, 1, pixels_[0], pp)
+            .to(device)
+        )
+        P_abs *= (
+            torch.from_numpy(fe_TDS_[..., :pp])
+            .view(nelements, 1, pixels_[0], pp)
+            .to(device)
+        )
+
+        norm = np.prod(pixels_) / np.prod(self.unitcell[:2]) / np.prod(tiling)
+
+        # Add different elements atoms together
+        P = norm * torch.sum(P, dim=0)
+        P_abs = norm * torch.sum(P_abs, dim=0)
+
+        # Apply bandwidth limit to remove high frequency numerical artefacts
+        if bandwidthlimit is not None:
+            P = bandwidth_limit_array_torch(P, limit=1, soft=bandwidthlimit, rfft=True)
+            P_abs = bandwidth_limit_array_torch(P_abs, limit=1, soft=bandwidthlimit, rfft=True)
+
+        # Only return real part, shape of array needs to be given for
+        # correct array shape to be return in the case of an odd numbered
+        # array size
+        return torch.fft.irfft2(P, s=pixels_),torch.fft.irfft2(P_abs, s=pixels_)
+        # return np.fft.irfft2(P.cpu().numpy(),s=pixels_)
+
     def make_transmission_functions(
         self,
         pixels,
@@ -925,6 +1149,71 @@ class structure:
         # Now take the complex exponential of the electrostatic potential
         # scaled by the electron interaction constant
         T = torch.fft.fftn(torch.exp(1j * interaction_constant(eV) * T), dim=[-2, -1])
+
+        # Band-width limit the transmission function, see Earl Kirkland's book
+        # for an discussion of why this is necessary
+        return bandwidth_limit_array_torch(
+            T, limit=bandwidth_limit, qspace_in=True, qspace_out=fftout
+        )
+
+    def make_transmission_functions_absorptive(
+        self,
+        pixels,
+        eV,
+        subslices=[1.0],
+        tiling=[1, 1],
+        fe=None,
+        displacements=True,
+        fftout=False,
+        dtype=None,
+        device=None,
+        fractional_occupancy=True,
+        seed=None,
+        bandwidth_limit=2 / 3,
+    ):
+        """
+        Make the transmission functions for the simulation object, assuming an 
+        absorptive model whereby the elastic potential is thermally-smeared and 
+        the inelastic potential describes absorption for TDS electrons.
+
+        Transmission functions are the exponential of the specimen electrostatic
+        potential scaled by the interaction constant for electrons, sigma. These
+        are used to model scattering by a thin slice of the object in the
+        multislice algorithm.
+
+        Parameters:
+        -----------
+        pixels : array_like
+            Output pixel grid
+        eV : float
+            Probe accelerating voltage in electron-volts
+        subslices : array_like, optional
+            An array containing the depths at which each slice ends as a fraction
+            of the simulation unit-cell, used for simulation objects thicker
+            than typical multislice slicing (about 2 Angstrom)
+        tiling : array_like,optional
+            Repeat tiling of the simulation object
+        fe: array_like,optional
+            An array containing the electron scattering factors for the elements
+            in the simulation object as calculated by the function
+            calculate_scattering_factors
+        """
+        # Make the specimen electrostatic potential
+        Tel,Tabs = self.make_potential_absorptive(
+            pixels,
+            eV,
+            subslices,
+            tiling,
+            fe_DWF=fe,
+            displacements=displacements,
+            device=device,
+            dtype=dtype,
+            fractional_occupancy=fractional_occupancy,
+        )
+        # Now take the complex exponential of the electrostatic potential
+        # scaled by the electron interaction constant
+        # Note that an absorptive component is included
+        T = torch.fft.fftn(torch.exp(1j * interaction_constant(eV) * (Tel + 1j * Tabs)), dim=[-2, -1])
 
         # Band-width limit the transmission function, see Earl Kirkland's book
         # for an discussion of why this is necessary
@@ -1514,3 +1803,294 @@ class layered_structure_propagators:
             )
         else:
             raise TypeError("Invalid argument type.")
+
+
+def calculate_scattering_factors_dwf(
+    gridshape,
+    gridsize,
+    elements_dwf,
+    TDS = False,
+    eV = None
+):
+    """Calculate the electron scattering factors on a reciprocal space grid, include Debye-Waller factors.
+       If TDS=True, calculate inelastic (TDS) electron scattering factors using the parameterisation of
+       Weikenmeier and Kohl. 
+
+    Parameters
+    ----------
+    gridshape : (2,) array_like
+        pixel size of the grid
+    gridsize : (2,) array_like
+        Lateral real space sizing of the grid in Angstrom
+    elements_dwf: (M,2) array_like
+        List of elements (atomic number and ums values) for which electron scattering factors are required
+    TDS: bool, optional
+        If False, calculates electron scattering factors for elastic scattering (including Debye-Waller factors)
+        If True, calculates electron scattering factors for inelastic (TDS) scattering
+    eV : float, optional (required for TDS calculation only)
+        Probe energy in electron volts
+
+
+    Returns
+    -------
+    fe : (M, *gridshape)
+        Array of electron scattering factors in reciprocal space for each
+        element
+    """
+
+    if eV is None:
+        if TDS:
+            print('ERROR: an eV value must be provided to calculate TDS scattering factors.')
+            print('Will assume 300 keV.')
+            eV = 3e5
+
+    # Get reciprocal space array
+    g = q_space_array(gridshape, gridsize)
+    gsq = np.square(g[0]) + np.square(g[1])
+
+    # Initialise scattering factor array
+    fe = np.zeros((len(elements_dwf), *gridshape), dtype=_float)
+
+    # Loop over unique elements
+    for ielement, element in enumerate(elements_dwf):
+        if TDS:
+            fe[ielement, :, :] = electron_tds_wk_scattering_factor(int(element[0]),gsq,element[1],eV)
+            # fe[ielement, :, :] = electron_tds_scattering_factor(int(element[0]),gsq,element[1],eV)
+        else:
+            fe[ielement, :, :] = electron_scattering_factor(int(element[0]), gsq)*np.exp(-2 * np.pi**2 *gsq*element[1])
+
+    return fe
+
+
+def electron_tds_wk_scattering_factor(Z, gsq, ums, eV):
+    """
+    Calculate the electron TDS scattering factor for atom with atomic number Z and mean 
+    square vibrational amplitude ums using Weikenmeier & Kohl parameterisation
+    Adapted from FSCATT code included in https://github.com/EMsoft-org/EMsoft/blob/develop/Source/EMsoftLib/others.f90
+
+    Parameters
+    ----------
+    Z : int
+        Atomic number of atom of interest.
+    gsq : float or array_like
+        Reciprocal space value(s) in Angstrom squared at which to evaluate the
+        electron scattering factor.
+    ums : mean square vibrational amplitude (Å^2 units)
+    eV : float
+        Probe accelerating voltage in electron-volts
+    """
+    from .py_multislice import tqdm_handler
+    #Thesis: Since f_TDS(g) is rotationally symmetric, it's faster to calculate in 1D 
+    #        and interpolate to 2D than it is to calculate in 2D
+    from scipy import interpolate
+
+    showProgress = True
+    tdisable, tqdm = tqdm_handler(showProgress)
+
+    # Planck's constant in kg Angstrom/s
+    h = 6.62607004e-24
+    # Electron rest mass in kg
+    me = 9.10938356e-31
+    # Electron charge in Coulomb
+    qe = 1.60217662e-19
+    # Electron wave number (reciprocal of wavelength) in Angstrom
+    k0 = wavev(eV)
+    # Relativistic electron mass correction
+    gamma = relativistic_mass_correction(eV)
+
+    V = e_scattering_factors_WK[Z - 2, 0] #Note: parameterisation can't handle hydrogen
+    B_wk = e_scattering_factors_WK[Z - 2, 1:]
+    A_wk = np.zeros((6,))
+    A_wk[0:3]=0.02395*Z/(3*(1+V))
+    A_wk[3:6] = A_wk[0]*V
+
+    Mx4 = 8 * np.pi ** 2 * ums # Mx4*s2 = M*g2
+
+    modg = np.sqrt(gsq)
+    gmax = np.max(modg)
+    g1d = np.arange(0, gmax, 0.1)
+    N1d = np.size(g1d)
+    # Initialise scattering factor array
+    fe_TDS_1D = np.zeros(N1d, dtype=_float)
+
+    for ig in tqdm(range(N1d), desc="Calculating TDS scattering factors", disable=tdisable):
+        ssq = g1d[ig]*g1d[ig]/4
+        dwf   = np.exp(-Mx4*ssq)
+    
+        for j in range(6):
+            fe_TDS_1D[ig] += A_wk[j]*A_wk[j]*(dwf*RI1(B_wk[j],B_wk[j],ssq)-RI2(B_wk[j],B_wk[j],ssq,Mx4))
+            for i in range(j):    
+                fe_TDS_1D[ig] += 2*A_wk[i]*A_wk[j]*(dwf*RI1(B_wk[i],B_wk[j],ssq)-RI2(B_wk[i],B_wk[j],ssq,Mx4))
+
+    fe_TDS_1D *= (4 * np.pi/(2 * np.pi*k0)) # 2\pi in denominator is WK convention. 4\pi in numerator I'm unclear about, but
+      # is in the FSCATT code and does yield agreement with other approaches to calculate TDS scattering factor.
+
+    fe_TDS_1D *= gamma * (h ** 2 / (2 * np.pi * me * qe)) # Converts f'_g to V'_g
+
+    # Interpolate onto 2D grid
+    tck = interpolate.splrep(g1d,fe_TDS_1D, s=0)
+    fe_TDS = interpolate.splev(modg, tck, der=0)
+
+    return fe_TDS
+
+
+def RI1(Bi,Bj,s2):
+    """
+    Supporting function for evaluating electron scattering factor for TDS using Weikenmeier & Kohl parameterisation
+    Adapted from FSCATT code included in https://github.com/EMsoft-org/EMsoft/blob/develop/Source/EMsoftLib/others.f90
+
+    Parameters
+    ----------
+    Bi, Bj : Entries in Weikenmeier & Kohl parameterisation of electron scattering factors
+    s2 : square of scattering vector magnitude. Note s=g/2
+    """
+
+    C = 0.577215664901532 # Euler constant
+
+    eps = max(Bi,Bj)
+    eps = eps * s2
+
+    if (eps<=0.05):
+        RI1 = Bi * np.log( (Bi+Bj)/Bi ) + Bj * np.log( (Bi+Bj)/Bj )
+        RI1 = RI1 * np.pi
+        if (s2==0):
+            return RI1
+        
+        Bi2 = Bi*Bi
+        Bj2 = Bj*Bj
+        temp = 0.5*Bi2*np.log(Bi/(Bi+Bj)) + 0.5*Bj2*np.log(Bj/(Bi+Bj))
+        temp += 0.75*(Bi2+Bj2) - 0.25*(Bi+Bj)*(Bi+Bj)
+        temp += - 0.5*(Bi-Bj)*(Bi-Bj)
+        RI1 += np.pi * s2 * temp
+        return RI1
+
+    Bis2 = Bi*s2
+    Bjs2 = Bj*s2
+    RI1 = 2.0*C + np.log(Bis2) + np.log(Bjs2) - 2*sc.expi(-Bi*Bj*s2/(Bi+Bj))
+
+    X1  = Bis2
+    X2  = Bis2*Bi/(Bi+Bj)
+    X3  = Bis2
+    RI1 += RIH1(X1,X2,X3)
+    # RI1 += np.exp(-X1) * ( sc.expi(X2)-sc.expi(X3) )
+
+    X1  = Bjs2
+    X2  = Bjs2*Bj/(Bi+Bj)
+    X3  = Bjs2
+    RI1 += RIH1(X1,X2,X3)
+    # RI1 += np.exp(-X1) * ( sc.expi(X2)-sc.expi(X3) )
+
+    RI1 *= np.pi / s2
+      
+    return RI1
+
+def RI2(Bi,Bj,s2,Mx4):
+    """
+    Supporting function for evaluating electron scattering factor for TDS using Weikenmeier & Kohl parameterisation
+    Adapted from FSCATT code included in https://github.com/EMsoft-org/EMsoft/blob/develop/Source/EMsoftLib/others.f90
+
+    Parameters
+    ----------
+    Bi, Bj : Entries in Weikenmeier & Kohl parameterisation of electron scattering factors
+    s2 : square of scattering vector magnitude. Note s=g/2
+    Mx4 : 8 * pi^2 * ums. Note that Mx4*s2 = M*g2
+    """
+      
+    Mx8 = 2*Mx4
+
+    BiplusMx4 = Bi + Mx4
+    BjplusMx4 = Bj + Mx4
+    BiplusMx8  = Bi + Mx8
+    BjplusMx8  = Bj + Mx8
+
+    eps = max(Bi,Bi,s2)
+    eps = eps * s2
+
+    if (eps<=0.05):
+        RI2 = BiplusMx8 * np.log( (Bi+Bj+Mx8)/BiplusMx8 )
+        RI2 += Bj * np.log( (Bi+Bj+Mx8)/(BjplusMx8) )
+        RI2 += Mx8 * np.log( Mx8/(BjplusMx8) )
+        RI2 *= np.pi
+        if (s2==0):
+            return RI2
+
+        temp = 0.5 * Mx4 * Mx4 * np.log(BiplusMx8*BjplusMx8/(Mx8*Mx8))
+        temp += 0.5 * BiplusMx4 * BiplusMx4 * np.log( BiplusMx8/(BiplusMx4+BjplusMx4) )
+        temp += 0.5 * BjplusMx4 * BjplusMx4 * np.log( BjplusMx8/(BiplusMx4+BjplusMx4) )
+        temp += 0.25 * BiplusMx8 * BiplusMx8 + 0.5 * Bi * Bi
+        temp += 0.25 * BjplusMx8 * BjplusMx8 + 0.5 * Bj * Bj
+        temp += - 0.25 * (BiplusMx4+BjplusMx4) * (BiplusMx4+BjplusMx4)
+        temp += - 0.5 * ( (Bi*BiplusMx8-Bj*BjplusMx8)/(BiplusMx4+BjplusMx4) )**2
+        temp += - Mx4*Mx4
+        RI2 += np.pi * s2 * temp
+        return RI2
+
+    RI2 = sc.expi( -0.5*Mx8*s2*BiplusMx4/BiplusMx8 ) + sc.expi( -0.5*Mx8*s2*BjplusMx4/BjplusMx8 )
+    RI2 += - sc.expi( -BiplusMx4*BjplusMx4*s2/(BiplusMx4+BjplusMx4) ) - sc.expi( -0.25*Mx8*s2 )
+    RI2 *= 2
+
+    X1  = 0.5*Mx8*s2
+    X2  = 0.25*Mx8*s2
+    X3  = 0.25*Mx8*Mx8*s2/BiplusMx8
+    RI2 += RIH1(X1,X2,X3)
+    # RI2 += np.exp(-X1) * ( sc.expi(X2)-sc.expi(X3) )
+
+    X1  = 0.5*Mx8*s2
+    X2  = 0.25*Mx8*s2
+    X3  = 0.25*Mx8*Mx8*s2/BjplusMx8
+    RI2 += RIH1(X1,X2,X3)
+    # RI2 += np.exp(-X1) * ( sc.expi(X2)-sc.expi(X3) )
+
+    X1  = BiplusMx4*s2
+    X2  = BiplusMx4*BiplusMx4*s2/(BiplusMx4+BjplusMx4)
+    X3  = BiplusMx4*BiplusMx4*s2/BiplusMx8
+    RI2 += RIH1(X1,X2,X3)
+    # RI2 += np.exp(-X1) * ( sc.expi(X2)-sc.expi(X3) )
+
+    X1  = BjplusMx4*s2
+    X2  = BjplusMx4*BjplusMx4*s2/(BiplusMx4+BjplusMx4)
+    X3  = BjplusMx4*BjplusMx4*s2/BjplusMx8
+    RI2 += RIH1(X1,X2,X3)
+    # RI2 += np.exp(-X1) * ( sc.expi(X2)-sc.expi(X3) )
+
+    RI2 *= np.pi / s2
+
+    return RI2
+
+def RIH1(X1,X2,X3):
+    """
+    Supporting function for evaluating electron scattering factor for TDS using Weikenmeier & Kohl parameterisation
+    Adapted from FSCATT code included in https://github.com/EMsoft-org/EMsoft/blob/develop/Source/EMsoftLib/others.f90
+    """
+    if (X2<=20.0 and X3<=20.0):
+        RIH1 = np.exp(-X1) * (sc.expi(X2)-sc.expi(X3) )
+        return RIH1
+
+    if (X2>20.0):
+        RIH1 = np.exp(X2-X1)*RIH2(X2)/X2
+    else:
+        RIH1 = np.exp(-X1)*sc.expi(X2)
+
+    if (X3>20.0):
+        RIH1 -= np.exp(X3-X1)*RIH2(X3)/X3
+    else:
+        RIH1 -= np.exp(-X1)*sc.expi(X3)
+
+    return RIH1
+
+def RIH2(X):
+    """
+    Supporting function for evaluating electron scattering factor for TDS using Weikenmeier & Kohl parameterisation
+    Adapted from FSCATT code included in https://github.com/EMsoft-org/EMsoft/blob/develop/Source/EMsoftLib/others.f90
+    """
+    F = np.asarray([1.000000,1.005051,1.010206,1.015472,1.020852,1.026355,1.031985,1.037751,1.043662,1.049726,
+                    1.055956,1.062364,1.068965,1.075780,1.082830,1.090140,1.097737,1.105647,1.113894,1.122497,
+                    1.131470])
+
+    X1 = 1./X
+    I = np.round( 200.*X1 ).astype(int)
+    I1 = I+1
+
+    RIH2 = F[I] + 200.*( F[I1]-F[I] ) * ( X1-0.5E-3*I )
+
+    return RIH2
