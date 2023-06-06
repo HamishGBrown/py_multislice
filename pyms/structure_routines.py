@@ -22,6 +22,8 @@ from .utils.torch_utils import (
     complex_to_real_dtype_torch,
 )
 from . import _float, _int, _uint
+import scipy.special as sc
+from pyms.atomic_scattering_params import e_scattering_factors_WK
 
 
 def remove_common_factors(nums):
