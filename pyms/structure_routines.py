@@ -1051,6 +1051,27 @@ class structure:
         # pp is number of pixels in x
         pp = pixels_[1] // 2 + 1
 
+        if sinc_deconvolution:
+            # Make sinc functions with appropriate singleton dimensions for pytorch
+            # broadcasting /gridsize[0]*pixels_[0] /gridsize[1]*pixels_[1]
+            sincy = (
+                sinc(torch.fft.fftfreq(pixels_[0]))
+                .view([1, 1, pixels_[0], 1])
+                .to(device)
+                .type(realdtype)
+            )
+
+            # The real FFT is only half the cell in the x direction, pp stores
+            # this size
+
+            sincx = sinc(torch.fft.rfftfreq(pixels_[1])).to(device).type(realdtype)
+
+            sincx = sincx.view([1, 1, 1, pp])
+
+            # #Divide by sinc functions
+            P /= sincy
+            P /= sincx
+
         # Option to precalculate scattering factors (including DWFs) and pass to program which
         # saves computation for
         if fe_DWF is None:
