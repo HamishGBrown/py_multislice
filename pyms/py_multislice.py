@@ -169,6 +169,7 @@ def multislice(
     output_to_bandwidth_limit=True,
     reverse=False,
     transpose=False,
+    Veff=None,
 ):
     """
     Multislice algorithm for scattering of an electron probe.
@@ -221,6 +222,9 @@ def multislice(
     transpose : bool, optional
         Reverse the order of the multislice operations, ie. apply propagator
         first and then transmission function
+    Veff: (nelements,nsubslices,Y,X) complex torch.tensor, optional
+        Effective scattering potential (\mu's) for EELS and/or EDX
+
     Returns
     -------
     psi : (Y,X) or (n,Y,X) complex torch.tensor or np.ndarray
@@ -230,6 +234,11 @@ def multislice(
     """
     # Dimensions for FFT
     d_ = (-2, -1)
+
+    if Veff is not None:
+        crosssec=probes[1]
+        probes=probes[0]
+        nsignals = Veff.shape[0]
 
     # If a single integer is passed to the routine then Seed random number generator,
     # , if None then np.random.RandomState will use the system clock as a seed
@@ -247,6 +256,8 @@ def multislice(
     T = ensure_torch_array(transmission_functions, device=device)
     P = ensure_torch_array(propagators, dtype=T.dtype, device=device)
     psi = ensure_torch_array(probes, dtype=T.dtype, device=device)
+    if Veff is not None:
+        V = ensure_torch_array(Veff, dtype=T.dtype, device=device)
     # sys.exit()
 
     nT, nsubslices, nopiy, nopix = T.shape[:4]
@@ -271,6 +282,17 @@ def multislice(
             r = np.random.RandomState(seed[islice])
 
         subslice = islice % nsubslices
+
+        # Calculate contribution to cross-sections (done before multislice iteration
+        # while psi to be in real space; consistent with transmit before propagate;
+        # whether using frozen phonon or absortpive, assume Veff includes Debye-Waller
+        #  factors, so no need for shifts)
+        if Veff is not None:
+            modpsisq = psi * torch.conj(psi)
+            for isignal in range(nsignals):
+                value = torch.sum(torch.fft.fftn(modpsisq, dim=d_) * Veff[isignal,subslice,:,:])
+                crosssec[isignal] += value.cpu().numpy().real
+
 
         # Pick random phase grating
         it = r.randint(0, nT)
@@ -347,9 +369,15 @@ def multislice(
 
     if len(slices) < 1 and qspace_out:
         psi = torch.fft.fftn(psi, dim=d_)
-    if return_numpy:
-        return psi.cpu().numpy()
-    return psi
+
+    if Veff is not None:
+        if return_numpy:
+            return (psi.cpu().numpy(),crosssec)
+        return (psi,crosssec)
+    else:
+        if return_numpy:
+            return psi.cpu().numpy()
+        return psi
 
 
 def STEM_phase_contrast_transfer_function(probe, detector):
@@ -793,6 +821,7 @@ def STEM(
     method_args=(),
     method_kwargs={},
     STEM_image=None,
+    Veff=None,
 ):
     """
     Perform a scanning transmission electron microscopy (STEM) image simulation.
@@ -866,6 +895,9 @@ def STEM(
         will be initialized within the function. If it is passed then the result
         will be accumulated within the function, which is useful for multiple
         frozen phonon iterations.
+    Veff: (nelements,nsubslices,Y,X) complex torch.tensor, optional
+        Effective scattering potential (\mu's) for EELS and/or EDX
+
     Returns
     -------
     Result : dict
@@ -947,6 +979,12 @@ def STEM(
     else:
         PACBED_pattern = None
 
+    if Veff is not None:
+        nsignals = Veff.shape[0]
+        crosssec_images = np.zeros((nsignals,nthick,nscantot))
+    else:
+        crosssec_images = None
+
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
     # probes in memory
@@ -981,12 +1019,23 @@ def STEM(
         # Apply shift to original probe
         probes = probe_.view(1, *probe_.size()) * probes
 
+        if Veff is not None:
+            crosssec = np.zeros((nsignals,))
+
         # Thickness series
         for it, t in enumerate(nslices_):
+            if Veff is not None:
+                probes = (probes,crosssec)
+
             # Evaluate exit surface wave function from input probes
             probes = method(
-                probes, t, *method_args, posn=scan_posn[scan_index], **method_kwargs
+                probes, t, *method_args, posn=scan_posn[scan_index], **method_kwargs, Veff=Veff
             )
+
+            if Veff is not None:
+                crosssec=probes[1]
+                probes=probes[0]
+                crosssec_images[:,it,i]=crosssec
 
             # Calculate amplitude of probes, a real output is assumed to be the
             # amplitude of the exit surface wave function. Also correct
@@ -1019,11 +1068,14 @@ def STEM(
             if not cmplxout:
                 break
 
+    if Veff is not None:
+        STEM_crosssection_images = crosssec_images.reshape(nsignals,nthick,*scan_shape)
+
     if conventional_STEM:
         STEM_image = np.squeeze(STEM_image.reshape(ndet, nthick, *scan_shape))
     if PACBED:
         PACBED_pattern = np.fft.fftshift(PACBED_pattern.cpu().numpy(), axes=(-2, -1))
-    return {"STEM images": STEM_image, "datacube": datacube, "PACBED": PACBED_pattern}
+    return {"STEM images": STEM_image, "datacube": datacube, "PACBED": PACBED_pattern, "STEM crosssection images": STEM_crosssection_images}
 
 
 def unit_cell_shift(array, axis, shift, tiles):

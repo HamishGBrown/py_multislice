@@ -24,6 +24,7 @@ from .utils.torch_utils import (
 from . import _float, _int, _uint
 import scipy.special as sc
 from pyms.atomic_scattering_params import e_scattering_factors_WK
+from .atomic_scattering_params import EELS_EDX_1s_data,EELS_EDX_2s_data,EELS_EDX_2p_data
 
 
 def remove_common_factors(nums):
@@ -1117,6 +1118,260 @@ class structure:
         return torch.fft.irfft2(P, s=pixels_),torch.fft.irfft2(P_abs, s=pixels_)
         # return np.fft.irfft2(P.cpu().numpy(),s=pixels_)
 
+    def make_effective_scattering_potential(
+        self,
+        signal_list,
+        pixels,
+        eV,
+        subslices=[1.0],
+        tiling=[1, 1],
+        fractional_occupancy=True,
+        sinc_deconvolution=True,
+        bandwidthlimit=0.2,
+        device=None,
+        dtype=torch.float32,
+        qspace_out=True,
+    ):
+        """
+        Generate effective scattering potentials.
+
+        Calculate on a pixel grid with dimensions specified by pixels. Subslicing 
+        the unit cell is achieved by passing an array subslices that contains 
+        as its entries the depths at which each subslice should be terminated 
+        in units of fractional coordinates. Tiling of the unit cell (often 
+        necessary to make a sufficiently large simulation grid to fit the probe) 
+        is achieved by passing the tiling factors in the array tiling.
+
+        Parameters
+        ----------
+        signal_list: dict, (N,) array_like
+            List of dictionaries containing the information on the transitions
+            for which effective scattering potentials are to be calculated
+        pixels: int, (2,) array_like
+            The pixel size of the grid on which to calculate the projected
+            potentials
+        subslices: float, array_like, optional
+            An array containing the depths at which each slice ends as a fraction
+            of the simulation unit-cell
+        tiling: int, (2,) array_like, optional
+            Tiling of the simulation object (often necessary to  make a
+            sufficiently large simulation grid to fit the probe)
+        fractional_occupancy: bool, optional
+            Pass fractional_occupancy = False to turn off fractional occupancy
+            of atomic sites
+        device: torch.device
+            Allows the user to control which device the calculations will occur
+            on
+        dtype: torch.dtype
+            Controls the data-type of the output
+        qspace_out : bool, optional
+            Can set to True if intended for plotting (in real space)
+            but default is False becaues reciprocal space form needed for
+            cross-section expression
+    Returns
+    -------
+        Veff: (nelements,nsubslices,Y,X) complex torch.tensor
+            Effective scattering potential (\mu's) for EELS and/or EDX
+        """
+        # Get equivalent precison real datatype
+        realdtype = complex_to_real_dtype_torch(dtype)
+
+        # Force the subslices to be an array
+        sblce = ensure_array(subslices)
+
+        # Initialize device cuda if available, CPU if no cuda is available
+        device = get_device(device)
+
+        # Ensure pixels is integer
+        pixels_ = [int(x) for x in pixels]
+
+        tiling_ = np.asarray(tiling[:2])
+        gsize = np.asarray(self.unitcell[:2]) * tiling_
+        psize = np.asarray(pixels_)
+
+        pixperA = np.asarray(pixels_) / np.asarray(self.unitcell[:2]) / tiling_
+
+        # Get a list of unique atomic elements
+        # elements = list(set(np.asarray(self.atoms[:, 3], dtype=_int)))
+        # Note: now unique is defined by having same atomic number AND DWF
+        elements_dwf, ielement_np = np.unique(np.stack((np.asarray(self.atoms[:, 3]),np.asarray(self.atoms[:, 5])),axis=-1),axis=0, return_inverse=True)
+
+        # Get number of unique atomic elements
+        nelements = len(elements_dwf)
+        nsubslices = len(sblce)
+        # Build list of equivalent sites if Fractional occupancy is to be
+        # taken into account
+        if fractional_occupancy and self.fractional_occupancy:
+            equivalent_sites = find_equivalent_sites(self.atoms[:, :3], EPS=1e-3)
+
+        # FDES method
+        # Intialize atom location array
+        P = torch.zeros(
+            np.prod([nelements, nsubslices, *pixels_]), device=device, dtype=realdtype
+        )
+
+        # Construct a map of which atom corresponds to which slice
+        islice = np.zeros((self.atoms.shape[0]), dtype=_int)
+        slice_stride = np.prod(pixels_)
+        # if nsubslices > 1:
+        # Finds which slice atom can be found in
+        # WARNING Assumes that the slices list ends with 1.0 and is in
+        # ascending order
+        for i in range(nsubslices):
+            zmin = 0 if i == 0 else sblce[i - 1]
+            atoms_in_slice = (self.atoms[:, 2] % 1.0 >= zmin) & (
+                self.atoms[:, 2] % 1.0 < sblce[i]
+            )
+            islice[atoms_in_slice] = i * slice_stride
+        islice = torch.from_numpy(islice).type(torch.long).to(device)
+        # else:
+        #     islice = 0
+        # Make map a pytorch Tensor
+
+        # Construct a map of which atom corresponds to which element
+        element_stride = nsubslices * slice_stride
+        ielement = torch.tensor(element_stride * ielement_np,dtype=torch.long,device=device)
+
+        # FDES algorithm implemented using the pytorch scatter_add function,
+        # which takes a list of numbers and adds them to a corresponding list
+        # of coordinates
+        for tile in range(tiling[0] * tiling[1]):
+            # For these atomic coordinates (in fractional coordinates) convert
+            # to pixel coordinates
+            posn = (
+                (
+                    self.atoms[:, :2]
+                    + np.asarray([tile % tiling[0], tile // tiling[0]])[np.newaxis, :]
+                )
+                / tiling_
+                * psize
+            )
+            posn = torch.from_numpy(posn).to(device).type(realdtype)
+
+            yc = (
+                torch.remainder(torch.ceil(posn[:, 0]).type(torch.long), pixels_[0])
+                * pixels_[1]
+            )
+            yf = (
+                torch.remainder(torch.floor(posn[:, 0]).type(torch.long), pixels_[0])
+                * pixels_[1]
+            )
+            xc = torch.remainder(torch.ceil(posn[:, 1]).type(torch.long), pixels_[1])
+            xf = torch.remainder(torch.floor(posn[:, 1]).type(torch.long), pixels_[1])
+
+            yh = torch.remainder(posn[:, 0], 1.0)
+            yl = 1.0 - yh
+            xh = torch.remainder(posn[:, 1], 1.0)
+            xl = 1.0 - xh
+
+            # Account for fractional occupancy of atomic sites if requested
+            if fractional_occupancy and self.fractional_occupancy:
+                xh *= torch.from_numpy(self.atoms[:, 4]).type(realdtype).to(device)
+                xl *= torch.from_numpy(self.atoms[:, 4]).type(realdtype).to(device)
+
+            # Each pixel is set to the overlap of a shifted rectangle in that pixel
+            P.scatter_add_(0, ielement + islice + yc + xc, yh * xh)
+            P.scatter_add_(0, ielement + islice + yc + xf, yh * xl)
+            P.scatter_add_(0, ielement + islice + yf + xc, yl * xh)
+            P.scatter_add_(0, ielement + islice + yf + xf, yl * xl)
+
+        # Now view potential as a 4D array for next bit
+        P = P.view(nelements, nsubslices, *pixels_)
+
+        # Use real fast fourier transforms to save memory and time
+        P = torch.fft.rfft2(P, s=pixels_)
+
+        # pp is number of pixels in x
+        pp = pixels_[1] // 2 + 1
+
+        if sinc_deconvolution:
+            # Make sinc functions with appropriate singleton dimensions for pytorch
+            # broadcasting /gridsize[0]*pixels_[0] /gridsize[1]*pixels_[1]
+            sincy = (
+                sinc(torch.fft.fftfreq(pixels_[0]))
+                .view([1, 1, pixels_[0], 1])
+                .to(device)
+                .type(realdtype)
+            )
+
+            # The real FFT is only half the cell in the x direction, pp stores
+            # this size
+
+            sincx = sinc(torch.fft.rfftfreq(pixels_[1])).to(device).type(realdtype)
+
+            sincx = sincx.view([1, 1, 1, pp])
+
+            # #Divide by sinc functions
+            P /= sincy
+            P /= sincx
+
+        # Intialize effective scattering potential array
+        Veff = torch.zeros((len(signal_list), nsubslices, *pixels_), device=device, dtype=realdtype)
+
+        for idx,signal in enumerate(signal_list):
+            if signal["signal"]!="ADF":
+                EELS_EDX_params = get_EELS_EDX_params(signal)
+
+                feff = np.zeros((nelements, nsubslices, *pixels_))
+                for ielement, element in enumerate(elements_dwf):
+                    if int(element[0])!=signal["Z"]:
+                        continue
+
+                    feff_temp = calculate_EELS_EDX_scattering_factors(psize,gsize,EELS_EDX_params,element[1],eV)
+                    feff[ielement,:,:,:] = np.repeat(feff_temp[np.newaxis,:,:],nsubslices,axis=0)
+
+        # Convolve with electron scattering factors using Fourier convolution theorem
+                Veff_set = P * (
+                    torch.from_numpy(feff[..., :pp])
+                    .view(nelements, nsubslices, pixels_[0], pp)
+                    .to(device)
+                )
+
+                norm = np.prod(pixels_) / np.prod(self.unitcell[:2]) / np.prod(tiling) # Note: factor of no. pixels here compensates the division by same in irfft2
+
+        # Add different elements atoms together
+                Veff_single = norm * torch.sum(Veff_set, dim=0) # Note torch.sum squeezes, so Veff_single is now (nsublices,npy,npx_reduced)
+
+        # Apply bandwidth limit to remove high frequency numerical artefacts
+                if bandwidthlimit is not None:
+                    Veff_single = bandwidth_limit_array_torch(Veff_single, limit=1, soft=bandwidthlimit, rfft=True)
+
+                Veff[idx,:,:,:] = torch.fft.irfft2(Veff_single, s=pixels_)
+
+            else:
+                print('ADF currently unavailable.')                
+
+        # # Convolve with electron scattering factors using Fourier convolution theorem
+        #         Veff_set = P * (
+        #             torch.from_numpy(feff[..., :pp])
+        #             .view(nelements, 1, pixels_[0], pp)
+        #             .to(device)
+        #         )
+
+        #         norm = np.prod(pixels_) / np.prod(self.unitcell[:2]) / np.prod(tiling)
+
+        # # Add different elements atoms together
+        #         Veff_single = norm * torch.sum(Veff_set, dim=0) # Note torch.sum squeezes, so Veff_single is now (nsublices,npy,npx_reduced)
+
+        # # Apply bandwidth limit to remove high frequency numerical artefacts
+        #         if bandwidthlimit is not None:
+        #             Veff_single = bandwidth_limit_array_torch(Veff_single, limit=1, soft=bandwidthlimit, rfft=True)
+
+        #         Veff[idx,:,:,:] = torch.fft.irfft2(Veff_single, s=pixels_)
+
+        # Dimensions for FFT
+        # d_ = (-2, -1)
+        # # Inverse Fourier transform back to real space for next iteration
+        # Veff = torch.fft.ifftn(Veff, dim=d_)
+
+        # return Veff
+        # Return correct array data type
+        if qspace_out:
+            return torch.fft.fftn(Veff, dim=(-2, -1))/np.prod(pixels_) # The combination of irfft2 and fftn is normalised, and so 
+                                                                       # the earlier multiplication by no. pixels needs to be undone
+        else:
+            return Veff
+
     def make_transmission_functions(
         self,
         pixels,
@@ -2117,3 +2372,115 @@ def RIH2(X):
     RIH2 = F[I] + 200.*( F[I1]-F[I] ) * ( X1-0.5E-3*I )
 
     return RIH2
+
+def get_EELS_EDX_params(itransition_map):
+
+    import sys
+    from scipy import interpolate
+
+    E0list = np.array([50.,100.,150.,200.,250.,300.,350.,400.])
+    DElist = np.array([1.,10.,25.,50.,100.])
+
+    Z = itransition_map["Z"]
+
+    if (itransition_map["shell"]=="1s"):
+        if (Z<6 or Z>50):
+            sys.exit("Requested atomic number not handled")
+        param_set = np.squeeze(EELS_EDX_1s_data[Z-6,:,:,:])
+    elif (itransition_map["shell"]=="2s"):
+        if (Z<20 or Z>86):
+            sys.exit("Requested atomic number not handled")
+        param_set = np.squeeze(EELS_EDX_2s_data[Z-20,:,:,:])
+    elif (itransition_map["shell"]=="2p"):
+        if (Z<20 or Z>86):
+            sys.exit("Requested atomic number not handled")
+        param_set = np.squeeze(EELS_EDX_2p_data[Z-20,:,:,:])
+    else:
+        sys.exit("Requested shell not handled")
+
+    if ((itransition_map["E0"]/1000<50.) or (itransition_map["E0"]/1000>400.)):
+        sys.exit("Requested acceelrating voltage not handled")
+
+    param_set2 = np.zeros(param_set.shape[1:])
+    # Interpolate for accelerating voltage
+    for ii in range(6):
+        for i in range(29):
+            tck = interpolate.splrep(E0list,param_set[:,ii,i], s=0)
+            param_set2[ii,i] = interpolate.splev(itransition_map["E0"]/1000, tck, der=0)
+
+    params = np.zeros(param_set2.shape[1])
+    if (itransition_map["signal"]=="EDX"):
+        params = param_set2[5,:]
+    elif (itransition_map["signal"]=="EELS"):
+        if ((itransition_map["DeltaE"]<1.) or (itransition_map["DeltaE"]>100.)):
+            sys.exit("Requested energy window not handled")
+
+        for i in range(29):
+            tck = interpolate.splrep(DElist,param_set2[:5,i] / DElist, s=0) # [:4] excises the EDX data
+            params[i] = interpolate.splev(itransition_map["DeltaE"], tck, der=0) * itransition_map["DeltaE"]
+
+    else:
+        sys.exit("How did you end up here if not doing EDX or EELS?")
+
+
+    return params
+
+def calculate_EELS_EDX_scattering_factors(
+    gridshape,
+    gridsize,
+    EELS_EDX_params,
+    ums,
+    eV,
+):
+    """Calculate the electron scattering factors on a reciprocal space grid, include Debye-Waller factors.
+       If TDS=True, calculate inelastic (TDS) electron scattering factors using the parameterisation of
+       Weikenmeier and Kohl. 
+
+    Parameters
+    ----------
+    gridshape : (2,) array_like
+        pixel size of the grid
+    gridsize : (2,) array_like
+        Lateral real space sizing of the grid in Angstrom
+    EELS_EDX_params: (29,) array_like
+        Effective scattering potential scattering factors at the sampling defined by svalList
+        in this function
+    ums: float
+        Mean square vibrational amplitude of atom of interest
+    eV : float
+        Probe energy in electron volts
+
+
+    Returns
+    -------
+    fe : (M, *gridshape)
+        Array of electron scattering factors in reciprocal space for each
+        element
+    """
+
+    from scipy import interpolate
+
+    # Electron wave number (reciprocal of wavelength) in Angstrom
+    k0 = wavev(eV)
+
+    svalList = [0.,0.025,0.05,0.1,0.2,0.3,0.4,0.5,0.625,0.75,0.875,1.0,1.5,2.0,2.5,3.0,3.5,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,14.0,16.0,18.0,20.0]
+    tck = interpolate.splrep(svalList,EELS_EDX_params, s=0)
+
+    # Initialise scattering factor array
+    feff = np.zeros(gridshape, dtype=_float)
+
+    # Get reciprocal space array
+    g = q_space_array(gridshape, gridsize)
+    gsq = np.square(g[0]) + np.square(g[1])
+    svals = np.sqrt(gsq/4.)
+
+    # Notes:
+    # 1. Dividing by unit cell volume is replaced by the area division implicit in the Dkx.Dky 
+    #    product in make_effective_scattering_potential(), and no need to multiply by unit
+    #    cell thickness in the cross-section evaluation.
+    # 2. Fractional occupancy is included in defining the delta-function-like site array
+    #    that will be convolved with this in make_effective_scattering_potential()
+    # 3. The 2\pi K factor makes the results \mu's as defined by the Allen group
+    feff = interpolate.splev(svals, tck, der=0)*np.exp(-2 * np.pi**2 *gsq*ums) / (2.*np.pi * k0 )
+
+    return feff
