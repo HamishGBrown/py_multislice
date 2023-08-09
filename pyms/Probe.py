@@ -62,6 +62,11 @@ class aberration:
             )
 
 
+def Scherzer_defocus(eV, Cs):
+    """Calculate the Scherzer defocus for a given voltage and Cs"""
+    return -1.2 * np.sqrt(Cs / wavev(eV))
+
+
 def depth_of_field(eV, alpha):
     """
     Calculate the probe depth of field (z-resolution) for a probe.

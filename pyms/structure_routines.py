@@ -529,7 +529,13 @@ class structure:
         self.unitcell = np.abs(self.unitcell)
 
     def quickplot(
-        self, atomscale=None, cmap=plt.get_cmap("Dark2"), block=True, colors=None
+        self,
+        atomscale=None,
+        cmap=plt.get_cmap("Dark2"),
+        tiling=[1, 1, 1],
+        block=True,
+        colors=None,
+        aspect=True,
     ):
         """
         Make a quick 3D scatter plot of the atomic sites within the structure.
@@ -539,26 +545,39 @@ class structure:
         """
         from mpl_toolkits.mplot3d import Axes3D  # NOQA
 
+        tiledcopy = copy.deepcopy(self).tile(*tiling)
+
         if atomscale is None:
-            atomscale = 1e-3 * np.amax(self.unitcell)
+            atomscale = 1e-3 * np.amax(tiledcopy.unitcell)
 
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
 
         if colors is None:
-            colors = cmap(self.atoms[:, 3] / np.amax(self.atoms[:, 3]))
-        sizes = self.atoms[:, 3] * atomscale
+            colors = cmap(tiledcopy.atoms[:, 3] / np.amax(tiledcopy.atoms[:, 3]))
+        sizes = tiledcopy.atoms[:, 3] * atomscale
 
-        ax.scatter(
-            *[self.atoms[:, i] * self.unitcell[i] for i in [1, 0, 2]], c=colors, s=sizes
-        )
+        xs, ys, zs = [tiledcopy.atoms[:, i] * tiledcopy.unitcell[i] for i in [1, 0, 2]]
+        ax.scatter(xs, ys, zs, c=colors, s=sizes)
+        for ele, iele in zip(*np.unique(self.atoms[:, 3], return_index=True)):
+            ax.scatter(
+                [],
+                [],
+                [],
+                color=colors[iele],
+                label=atomic_symbol[int(ele)],
+                s=sizes[iele],
+            )
 
-        ax.set_xlim3d(0.0, self.unitcell[1])
-        ax.set_ylim3d(top=0.0, bottom=self.unitcell[0])
-        ax.set_zlim3d(top=0.0, bottom=self.unitcell[2])
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
+        ax.set_xlim3d(0.0, tiledcopy.unitcell[1])
+        ax.set_ylim3d(top=0.0, bottom=tiledcopy.unitcell[0])
+        ax.set_zlim3d(top=0.0, bottom=tiledcopy.unitcell[2])
+        if aspect:
+            ax.set_box_aspect((np.ptp(xs), np.ptp(ys), np.ptp(zs)))
+        ax.set_xlabel("x (\\A)")
+        ax.set_ylabel("y (\\A)")
+        ax.set_zlabel("z (\\A)")
+        ax.legend()
 
         plt.show(block=block)
         return fig

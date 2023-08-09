@@ -37,11 +37,11 @@ def clean_temp_structure():
         os.remove(scratch_cell_name)
 
 
-def Single_atom(Z=79, r=[0.5, 0.5, 0.5], R=[10.0, 10.0, 10.0]):
+def Single_atom(Z=79, r=[0.5, 0.5, 0.5], R=[10.0, 10.0, 10.0],dwf = 0.0):
     """Single atom structure for testing."""
     atoms = np.asarray(
         [
-            [*r, Z, 1.0, 0.0],
+            [*r, Z, 1.0, dwf],
         ]
     )
     return pyms.structure(R, atoms[:, :4], dwf=atoms[:, 5])
@@ -492,6 +492,53 @@ class Test_Structure_Methods(unittest.TestCase):
             np.sum(np.square(kirk(xtest) - pyms_pot(xtest)) / np.sum(K ** 2)) < 1e-4
         )
         self.assertTrue(within_spec)
+
+    def test_atom_placement(self):
+        """Test that the code places atoms in the correct location with correct
+           mean square vibration"""
+        nT = 128
+        gridshape = [128,128]
+        # Make single Silver atom
+        R = 10
+        dwf = 0.02
+        r = [0.25,0.25,0.25]
+        cell = Single_atom(r=r, Z=2, R=[R, R, 2],dwf=dwf)
+
+        pot = np.zeros([nT]+gridshape)
+        for i in range(nT):
+            pot[i] = cell.make_potential(gridshape).cpu().numpy()
+
+        # Calculate COM in fraction of unit cell
+        M = np.sum(pot,axis=(-2,-1))
+        COMx = np.sum(pot*np.arange(gridshape[-1])/gridshape[-1],axis=(-2,-1))/M
+        COMy = np.sum(pot*np.arange(gridshape[-2]).reshape([gridshape[-2],1])/gridshape[-2],axis=(-2,-1))/M
+        COM = np.stack([COMy,COMx],axis=0)
+        # fig,ax=plt.subplots(ncols=2)
+        # ax[0].imshow(np.sum(pot,axis=0),origin='lower')
+        # ax[1].plot(COMx,COMy,'bo')
+        # plt.show(block=True)
+
+        moving_average = np.cumsum(COM,axis=1)/(np.arange(nT)+1)
+        moving_ms = np.cumsum(COMx**2+COMy**2)/(np.arange(nT)+1)/2 - np.average(moving_average**2,axis=0)
+        moving_ms*= R**2
+
+        # fig,ax = plt.subplots(ncols=2)
+        # ax[0].plot(COMx,COMy,'bo')
+        # ax[1].plot(moving_ms)
+        # from matplotlib.patches import Circle
+        # ax[0].add_patch(Circle(r[:2],radius=np.sqrt(dwf)/R))
+        # plt.show(block=True)
+
+        meanCOM = np.sum(COM,axis=1)/nT
+        # 5 Sigma test, ie. 1/3.5 million probability of failing assuming correct functioning
+        fiveSigma = dwf/nT*5**2
+        sigmaofvariance = dwf*np.sqrt(2/(nT-1))
+        muwithinspec = np.sum((meanCOM-r[0])**2) < fiveSigma
+        sigmawithinspec = np.abs(moving_ms[-1]-dwf) < 5*sigmaofvariance
+
+        withinspec = sigmawithinspec and muwithinspec
+        self.assertTrue(withinspec)
+
 
     def test_resize(self):
         """Test the structure resize routine for cropping and padding with vaccuum."""
@@ -1324,7 +1371,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         # plt.show(block=True)
         # print(sumsqr_diff(convolved_phase, reconstructed_phase,norm=True) )
         self.assertTrue(
-            sumsqr_diff(convolved_phase, reconstructed_phase,norm=True) 
+            sumsqr_diff(convolved_phase, reconstructed_phase,norm=True)
             < 1e-1
         )
 
@@ -1983,7 +2030,7 @@ class Test_util_Methods(unittest.TestCase):
 if __name__ == "__main__":
     # test = Test_util_Methods()
     # test.test_crop_tobandwidthlimit()
-    
+
     # test = Test_py_multislice_Methods()
     # test.test_DPC()
     # import sys; sys.exit()
@@ -2002,7 +2049,7 @@ if __name__ == "__main__":
     # suite.run()
     # test.run()
     # test = Test_Structure_Methods()
-    # test.test_multilayer_objects()
+    # test.test_atom_placement()
 
     # test.test_electron_scattering_factor()
     # test.test_make_potential()

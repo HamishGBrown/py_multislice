@@ -754,9 +754,8 @@ def STEM_multislice(
             FourD_STEM, real_dim, gridshape
         )
         if scan_posn is None:
-            scan_posn = generate_STEM_raster(
-                real_dim, eV, app, tiling=tiling, ROI=ROI
-            )
+            scan_posn = generate_STEM_raster(real_dim, eV, app, tiling=tiling, ROI=ROI)
+
         scanshape = scan_posn.shape[:-1]
         Rpix = nyquist_sampling(eV=eV, alpha=app)
 
@@ -801,6 +800,10 @@ def STEM_multislice(
                 specimen_tilt=specimen_tilt,
                 tilt_units=tilt_units,
             )
+        from PIL import Image
+
+        for i, t in enumerate(T[:, 0]):
+            Image.fromarray(np.angle(t.cpu())).save("T_{0}.tiff".format(i))
 
         # Put new transmission functions and propagators into arguments
         args = (P, T, tiling, device, seed)

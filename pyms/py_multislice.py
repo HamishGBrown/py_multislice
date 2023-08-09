@@ -28,6 +28,35 @@ from .utils.torch_utils import (
 )
 
 
+def diffraction_plane_pixel_size(gridshape, gridsize, eV=None):
+    """
+    Calculates the diffraction plane (reciprocal space) pixel size
+
+    For a given gridshape in pixels and gridsize in Angstrom this routine
+    calculates the pixel size in inverse Angstrom (if accelerating voltage
+    eV is not provided) or in mrad (if eV is provided)
+
+    Parameters
+    ----------
+    gridshape : (2,) array_like
+        Pixel dimensions of the 2D grid
+    rsize :  (2,) array_like
+        Size of the grid in real space in units of Angstroms
+    eV : float
+        Probe energy in electron volts
+    Returns
+    ---------
+    pixel_size: (2,) array_like
+        Size of the grid in diffraction (reciprocal) space in either
+        inverse Angstrom or mrad
+    """
+    invA = 1 / np.asarray(gridsize)
+    if eV is None:
+        return invA
+    else:
+        return invA / wavev(eV) * 1e3
+
+
 def tqdm_handler(showProgress):
     """Handle showProgress boolean or string input for the tqdm progress bar."""
     if isinstance(showProgress, str):
