@@ -22,5 +22,6 @@ setup(
         "ase",
         "pypng",
         "ipywidgets",
+        "ipympl"
     ],
 )
