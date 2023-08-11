@@ -552,6 +552,7 @@ def STEM_multislice(
     nT=5,
     P=None,
     T=None,
+    signal_list=None,
 ):
     """
     Perform a STEM simulation using only the multislice algorithm.
@@ -681,6 +682,10 @@ def STEM_multislice(
         Precomputed Fresnel free-space propagators
     T : (nT,nslices,Y,X) array_like
         Precomputed transmission functions
+    signal_list : dictionary
+        Transitions for which the cross-sections will be calculated. Of form:
+        [{"signal":"<EELS/EDX>","Z":<atomic number>,"shell":"<1s,2s,2p>",
+          "E0":<accelerating voltage>,"DeltaE":<window above threshold, in eV>,},...]
 
     Returns
     -------
@@ -782,6 +787,23 @@ def STEM_multislice(
     if PACBED:
         PACBED_pattern = np.zeros((len(nslices), *gridshape))
 
+    if signal_list is not None:
+   # Calculate effective scattering potentials for cross-section calculations
+   # Note: these include Debye-Waller factor smearing whether or not the calculation
+   # is frozen phonon. See Findlay et al., Ultramicroscopy 104 (2005) 126. https://doi.org/10.1016/j.ultramic.2005.03.004
+        Veff = structure.make_effective_scattering_potential(
+                signal_list,
+                gridshape,
+                eV,
+                subslices,
+                tiling,
+                device=device,
+                dtype=dtype,
+                fractional_occupancy=True,
+        )
+    else:
+        Veff = None
+
     for i in tqdm(range(nfph), desc="Frozen phonon iteration", disable=tdisable):
 
         # Make propagators and transmission functions for multslice
@@ -828,9 +850,11 @@ def STEM_multislice(
             method_kwargs=kwargs,
             datacube=datacubes,
             STEM_image=STEM_images,
+            Veff=Veff,
         )
         datacubes = result["datacube"]
         STEM_images = result["STEM images"]
+        STEM_crosssection_images = result["STEM crosssection images"]
         if result["PACBED"] is not None:
             PACBED_pattern += result["PACBED"]
 
@@ -852,7 +876,7 @@ def STEM_multislice(
     if h5_filename is not None:
         for f in files:
             f.close()
-    result = {"STEM images": STEM_images, "datacube": datacubes}
+    result = {"STEM images": STEM_images, "datacube": datacubes, "STEM crosssection images": STEM_crosssection_images}
 
     if PACBED:
         result["PACBED"] = np.squeeze(PACBED_pattern)
@@ -907,6 +931,8 @@ def multislice_precursor(
     nT : int, optional
         Number of independent multislice transmission functions generated and
         then selected from in the frozen phonon algorithm
+        If nt<=0, calculates transmission functions for thermally-smeared elastic
+        potential plus TDS absorptive potential
     device : torch.device, optional
         torch.device object which will determine which device (CPU or GPU) the
         calculations will run on
@@ -963,11 +989,30 @@ def multislice_precursor(
             bandwidth_limit=band_width_limiting[0],
         )
 
-    T = torch.zeros(nT, len(subslices), *gridshape, device=device, dtype=dtype)
-    T = torch.complex(*(2 * [T]))
+    if (nT>=1): # If at least one independent multislice transmission functions sought, assume frozen phonon calculation
+        T = torch.zeros(nT, len(subslices), *gridshape, device=device, dtype=dtype)
+        T = torch.complex(*(2 * [T]))
 
-    for i in tqdm(range(nT), desc="Making projected potentials", disable=tdisable):
-        T[i] = structure.make_transmission_functions(
+        for i in tqdm(range(nT), desc="Making projected potentials", disable=tdisable):
+            T[i] = structure.make_transmission_functions(
+                gridshape,
+                eV,
+                subslices=subslices,
+                tiling=tiling,
+                device=device,
+                dtype=dtype,
+                displacements=displacements,
+                fractional_occupancy=fractional_occupancy,
+                seed=seed,
+                bandwidth_limit=band_width_limiting[1],
+            )
+
+    else: # Otherwise, assume absorptive calculation sought
+        print('Note: will use thermally-smeared elastic potential plus TDS absorptive potential')
+        T = torch.zeros(1, len(subslices), *gridshape, device=device, dtype=dtype) # Hardcodes for single transmission function
+        T = torch.complex(*(2 * [T]))
+
+        T[0] = structure.make_transmission_functions_absorptive(
             gridshape,
             eV,
             subslices=subslices,
@@ -1369,7 +1414,7 @@ def CBED(
             output[it] += np.abs(np.fft.fftshift(crop_to_bandwidth_limit(probe))) ** 2
 
     # Divide output by # of pixels to compensate for Fourier transform
-    return output / np.prod(gridshape)
+    return output / np.prod(gridshape) / nfph
 
 
 def HRTEM(
