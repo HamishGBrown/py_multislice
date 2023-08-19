@@ -1749,7 +1749,7 @@ class scattering_matrix:
             )
         # Get scan (and STEM image) array shape and total number of scan positions
         scan_shape = scan_posns.shape[:-1]
-        nscan = np.product(scan_shape)
+        nscan = np.prod(scan_shape)
 
         # Flatten scan positions to simplify iteration later on.
         scan_posns = scan_posns.reshape((nscan, 2))
@@ -1785,7 +1785,7 @@ class scattering_matrix:
         if nstreams is None:
             # If the number of seperate streams is not suggested by the
             # user, make this equal to the product of the PRISM factor
-            nstreams = int(np.product(self.PRISM_factor))
+            nstreams = int(np.prod(self.PRISM_factor))
 
         # Divide up the scan positions into clusters based on Euclidean
         # distance
