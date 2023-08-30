@@ -505,10 +505,19 @@ def transition_potential(
         jq = ht.transform(integrand, grid, ret_err=False) * np.sqrt(np.pi/2) / grid**0.5
         
         # Expression no longer valid for k = 0 so we integrate numerically
-        overlap_kernel = (
-                lambda x: orb1(x) * orb2(x)
+
+        zero_mask = grid == 0
+
+        jq_zero = []
+        for q_zero in grid[zero_mask]:
+            overlap_kernel = (
+                    lambda x: orb1(x) * spherical_jn(lprimeprime, q_zero * x) * orb2(x)
+                )
+            jq_zero.append(
+                integrate.quad(overlap_kernel, 0, rmax)[0]
             )
-        jq[0] = integrate.quad(overlap_kernel, 0, rmax)[0]
+
+        jq[zero_mask] = jq_zero
 
         # Bound wave function was in units of 1/sqrt(bohr-radii) and excited
         # wave function was in units of 1/sqrt(bohr-radii Rydbergs) integration
