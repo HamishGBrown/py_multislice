@@ -26,6 +26,8 @@ from .utils.torch_utils import (
     fourier_shift_torch,
     get_device,
 )
+from hankel import HankelTransform
+import pyms
 
 # List of letters for each orbital, used to convert between orbital angular
 # momentum quantum number ell and letter
@@ -482,19 +484,31 @@ def transition_potential(
         if is_arr:
             q_ = q
         else:
-            q_ = np.asarray([q])
+            q_ = np.asarray([q]) 
 
-        # Initialize output array
-        jq = np.zeros_like(q_)
+        # Perform Hankel Transform
+        ht = HankelTransform(
+            nu=int(lprimeprime)+.5,
+            N=200,
+            h=0.0001,
+        )
 
-        for iQ, Q in enumerate(np.ravel(q_)):
-            # Redefine kernel for this value of q, factor of a0 converts q from
-            # units of inverse Angstrom to inverse Bohr radii,
-            grid = 2 * np.pi * Q * a0
-            overlap_kernel = (
-                lambda x: orb1(x) * spherical_jn(lprimeprime, grid * x) * orb2(x)
+        def integrand(r):
+            f_r = np.empty(r.shape)
+            f_r[r >= rmax] = 0
+            rn = r[r < rmax]
+            f_r[r < rmax] = orb1(rn) * orb2(rn) / rn**1.5
+
+            return f_r
+
+        grid = 2 * np.pi * q_ * a0
+        jq = ht.transform(integrand, grid, ret_err=False) * np.sqrt(np.pi/2) / grid**0.5
+        
+        # Expression no longer valid for k = 0 so we integrate numerically
+        overlap_kernel = (
+                lambda x: orb1(x) * orb2(x)
             )
-            jq[iQ] = integrate.quad(overlap_kernel, 0, rmax)[0]
+        jq[0] = integrate.quad(overlap_kernel, 0, rmax)[0]
 
         # Bound wave function was in units of 1/sqrt(bohr-radii) and excited
         # wave function was in units of 1/sqrt(bohr-radii Rydbergs) integration
@@ -513,7 +527,7 @@ def transition_potential(
     # only non-zero for certain values of lprimeprime:
     # |l-lprime|<=lprimeprime<=|l+lprime|
     lprimeprimes = np.arange(
-        np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=pyms.int
+        np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=pyms._int
     )
     if lprimeprimes.shape[0] < 1:
         return None
@@ -521,7 +535,7 @@ def transition_potential(
     for lprimeprime in lprimeprimes:
         jq = None
         # Set of projection quantum numbers
-        mlprimeprimes = np.arange(-lprimeprime, lprimeprime + 1, dtype=pyms.int)
+        mlprimeprimes = np.arange(-lprimeprime, lprimeprime + 1, dtype=pyms._int)
 
         # Non mlprimeprime dependent part of prefactor from Eq (13) from
         # Dwyer Ultramicroscopy 104 (2005) 141-151
