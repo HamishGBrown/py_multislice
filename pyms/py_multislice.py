@@ -1185,6 +1185,8 @@ class scattering_matrix:
 
         # Device (CPU or GPU) is also inferred from transmission functions
         self.device = device
+        # If streaming everything should be initialized in CPU memory (ie. RAM)
+        # and moved to GPU memory as required.
         if GPU_streaming:
             self.device = torch.device("cpu")
         elif self.device is None:
