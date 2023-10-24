@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import copy
 from re import split, match
 from os.path import splitext
-from .atomic_scattering_params import e_scattering_factors, atomic_symbol
+from .atomic_scattering_params import e_scattering_factors, atomic_symbol, e_scattering_factors_WK, EELS_EDX_1s_data,EELS_EDX_2s_data,EELS_EDX_2p_data
 from .Probe import wavev, relativistic_mass_correction
 from .utils.numpy_utils import q_space_array, ensure_array
 from .utils.torch_utils import (
@@ -23,8 +23,6 @@ from .utils.torch_utils import (
 )
 from . import _float, _int, _uint
 import scipy.special as sc
-from pyms.atomic_scattering_params import e_scattering_factors_WK
-from .atomic_scattering_params import EELS_EDX_1s_data,EELS_EDX_2s_data,EELS_EDX_2p_data
 
 
 def remove_common_factors(nums):
@@ -312,6 +310,8 @@ class structure:
 
         or a *.xyz file in the standard of the prismatic software
 
+        or a *.xtl file in the standard of the muSTEM software NOT VESTA
+
         Parameters
         ----------
         fnam : string
@@ -405,6 +405,33 @@ class structure:
             # Fractional occupancy and Debye-Waller (temperature) factor
             dwf = atoms_[:, 5]
             occ = atoms_[:, 4]
+        elif ext == ".xtl":
+            # Read in unit cell dimensions
+            unitcell = np.asarray(
+                [float(x) for x in split(r"\s+", f.readline().strip())[:3]]
+            )
+            
+            keV = float(f.readline().split('\n')[0])
+            
+            # Read in number of elements in structure file
+            ntypes = int(f.readline().strip())
+
+            atoms = np.zeros((1,6))
+            for i in range(ntypes):
+                symb = f.readline().strip()
+                line = f.readline().split()
+                no_atoms = int(line[0])
+                Z, occ, dwf= [float(x) for x in line[1:]]
+                posnlist = []
+                for j in range(no_atoms):
+                    posnlist.append([float(x) for x in f.readline().split()] + [Z, occ, dwf])
+                atoms = np.vstack([atoms, posnlist])
+
+            # Fractional occupancy and Debye-Waller (temperature) factor
+            occ = atoms[1:, 4]
+            dwf = atoms[1:, 5]
+            # Reduce array to (x, y, z, Z) for fractional coordinates (x,y,z) and atomic number Z
+            atoms = atoms[1:, :4]
         else:
             print("File extension: {0} not recognized".format(ext))
             return None
@@ -879,7 +906,7 @@ class structure:
         eV,
         subslices=[1.0],
         tiling=[1, 1],
-        displacements=True,
+        displacements=False,
         fractional_occupancy=True,
         sinc_deconvolution=True,
         bandwidthlimit=0.2,
@@ -887,6 +914,7 @@ class structure:
         fe_TDS=None,
         device=None,
         dtype=torch.float32,
+        showProgress = True
     ):
         """
         Generate the projected potential of the structure, assuming an absorptive
@@ -933,8 +961,6 @@ class structure:
             on
         dtype: torch.dtype
             Controls the data-type of the output
-        seed: int
-            Seed for random number generator for atomic displacements.
         """
         # Get equivalent precison real datatype
         realdtype = complex_to_real_dtype_torch(dtype)
@@ -1078,14 +1104,14 @@ class structure:
         # Option to precalculate scattering factors (including DWFs) and pass to program which
         # saves computation for
         if fe_DWF is None:
-            fe_DWF_ = calculate_scattering_factors_dwf(psize, gsize, elements_dwf)
+            fe_DWF_ = calculate_scattering_factors_dwf(psize, gsize, elements_dwf, showProgress = showProgress)
         else:
             fe_DWF_ = fe_DWF
 
         # Option to precalculate inelastic (TDS) scattering factors and pass to program which
         # saves computation for
         if fe_TDS is None:
-            fe_TDS_ = calculate_scattering_factors_dwf(psize, gsize, elements_dwf,TDS=True,eV=eV)
+            fe_TDS_ = calculate_scattering_factors_dwf(psize, gsize, elements_dwf,TDS=True,eV=eV, showProgress = showProgress)
         else:
             fe_TDS_ = fe_TDS
 
@@ -1441,13 +1467,14 @@ class structure:
         subslices=[1.0],
         tiling=[1, 1],
         fe=None,
-        displacements=True,
+        displacements=False,
         fftout=False,
         dtype=None,
         device=None,
         fractional_occupancy=True,
         seed=None,
         bandwidth_limit=2 / 3,
+        showProgress = True
     ):
         """
         Make the transmission functions for the simulation object, assuming an 
@@ -1487,6 +1514,7 @@ class structure:
             device=device,
             dtype=dtype,
             fractional_occupancy=fractional_occupancy,
+            showProgress = showProgress
         )
         # Now take the complex exponential of the electrostatic potential
         # scaled by the electron interaction constant
@@ -2088,7 +2116,8 @@ def calculate_scattering_factors_dwf(
     gridsize,
     elements_dwf,
     TDS = False,
-    eV = None
+    eV = None,
+    showProgress = True,
 ):
     """Calculate the electron scattering factors on a reciprocal space grid, include Debye-Waller factors.
        If TDS=True, calculate inelastic (TDS) electron scattering factors using the parameterisation of
@@ -2132,7 +2161,7 @@ def calculate_scattering_factors_dwf(
     # Loop over unique elements
     for ielement, element in enumerate(elements_dwf):
         if TDS:
-            fe[ielement, :, :] = electron_tds_wk_scattering_factor(int(element[0]),gsq,element[1],eV)
+            fe[ielement, :, :] = electron_tds_wk_scattering_factor(int(element[0]),gsq,element[1],eV,showProgress)
             # fe[ielement, :, :] = electron_tds_scattering_factor(int(element[0]),gsq,element[1],eV)
         else:
             fe[ielement, :, :] = electron_scattering_factor(int(element[0]), gsq)*np.exp(-2 * np.pi**2 *gsq*element[1])
@@ -2140,7 +2169,7 @@ def calculate_scattering_factors_dwf(
     return fe
 
 
-def electron_tds_wk_scattering_factor(Z, gsq, ums, eV):
+def electron_tds_wk_scattering_factor(Z, gsq, ums, eV, showProgress = True):
     """
     Calculate the electron TDS scattering factor for atom with atomic number Z and mean 
     square vibrational amplitude ums using Weikenmeier & Kohl parameterisation
@@ -2162,7 +2191,7 @@ def electron_tds_wk_scattering_factor(Z, gsq, ums, eV):
     #        and interpolate to 2D than it is to calculate in 2D
     from scipy import interpolate
 
-    showProgress = True
+    showProgress = showProgress
     tdisable, tqdm = tqdm_handler(showProgress)
 
     # Planck's constant in kg Angstrom/s
