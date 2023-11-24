@@ -1090,7 +1090,7 @@ def STEM(
         STEM_crosssection_images = None
 
     if conventional_STEM:
-        STEM_image = np.squeeze(STEM_image.reshape(ndet, nthick, *scan_shape))
+        STEM_image = STEM_image.reshape(ndet, nthick, *scan_shape)
     if PACBED:
         PACBED_pattern = resize2(PACBED_pattern.cpu().numpy())
     return {"STEM images": STEM_image, "datacube": datacube, "PACBED": PACBED_pattern, "STEM crosssection images": STEM_crosssection_images}
@@ -1227,7 +1227,7 @@ class scattering_matrix:
         # Device (CPU or GPU) is also inferred from transmission functions
         self.device = device
         if GPU_streaming:
-            self.device = torch.device("cuda")
+            self.device = torch.device("cpu")
         elif self.device is None:
             self.device = transmission_functions.device
 
@@ -1550,7 +1550,7 @@ class scattering_matrix:
         ]
         return crop_
 
-    def __call__(self, probes, nslices, posn=None, Smat=None, scan_transform=None):
+    def __call__(self, probes, nslices, posn=None, Smat=None, scan_transform=None, Veff = None):
         """
         Calculate exit-surface waves function using the scattering matrix.
 

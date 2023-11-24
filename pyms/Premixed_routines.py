@@ -929,12 +929,15 @@ def STEM_multislice(
             f.close()
     
     if detector_ranges is not None:
-        result['STEM images'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)) # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
+        if len(df) == 1 or len(thicknesses) == 1:
+            result['STEM images'] = np.squeeze(STEM_images)
+        else:
+            result['STEM images'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)) # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
     else:
         del result['STEM images']
 
     if FourD_STEM:
-        if len(df) == 1 and len(thicknesses) == 1:
+        if len(df) == 1 or len(thicknesses) == 1:
             result['datacube'] = np.array(datacubes)
         else:
             result['datacube'] = np.array(datacubes).transpose(1,0,2,3,4,5) # Swap axes so output is of the form (thickness, defocus, ny, nx, qy, qx)
