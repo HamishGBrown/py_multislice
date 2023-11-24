@@ -934,7 +934,10 @@ def STEM_multislice(
         del result['STEM images']
 
     if FourD_STEM:
-        result['datacube'] = np.array(datacubes).transpose(1,0,2,3,4,5) # Swap axes so output is of the form (thickness, defocus, ny, nx, qy, qx)
+        if len(df) == 1 and len(thicknesses) == 1:
+            result['datacube'] = np.array(datacubes)
+        else:
+            result['datacube'] = np.array(datacubes).transpose(1,0,2,3,4,5) # Swap axes so output is of the form (thickness, defocus, ny, nx, qy, qx)
     else:
         del result['datacube']
 
