@@ -912,7 +912,6 @@ def STEM_multislice(
                     datacubes[idf][it][:] = datacubes[idf][it][:] / nfph
         else:
             datacubes /= nfph
-        datacubes = np.squeeze(datacubes)
 
     if result["STEM images"] is not None:
         STEM_images = STEM_images / nfph
@@ -921,26 +920,26 @@ def STEM_multislice(
         PACBED_pattern /= nfph
 
     if DPC:
-        DPC_images = phase_from_com(STEM_images.transpose(1, 2, 0, 3, 4)[-2:], rsize=structure.unitcell[:2]) # Reshape STEM_images array so the DPC image array has the same ordering of dimensions as that of the other simulation results
+        DPC_images = phase_from_com(np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4))[-2:], rsize=structure.unitcell[:2]) # Reshape STEM_images array so the DPC image array has the same ordering of dimensions as that of the other simulation results
 
     # Close all hdf5 files
     if h5_filename is not None:
         for f in files:
             f.close()
     
-    if detector_ranges is not None:
-        if len(df) == 1 or len(thicknesses) == 1:
-            result['STEM images'] = np.squeeze(STEM_images)
-        else:
-            result['STEM images'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)) # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
+    if (detector_ranges is not None) and (not DPC):
+        result['STEM images'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)) # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
+    elif (detector_ranges is not None) and (DPC):
+        result['DPC'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4))[-2:]
+        result['STEM images'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)[:-2])
+    elif (detector_ranges is None) and (DPC):
+        result['DPC'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)) # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
+        del result['STEM images']
     else:
         del result['STEM images']
 
     if FourD_STEM:
-        if len(df) == 1 or len(thicknesses) == 1:
-            result['datacube'] = np.array(datacubes)
-        else:
-            result['datacube'] = np.array(datacubes).transpose(1,0,2,3,4,5) # Swap axes so output is of the form (thickness, defocus, ny, nx, qy, qx)
+        result['datacube'] = np.squeeze(np.array(datacubes).transpose(1,0,2,3,4,5))
     else:
         del result['datacube']
 
@@ -952,7 +951,7 @@ def STEM_multislice(
         del result["PACBED"]
 
     if DPC:
-        result["DPC"] = DPC_images
+        result["DPC"] = np.append(result["DPC"], np.expand_dims(DPC_images, axis = 0), axis = 0)
 
     if result["STEM crosssection images"] is not None:
         result["STEM crosssection images"] = np.squeeze(STEM_crosssection_images)

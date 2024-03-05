@@ -1252,7 +1252,7 @@ class scattering_matrix:
             )
         )
         self.beams = [(x + y // 2) % y - y // 2 for x, y in zip(self.beams, gridshape)]
-
+        self.beam_mapping = np.c_[self.beams[0], self.beams[1]]
         self.nbeams = len(self.beams[0])
 
         # For a scattering matrix stored in real space there is the option
@@ -1387,6 +1387,9 @@ class scattering_matrix:
                 self.S = torch.zeros(
                     self.nbeams, self.nbout, dtype=self.dtype, device=self.device
                 )
+                self.S2 = torch.zeros(
+                    self.nbeams, self.nbeams, dtype=self.dtype, device=self.device
+                )
             else:
                 self.S = torch.zeros(
                     self.nbeams,
@@ -1416,6 +1419,7 @@ class scattering_matrix:
 
                 if self.Fourier_space_output:
                     self.S[ibeam] = psi[self.bw_mapping[:, 0], self.bw_mapping[:, 1]]
+                    self.S2[ibeam] = psi[self.beam_mapping[:, 0], self.beam_mapping[:, 1]]
                 else:
                     self.S[ibeam] = fourier_interpolate_torch(
                         psi,
@@ -1524,10 +1528,13 @@ class scattering_matrix:
                 output = output.to(self.device)
 
             if self.Fourier_space_output:
-
                 self.S[beams] = output[
                     :, self.bw_mapping[:, 0], self.bw_mapping[:, 1]
                 ] * np.sqrt(np.prod(self.stored_gridshape) / np.prod(self.gridshape))
+
+                self.S2[beams] = output[
+                    :, self.beam_mapping[:, 0], self.beam_mapping[:, 1]
+                ] / np.sqrt(np.prod(self.gridshape))
             else:
                 output = fourier_interpolate_torch(
                     output, self.stored_gridshape, norm="conserve_norm"
@@ -1958,8 +1965,8 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     denominator = 1j * ((kx ** 2)[None, :] + (ky ** 2)[:, None]) + reg
 
     # Avoid a divide by zero for the origin of the Fourier coordinates
-    numerator[0, 0] = 0
-    denominator[0, 0] = 1
+    numerator[...,0, 0] = 0
+    denominator[...,0, 0] = 1
 
     # Return real part of the inverse Fourier transform
     return np.fft.irfft2(numerator / denominator, s=s)
