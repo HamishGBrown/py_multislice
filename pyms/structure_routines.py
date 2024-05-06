@@ -443,10 +443,18 @@ class structure:
     def from_ase_cluster(cls, asecell, occupancy=None, Title="", dwf=None):
         """Initialize from Atomic Simulation Environment (ASE) cluster object."""
         unitcell = asecell.cell[:]
+        # Sometimes there is no unit cell provided so we have to estimate it
+        nounitcell = np.isclose(np.prod(unitcell),0.0)
+        if nounitcell:
+            unitcell = np.ptp(asecell.positions,axis=0)
+            atompositions = np.mod(asecell.positions-np.amin(asecell.positions,axis=0),unitcell) /unitcell
+        else:
+            atompositions = asecell.cell.scaled_positions(asecell.positions)
+            
         natoms = asecell.numbers.shape[0]
         atoms = np.concatenate(
             [
-                asecell.cell.scaled_positions(asecell.positions),
+                atompositions,
                 asecell.numbers.reshape(natoms, 1),
             ],
             axis=1,
@@ -704,7 +712,7 @@ class structure:
         # taken into account
         if fractional_occupancy and self.fractional_occupancy:
             equivalent_sites = find_equivalent_sites(self.atoms[:, :3], EPS=1e-3)
-
+        
         # FDES method
         # Intialize potential array
         P = torch.zeros(
@@ -714,7 +722,7 @@ class structure:
         # Construct a map of which atom corresponds to which slice
         islice = np.zeros((self.atoms.shape[0]), dtype=_int)
         slice_stride = np.prod(pixels_)
-        # if nsubslices > 1:
+        # if nsubslices > 1:   
         # Finds which slice atom can be found in
         # WARNING Assumes that the slices list ends with 1.0 and is in
         # ascending order

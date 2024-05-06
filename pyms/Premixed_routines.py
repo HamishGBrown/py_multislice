@@ -2022,7 +2022,7 @@ def STEM_EELS_PRISM(
 
             # Flatten indices of second scattering matrix in preparation for
             # indexing
-            S2.S = S2.S.reshape(S2.S.shape[0], np.product(S2.stored_gridshape), 2)
+            S2.S = S2.S.reshape(S2.S.shape[0], np.prod(S2.stored_gridshape), 2)
 
             # Work out which subslice of the crystal unit cell we are in
             subslice = islice % S1.nsubslices

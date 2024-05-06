@@ -340,7 +340,7 @@ def plane_wave_illumination(
 
     # Case of an untilted plane wave (phase is zero everywhere)
     if tilt[0] == 0 and tilt[1] == 0:
-        illum[:, :] = 1 / np.sqrt(np.product(gridshape))
+        illum[:, :] = 1 / np.sqrt(np.prod(gridshape))
 
         if qspace:
             return np.fft.fft2(illum)
@@ -350,7 +350,7 @@ def plane_wave_illumination(
     # Set the value of wavefunction amplitude such that after inverse Fourier
     # transform (and resulting division by the total number of pixels) the sum
     # of intensity will be 1
-    illum[tilt_[0], tilt_[1]] = np.sqrt(np.product(gridshape))
+    illum[tilt_[0], tilt_[1]] = np.sqrt(np.prod(gridshape))
 
     # Return wave function in real space
     if qspace:
