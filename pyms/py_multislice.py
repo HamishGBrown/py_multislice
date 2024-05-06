@@ -28,6 +28,35 @@ from .utils.torch_utils import (
 )
 
 
+def diffraction_plane_pixel_size(gridshape, gridsize, eV=None):
+    """
+    Calculates the diffraction plane (reciprocal space) pixel size
+
+    For a given gridshape in pixels and gridsize in Angstrom this routine
+    calculates the pixel size in inverse Angstrom (if accelerating voltage
+    eV is not provided) or in mrad (if eV is provided)
+
+    Parameters
+    ----------
+    gridshape : (2,) array_like
+        Pixel dimensions of the 2D grid
+    rsize :  (2,) array_like
+        Size of the grid in real space in units of Angstroms
+    eV : float
+        Probe energy in electron volts
+    Returns
+    ---------
+    pixel_size: (2,) array_like
+        Size of the grid in diffraction (reciprocal) space in either
+        inverse Angstrom or mrad
+    """
+    invA = 1 / np.asarray(gridsize)
+    if eV is None:
+        return invA
+    else:
+        return invA / wavev(eV) * 1e3
+
+
 def tqdm_handler(showProgress):
     """Handle showProgress boolean or string input for the tqdm progress bar."""
     if isinstance(showProgress, str):
@@ -123,7 +152,7 @@ def make_propagators(
             deltaz = (s_ - subslices[islice - 1]) * gridsize[2]
 
         # Calculate propagator
-        prop[islice, :, :] = bandwidth_limit_array(
+        prop[islice] = bandwidth_limit_array(
             make_contrast_transfer_function(
                 gridshape,
                 gridsize[:2],
@@ -1226,6 +1255,8 @@ class scattering_matrix:
 
         # Device (CPU or GPU) is also inferred from transmission functions
         self.device = device
+        # If streaming everything should be initialized in CPU memory (ie. RAM)
+        # and moved to GPU memory as required.
         if GPU_streaming:
             self.device = torch.device("cpu")
         elif self.device is None:
@@ -1797,7 +1828,7 @@ class scattering_matrix:
             )
         # Get scan (and STEM image) array shape and total number of scan positions
         scan_shape = scan_posns.shape[:-1]
-        nscan = np.product(scan_shape)
+        nscan = np.prod(scan_shape)
 
         # Flatten scan positions to simplify iteration later on.
         scan_posns = scan_posns.reshape((nscan, 2))
@@ -1833,7 +1864,7 @@ class scattering_matrix:
         if nstreams is None:
             # If the number of seperate streams is not suggested by the
             # user, make this equal to the product of the PRISM factor
-            nstreams = int(np.product(self.PRISM_factor))
+            nstreams = int(np.prod(self.PRISM_factor))
 
         # Divide up the scan positions into clusters based on Euclidean
         # distance

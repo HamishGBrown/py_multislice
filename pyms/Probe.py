@@ -10,7 +10,7 @@ class aberration:
 
     def __init__(self, Krivanek, Haider, Description, amplitude, angle, n, m):
         """
-        Intialize the lens aberration object.
+        Initialize the lens aberration object.
 
         Parameters
         ----------
@@ -21,7 +21,7 @@ class aberration:
             A string describing the aberration coefficient in Haider notation
             (ie. A1, A2, B2)
         Description : str
-            A string describing the colloqiual name of the aberration ie. 2-fold
+            A string describing the colloquial name of the aberration ie. 2-fold
             astig.
         amplitude : float
             The amplitude of the aberration in Angstrom
@@ -60,6 +60,11 @@ class aberration:
             return " {0:17s} ({1:2s}) -- {2:3s} = {3:9.2e} \u00E5".format(
                 self.Description, self.Haider, self.Krivanek, self.amplitude
             )
+
+
+def Scherzer_defocus(eV, Cs):
+    """Calculate the Scherzer defocus for a given voltage and Cs"""
+    return -1.2 * np.sqrt(Cs / wavev(eV))
 
 
 def depth_of_field(eV, alpha):
@@ -254,7 +259,7 @@ def focused_probe(
     eV : float
         The energy of the probe electrons in electron volts
     app : float
-        The probe-forming apperture in units specified by app_units, pass None
+        The probe-forming aperture in units specified by app_units, pass None
         if no probe forming aperture is to be used
     beam_tilt : array_like, optional
         Allows the user to simulate a (small < 50 mrad) beam tilt. To maintain
@@ -340,7 +345,7 @@ def plane_wave_illumination(
 
     # Case of an untilted plane wave (phase is zero everywhere)
     if tilt[0] == 0 and tilt[1] == 0:
-        illum[:, :] = 1 / np.sqrt(np.product(gridshape))
+        illum[:, :] = 1 / np.sqrt(np.prod(gridshape))
 
         if qspace:
             return np.fft.fft2(illum)
@@ -350,7 +355,7 @@ def plane_wave_illumination(
     # Set the value of wavefunction amplitude such that after inverse Fourier
     # transform (and resulting division by the total number of pixels) the sum
     # of intensity will be 1
-    illum[tilt_[0], tilt_[1]] = np.sqrt(np.product(gridshape))
+    illum[tilt_[0], tilt_[1]] = np.sqrt(np.prod(gridshape))
 
     # Return wave function in real space
     if qspace:
@@ -587,7 +592,7 @@ def convert_deltaE(deltaE, deltaEconv):
 
 def convert_tilt_angles(tilt, tilt_units, rsize, eV, invA_out=False):
     """
-    Convert  tilt to pixel or inverse Angstroms units regardless of input units.
+    Convert tilt to pixel or inverse Angstroms units regardless of input units.
 
     Input units can be mrad, pixels or inverse Angstrom
 

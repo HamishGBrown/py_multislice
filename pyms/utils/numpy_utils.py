@@ -539,7 +539,7 @@ def crop(arrayin, shapeout):
     return arrayout
 
 
-def Gaussian(sigma, gridshape, rsize, theta=0):
+def Gaussian(sigma, gridshape, rsize, theta=0, normalized=True):
     r"""
     Calculate a normalized 2D Gaussian function.
 
@@ -573,4 +573,6 @@ def Gaussian(sigma, gridshape, rsize, theta=0):
     gaussian = np.exp(
         -(a * grid[1] ** 2 + 2 * b * grid[0] * grid[1] + c * grid[0] ** 2)
     )
-    return gaussian / np.sum(gaussian)
+    if normalized:
+        gaussian /= np.sum(gaussian)
+    return gaussian

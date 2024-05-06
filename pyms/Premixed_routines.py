@@ -142,7 +142,7 @@ def STEM_PRISM(
         an unaberrated probe.
     batch_size : int, optional
         The multislice algorithm can be performed on multiple scattering matrix
-        columns at once to parrallelize computation, this number is set by
+        columns at once to parallelize computation, this number is set by
         batch_size.
     fourD_STEM : bool or array_like, optional
         Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
@@ -600,7 +600,7 @@ def STEM_multislice(
         controlled by the df parameter)
     batch_size : int, optional
         The multislice algorithm can be performed on multiple probes columns
-        at once to parrallelize computation, the number of parrallel computations
+        at once to parallelize computation, the number of parallel computations
         is set by batch_size.
     fourD_STEM : bool or array_like, optional
         Pass fourD_STEM = True to perform 4D-STEM simulations. To save disk
@@ -623,7 +623,7 @@ def STEM_multislice(
     DPC : bool
         Set to True to simulate centre-of-mass differential phase contrast (DPC)
         STEM imaging. The centre of mass images will be added to the STEM_images
-        output and the differential phase contrast reconstrutions from these
+        output and the differential phase contrast reconstructions from these
         images will be outputted seperately in the results dictionary
     scan_posn :  (ny,nx,2) array_like, optional
         An array containing y and x scan positions in the final dimension for
@@ -648,7 +648,7 @@ def STEM_multislice(
         absorptive calculation.
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
-        calculation, if contr = 1.0 all ionization transitions will be inlcuded
+        calculation, if contr = 1.0 all ionization transitions will be included
         in the simulation otherwise only the transitions that make up a
         fraction equal to contr of the total ionization transitions will be
         included
@@ -708,7 +708,7 @@ def STEM_multislice(
     result : dict
         Can contain up to three entries with keys 'STEM images' which is the
         conventional STEM images simulated, 'datacube' which is a 4D-STEM
-        datacube, 'PACBED' which is the postion averaged convergent beam
+        datacube, 'PACBED' which is the position averaged convergent beam
         electron diffraction pattern and 'DPC' which are the reconstructions
         of the specimen phase from the centre-of-mass STEM images.
     """
@@ -785,9 +785,8 @@ def STEM_multislice(
             FourD_STEM, real_dim, gridshape
         )
         if scan_posn is None:
-            scan_posn = generate_STEM_raster(
-                real_dim, eV, app, tiling=tiling, ROI=ROI
-            )
+            scan_posn = generate_STEM_raster(real_dim, eV, app, tiling=tiling, ROI=ROI)
+
         scanshape = scan_posn.shape[:-1]
         Rpix = nyquist_sampling(eV=eV, alpha=app)
 
@@ -857,6 +856,10 @@ def STEM_multislice(
                 tilt_units=tilt_units,
                 seed = seed
             )
+        from PIL import Image
+
+        for i, t in enumerate(T[:, 0]):
+            Image.fromarray(np.angle(t.cpu())).save("T_{0}.tiff".format(i))
 
         # Put new transmission functions and propagators into arguments
         args = (P, T, tiling, device, seed)
@@ -1147,7 +1150,7 @@ def STEM_EELS_multislice(
     app : float
         Objective aperture in mrad
     detector_ranges : array_like
-        The maxmimum acceptance angles of each of the spectrometer apertures
+        The maximum acceptance angles of each of the spectrometer apertures
         should be stored as in an array: ie [10,20] will make two detectors
         spanning 0 to 10 mrad and 0 to 20 mrad.
     thicknesses : float or array_like
@@ -1181,7 +1184,7 @@ def STEM_EELS_multislice(
         Number of frozen phonon iterations.
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
-        calculation, if contr = 1.0 all ionization transitions will be inlcuded
+        calculation, if contr = 1.0 all ionization transitions will be included
         in the simulation otherwise only the transitions that make up a
         fraction equal to contr of the total ionization transitions will be
         included
@@ -1419,7 +1422,7 @@ def CBED(
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
-    # Make propagators and transmission functions for multslice
+    # Make propagators and transmission functions for multislice
     if P is None and T is None:
         P, T = multislice_precursor(
             structure,
@@ -1731,7 +1734,7 @@ def EFTEM(
         then selected from in the frozen phonon algorithm
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
-        calculation, if contr = 1.0 all ionization transitions will be inlcuded
+        calculation, if contr = 1.0 all ionization transitions will be included
         in the simulation otherwise only the transitions that make up a
         fraction equal to contr of the total ionization transitions will be
         included
@@ -1952,7 +1955,7 @@ def STEM_EELS_PRISM(
         and chemical imaging 3.1 (2017): 13 for details on this.
     contr : float, optional
         A threshhold for inclusion of ionization transitions within the
-        calculation, if contr = 1.0 all ionization transitions will be inlcuded
+        calculation, if contr = 1.0 all ionization transitions will be included
         in the simulation otherwise only the transitions that make up a
         fraction equal to contr of the total ionization transitions will be
         included
@@ -2144,7 +2147,7 @@ def STEM_EELS_PRISM(
 
             # Flatten indices of second scattering matrix in preparation for
             # indexing
-            S2.S = S2.S.reshape(S2.S.shape[0], np.product(S2.stored_gridshape), 2)
+            S2.S = S2.S.reshape(S2.S.shape[0], np.prod(S2.stored_gridshape), 2)
 
             # Work out which subslice of the crystal unit cell we are in
             subslice = islice % S1.nsubslices
