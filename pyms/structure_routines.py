@@ -36,7 +36,7 @@ def remove_common_factors(nums):
 
 def psuedo_rational_tiling(dim1, dim2, EPS):
     """
-    Calculate the psuedo-rational tiling for matching objects of different dimensions.
+    Calculate the pseudo-rational tiling for matching objects of different dimensions.
 
     For two dimensions, dim1 and dim2, work out the multiplicative
     tiling so that those dimensions might be matched to within error EPS.
@@ -143,7 +143,7 @@ def calculate_scattering_factors(gridshape, gridsize, elements):
 def find_equivalent_sites(positions, EPS=1e-3):
     """Find equivalent atomic sites in a list of atomic positions object.
 
-    This function is used to detect two atoms sharing the same postions (are
+    This function is used to detect two atoms sharing the same positions (are
     with EPS of each other) with fractional occupancy, and return an index of
     these equivalent sites.
     """
@@ -247,7 +247,7 @@ class structure:
         An array containing the side lengths of the orthorhombic unit cell
     atoms :
         An array of dimensions total number of atoms by 6 which for each atom
-        contains the fractional cooordinates within the unit cell for each atom
+        contains the fractional coordinates within the unit cell for each atom
         in the first three entries, the atomic number in the fourth entry,
         the atomic occupancy (not yet implemented in the multislice) in the
         fifth entry and mean squared atomic displacement in the sixth entry
@@ -321,7 +321,7 @@ class structure:
         atomic_coordinates : string, optional
             Units of the atomic coordinates can be "fractional" or "cartesian"
         EPS : float,optional
-            Tolerance for procedures such as psuedo-rational tiling for
+            Tolerance for procedures such as pseudo-rational tiling for
             non-orthorhombic crystal unit cells
         T : (3,3) array_like or None
             An optional transformation matrix to be applied to the unit cell
@@ -354,7 +354,7 @@ class structure:
 
             # Total number of atoms
             totnatoms = np.sum(natoms)
-            # Intialize array containing atomic information
+            # Initialize array containing atomic information
             atoms = np.zeros((totnatoms, 6))
             dwf = np.zeros((totnatoms,))
             occ = np.zeros((totnatoms,))
@@ -479,7 +479,7 @@ class structure:
         """
         Create an orthorhombic supercell from a monoclinic crystal unit cell.
 
-        If not orthorhombic attempt psuedo rational tiling of general
+        If not orthorhombic attempt pseudo rational tiling of general
         monoclinic structure. Assumes that the self.unitcell matrix is lower
         triangular.
         """
@@ -537,7 +537,13 @@ class structure:
         self.unitcell = np.abs(self.unitcell)
 
     def quickplot(
-        self, atomscale=None, cmap=plt.get_cmap("Dark2"), block=True, colors=None
+        self,
+        atomscale=None,
+        cmap=plt.get_cmap("Dark2"),
+        tiling=[1, 1, 1],
+        block=True,
+        colors=None,
+        aspect=True,
     ):
         """
         Make a quick 3D scatter plot of the atomic sites within the structure.
@@ -547,26 +553,39 @@ class structure:
         """
         from mpl_toolkits.mplot3d import Axes3D  # NOQA
 
+        tiledcopy = copy.deepcopy(self).tile(*tiling)
+
         if atomscale is None:
-            atomscale = 1e-3 * np.amax(self.unitcell)
+            atomscale = 1e-3 * np.amax(tiledcopy.unitcell)
 
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
 
         if colors is None:
-            colors = cmap(self.atoms[:, 3] / np.amax(self.atoms[:, 3]))
-        sizes = self.atoms[:, 3] * atomscale
+            colors = cmap(tiledcopy.atoms[:, 3] / np.amax(tiledcopy.atoms[:, 3]))
+        sizes = tiledcopy.atoms[:, 3] * atomscale
 
-        ax.scatter(
-            *[self.atoms[:, i] * self.unitcell[i] for i in [1, 0, 2]], c=colors, s=sizes
-        )
+        xs, ys, zs = [tiledcopy.atoms[:, i] * tiledcopy.unitcell[i] for i in [1, 0, 2]]
+        ax.scatter(xs, ys, zs, c=colors, s=sizes)
+        for ele, iele in zip(*np.unique(self.atoms[:, 3], return_index=True)):
+            ax.scatter(
+                [],
+                [],
+                [],
+                color=colors[iele],
+                label=atomic_symbol[int(ele)],
+                s=sizes[iele],
+            )
 
-        ax.set_xlim3d(0.0, self.unitcell[1])
-        ax.set_ylim3d(top=0.0, bottom=self.unitcell[0])
-        ax.set_zlim3d(top=0.0, bottom=self.unitcell[2])
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
+        ax.set_xlim3d(0.0, tiledcopy.unitcell[1])
+        ax.set_ylim3d(top=0.0, bottom=tiledcopy.unitcell[0])
+        ax.set_zlim3d(top=0.0, bottom=tiledcopy.unitcell[2])
+        if aspect:
+            ax.set_box_aspect((np.ptp(xs), np.ptp(ys), np.ptp(zs)))
+        ax.set_xlabel("x (\\A)")
+        ax.set_ylabel("y (\\A)")
+        ax.set_zlabel("z (\\A)")
+        ax.legend()
 
         plt.show(block=block)
         return fig
@@ -714,7 +733,7 @@ class structure:
             equivalent_sites = find_equivalent_sites(self.atoms[:, :3], EPS=1e-3)
         
         # FDES method
-        # Intialize potential array
+        # Initialize potential array
         P = torch.zeros(
             np.prod([nelements, nsubslices, *pixels_]), device=device, dtype=realdtype
         )
@@ -1135,7 +1154,7 @@ class structure:
             other at the origin, if side == 1 the structures will be added onto
             each other at the end.
         eps : float, optional
-            Fractional tolerance of the psuedo rational tiling to make the
+            Fractional tolerance of the pseudo rational tiling to make the
             structure dimensions perpendicular to the beam direction match.
         """
         # Make deep copies of the structure object and the slice this is so
@@ -1152,7 +1171,7 @@ class structure:
             # that the structures are the same size
             if ax == axis:
                 continue
-            # Calculate the psuedo-rational tiling
+            # Calculate the pseudo-rational tiling
             if self.unitcell[ax] < other.unitcell[ax]:
                 tile1[ax], tile2[ax] = psuedo_rational_tiling(
                     self.unitcell[ax], other.unitcell[ax], eps
@@ -1219,7 +1238,7 @@ class structure:
             Describes the size of the new simulation object as a fraction of
             old simulation object dimensions.
         axis : int or (nax,) array_like
-            The axes of the simulation object that wil lbe resized
+            The axes of the simulation object that will be resized
 
         Returns
         -------
@@ -1292,7 +1311,7 @@ class layered_structure_transmission_function:
     A class that mimics multislice transmission functions for a layered object.
 
     Useful for performing multislice calculations of heterostructures (epitaxially
-    layered cystalline structures).
+    layered crystalline structures).
     """
 
     def __init__(
@@ -1465,13 +1484,13 @@ class layered_structure_propagators:
         Input
         -----
         T : layered_structure_transmission_function object
-            This should contain all the neccessary information about the layered
+            This should contain all the necessary information about the layered
             object to generate the propagators
 
-        Keyword arguements:
+        Keyword arguments:
         -------------------
         propkwargs : dict
-            Keyword arguements to pass onto make_propagator function
+            Keyword arguments to pass onto make_propagator function
 
         Returns
         -----

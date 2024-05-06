@@ -17,6 +17,7 @@ import re
 import scipy.integrate as integrate
 import torch
 import tqdm
+from . import _float, _int, _uint
 from .Probe import wavev, relativistic_mass_correction
 from .utils.numpy_utils import fourier_shift
 from .py_multislice import multislice, tqdm_handler
@@ -297,7 +298,7 @@ class orbital:
             r_ = np.asarray([r])
 
         # Initialize output array
-        wvfn = np.zeros(r_.shape, dtype=pyms._float)
+        wvfn = np.zeros(r_.shape, dtype=_float)
 
         # Region I and II refer to the two solution regions used in the
         # Flexible Atomic Code for continuum wave functions. Region I
@@ -513,7 +514,7 @@ def transition_potential(
     # only non-zero for certain values of lprimeprime:
     # |l-lprime|<=lprimeprime<=|l+lprime|
     lprimeprimes = np.arange(
-        np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=pyms.int
+        np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=int
     )
     if lprimeprimes.shape[0] < 1:
         return None
@@ -521,7 +522,7 @@ def transition_potential(
     for lprimeprime in lprimeprimes:
         jq = None
         # Set of projection quantum numbers
-        mlprimeprimes = np.arange(-lprimeprime, lprimeprime + 1, dtype=pyms.int)
+        mlprimeprimes = np.arange(-lprimeprime, lprimeprime + 1, dtype=int)
 
         # Non mlprimeprime dependent part of prefactor from Eq (13) from
         # Dwyer Ultramicroscopy 104 (2005) 141-151
@@ -538,8 +539,8 @@ def transition_potential(
             # Evaluate Eq (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
             prefactor2 = (
                 (-1.0) ** (mlprime + mlprimeprime)
-                * pyms._float(wigner_3j(lprime, lprimeprime, ell, 0, 0, 0))
-                * pyms._float(
+                * _float(wigner_3j(lprime, lprimeprime, ell, 0, 0, 0))
+                * _float(
                     wigner_3j(lprime, lprimeprime, ell, -mlprime, -mlprimeprime, ml)
                 )
             )
