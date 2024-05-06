@@ -297,7 +297,7 @@ def colorize(z, saturation=0.8, minlightness=0.0, maxlightness=0.5):
     c = np.array(c)  # -->
     # Array has shape (3,n,m), but we need (n,m,3) for output, range needs to be
     # from 0 to 256
-    c = (c.swapaxes(0, 2) * 256).astype(np.uint8)
+    c = (c.transpose(1,2,0) * 256).astype(np.uint8)
     return c
 
 

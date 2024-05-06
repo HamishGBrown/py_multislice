@@ -21,6 +21,7 @@ setup(
         "tqdm >= 4.48",
         "ase",
         "pypng",
+        "hankel",
         "ipywidgets",
         "ipympl"
     ],

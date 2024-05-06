@@ -198,6 +198,7 @@ def multislice(
     output_to_bandwidth_limit=True,
     reverse=False,
     transpose=False,
+    Veff=None,
 ):
     """
     Multislice algorithm for scattering of an electron probe.
@@ -250,6 +251,9 @@ def multislice(
     transpose : bool, optional
         Reverse the order of the multislice operations, ie. apply propagator
         first and then transmission function
+    Veff: (nelements,nsubslices,Y,X) complex torch.tensor, optional
+        Effective scattering potential (μ's) for EELS and/or EDX
+
     Returns
     -------
     psi : (Y,X) or (n,Y,X) complex torch.tensor or np.ndarray
@@ -260,6 +264,16 @@ def multislice(
     # Dimensions for FFT
     d_ = (-2, -1)
 
+    # Initialize device cuda if available, CPU if no cuda is available
+    device = get_device(device_type)
+
+    if Veff is not None:
+        crosssec=probes[1]
+        probes=probes[0]
+        nsignals = crosssec.shape[0]
+        batch_size = crosssec.shape[1]
+        value = torch.zeros((batch_size,), dtype=torch.cfloat, device=device)
+
     # If a single integer is passed to the routine then Seed random number generator,
     # , if None then np.random.RandomState will use the system clock as a seed
     seed_provided = not (seed is None)
@@ -267,15 +281,14 @@ def multislice(
         r = np.random.RandomState()
         np.random.seed(seed)
 
-    # Initialize device cuda if available, CPU if no cuda is available
-    device = get_device(device_type)
-
     # Since pytorch doesn't have a complex data type we need to add an extra
     # dimension of size 2 to each tensor that will store real and imaginary
     # components.
     T = ensure_torch_array(transmission_functions, device=device)
     P = ensure_torch_array(propagators, dtype=T.dtype, device=device)
     psi = ensure_torch_array(probes, dtype=T.dtype, device=device)
+    if Veff is not None:
+        V = ensure_torch_array(Veff, dtype=T.dtype, device=device)
     # sys.exit()
 
     nT, nsubslices, nopiy, nopix = T.shape[:4]
@@ -285,7 +298,7 @@ def multislice(
         psi = torch.fft.ifftn(psi, dim=d_)
 
     slices = generate_slice_indices(nslices, nsubslices, subslicing)
-
+    
     def conjugateornot(array, conjugate):
         if conjugate:
             return torch.conj(array)
@@ -300,6 +313,17 @@ def multislice(
             r = np.random.RandomState(seed[islice])
 
         subslice = islice % nsubslices
+        
+        # Calculate contribution to cross-sections (done before multislice iteration
+        # while psi to be in real space; consistent with transmit before propagate;
+        # whether using frozen phonon or absortpive, assume Veff includes Debye-Waller
+        #  factors, so no need for shifts)
+        if Veff is not None:
+            modpsisq = psi * torch.conj(psi)
+            for isignal in range(nsignals):
+                value[0:batch_size] = torch.sum(torch.fft.fftn(modpsisq, dim=d_) * Veff[isignal,subslice,:,:], dim=d_)
+                crosssec[isignal,0:batch_size] += value.cpu().numpy().real
+
 
         # Pick random phase grating
         it = r.randint(0, nT)
@@ -320,10 +344,10 @@ def multislice(
                 return array
 
             pix = array.shape[dim]
-            s = r.randint(0, tiling) * (pix // tiling)
+            s = r.randint(0, tiling) * (pix / tiling)
             if pix % tiling == 0:
                 # Shift by an integer number of pixels
-                return torch.roll(array, s, dim)
+                return torch.roll(array, int(s), dim)
             else:
                 # Sub-integer pixel shift
                 v = [1, 1]
@@ -332,7 +356,7 @@ def multislice(
                     pix, s, dtype=torch.float, device=array.device
                 ).view(v)
                 return torch.fft.ifft(
-                    FFT_shift_array * torch.fft.fft(T[it, subslice], dim=dim), dim=dim
+                    FFT_shift_array * torch.fft.fft(array, dim=dim), dim=dim
                 )
 
         T_ = shift(shift(T[it, subslice], tiling[0], 0), tiling[1], 1)
@@ -376,9 +400,15 @@ def multislice(
 
     if len(slices) < 1 and qspace_out:
         psi = torch.fft.fftn(psi, dim=d_)
-    if return_numpy:
-        return psi.cpu().numpy()
-    return psi
+
+    if Veff is not None:
+        if return_numpy:
+            return (psi.cpu().numpy(),crosssec)
+        return (psi,crosssec)
+    else:
+        if return_numpy:
+            return psi.cpu().numpy()
+        return psi
 
 
 def STEM_phase_contrast_transfer_function(probe, detector):
@@ -648,6 +678,8 @@ def generate_probe_spread_plot(
     P=None,
     T=None,
     nslices=None,
+    nT = 1,
+    showProgress = True,
 ):
     """
     Generate probe spread plot to assist with selection of appropriate multislice grid.
@@ -698,11 +730,18 @@ def generate_probe_spread_plot(
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
         Precomputed transmission functions
+    nT : boolean, optional
+        Specify frozen phonon (True, 1) or absorptive potential (False, 0)
+    showProgress : str or bool, optional
+        Pass False to disable progress readout, pass 'notebook' to get correct
+        progress bar behaviour inside a jupyter notebook
     Returns
     -------
     fig : matplotlib.figure object
         The figure on which the probe spread is plotted
     """
+    tdisable, tqdm = tqdm_handler(showProgress)
+
     # Calculate multislice propagator and transmission functions
     from .Premixed_routines import multislice_precursor
 
@@ -714,9 +753,10 @@ def generate_probe_spread_plot(
             subslices=subslices,
             tiling=tiling,
             device=device,
-            nT=1,
-            showProgress=False,
+            nT=nT,
+            showProgress=showProgress,
         )
+        
 
     # Calculate focused STEM probe
     probe = focused_probe(
@@ -743,10 +783,10 @@ def generate_probe_spread_plot(
     # Array must be shifted to center probe position
     shift = (pos * np.asarray(gridshape)).astype(int)
 
-    for i in range(maxslices):
+    for i in tqdm(range(maxslices), disable = tdisable, desc = "Running multislice"):
         probe = multislice(
             probe,
-            [1],
+            [i % len(subslices)],
             P,
             T,
             tiling=tiling,
@@ -754,6 +794,7 @@ def generate_probe_spread_plot(
             output_to_bandwidth_limit=False,
             device_type=device,
         )
+        
         mod = np.roll(np.abs(probe) ** 2, shift=-shift, axis=(-2, -1))
         # Record probe intensity and spread
         intensity[i] = np.sum(mod)
@@ -787,9 +828,7 @@ def generate_probe_spread_plot(
     nz, ny = crossection.shape
     if showcrossection:
         ax[0, 1].imshow(
-            fourier_interpolate(
-                np.fft.fftshift(np.sqrt(crossection), axes=1), [ny, ny]
-            ),
+            np.fft.fftshift(np.sqrt(crossection), axes=1),
             extent=[0, gridshape[0], thickness, 0],
             cmap=plt.get_cmap("gnuplot"),
         )
@@ -822,6 +861,7 @@ def STEM(
     method_args=(),
     method_kwargs={},
     STEM_image=None,
+    Veff=None,
 ):
     """
     Perform a scanning transmission electron microscopy (STEM) image simulation.
@@ -864,9 +904,10 @@ def STEM(
         initialized in the function. If a datacube is passed then the result
         will be added by the STEM routine (useful for multiple frozen phonon
         iterations)
-    PACBED : bool
+    PACBED : bool or array_like, optional
         If True the STEM function will calculate a position averaged convergent
-        electron diffraction (PABCED) pattern by averaging the diffraction space
+        electron diffraction (PABCED) pattern by averaging the diffraction space.
+        Passing an array will specify the size to crop the PACBED pattern to.
     scan_posn :  (...,2) array_like, optional
         Array containing the STEM scan positions in fractional coordinates.
         If provided scan_posn.shape[:-1] will give the shape of the STEM image.
@@ -895,6 +936,9 @@ def STEM(
         will be initialized within the function. If it is passed then the result
         will be accumulated within the function, which is useful for multiple
         frozen phonon iterations.
+    Veff: (nelements,nsubslices,Y,X) complex torch.tensor, optional
+        Effective scattering potential (μ's) for EELS and/or EDX
+
     Returns
     -------
     Result : dict
@@ -911,7 +955,7 @@ def STEM(
     # Get number of thicknesses in the series
     nthick = len(nslices)
 
-    if isinstance(nslices[0], int):
+    if isinstance(nslices[0], (int, np.integer)):
         nslices_ = np.diff(nslices, prepend=0)
     else:
         nslices_ = nslices
@@ -960,7 +1004,6 @@ def STEM(
 
     # Initialize array in which to store resulting 4D-STEM datacube if required
     if FourD_STEM:
-
         # Get diffraction pattern gridsize in pixels from input and function
         # to resample the simulation output to store in the datacube
         gridout, resize, _ = workout_4DSTEM_datacube_DP_size(
@@ -972,9 +1015,20 @@ def STEM(
             datacube = np.zeros((nthick, *scan_shape, *gridout))
 
     if PACBED:
+        # Get PACBED pattern gridsize in pixels from input and function
+        # to resample the simulation output to store in the datacube
+        gridout2, resize2, _ = workout_4DSTEM_datacube_DP_size(
+            PACBED, rsize, gridshape
+        )
         PACBED_pattern = torch.zeros((nthick, *gridshape), device=device)
     else:
         PACBED_pattern = None
+
+    if Veff is not None:
+        nsignals = Veff.shape[0]
+        crosssec_images = np.zeros((nsignals,nthick,nscantot))
+    else:
+        crosssec_images = None
 
     # This algorithm allows for "batches" of probe to be sent through the
     # multislice algorithm to achieve some speed up at the cost of storing more
@@ -1010,12 +1064,23 @@ def STEM(
         # Apply shift to original probe
         probes = probe_.view(1, *probe_.size()) * probes
 
+        if Veff is not None:
+            crosssec = np.zeros((nsignals,len(scan_index)))
+
         # Thickness series
         for it, t in enumerate(nslices_):
+            if Veff is not None:
+                probes = (probes,crosssec)
+
             # Evaluate exit surface wave function from input probes
             probes = method(
-                probes, t, *method_args, posn=scan_posn[scan_index], **method_kwargs
+                probes, t, *method_args, posn=scan_posn[scan_index], **method_kwargs, Veff=Veff
             )
+
+            if Veff is not None:
+                crosssec=probes[1]
+                probes=probes[0]
+                crosssec_images[:,it,scan_index]=crosssec
 
             # Calculate amplitude of probes, a real output is assumed to be the
             # amplitude of the exit surface wave function. Also correct
@@ -1048,11 +1113,16 @@ def STEM(
             if not cmplxout:
                 break
 
+    if Veff is not None:
+        STEM_crosssection_images = crosssec_images.reshape(nsignals,nthick,*scan_shape)
+    else:
+        STEM_crosssection_images = None
+
     if conventional_STEM:
-        STEM_image = np.squeeze(STEM_image.reshape(ndet, nthick, *scan_shape))
+        STEM_image = STEM_image.reshape(ndet, nthick, *scan_shape)
     if PACBED:
-        PACBED_pattern = np.fft.fftshift(PACBED_pattern.cpu().numpy(), axes=(-2, -1))
-    return {"STEM images": STEM_image, "datacube": datacube, "PACBED": PACBED_pattern}
+        PACBED_pattern = resize2(PACBED_pattern.cpu().numpy())
+    return {"STEM images": STEM_image, "datacube": datacube, "PACBED": PACBED_pattern, "STEM crosssection images": STEM_crosssection_images}
 
 
 def unit_cell_shift(array, axis, shift, tiles):
@@ -1213,7 +1283,7 @@ class scattering_matrix:
             )
         )
         self.beams = [(x + y // 2) % y - y // 2 for x, y in zip(self.beams, gridshape)]
-
+        self.beam_mapping = np.c_[self.beams[0], self.beams[1]]
         self.nbeams = len(self.beams[0])
 
         # For a scattering matrix stored in real space there is the option
@@ -1348,6 +1418,9 @@ class scattering_matrix:
                 self.S = torch.zeros(
                     self.nbeams, self.nbout, dtype=self.dtype, device=self.device
                 )
+                self.S2 = torch.zeros(
+                    self.nbeams, self.nbeams, dtype=self.dtype, device=self.device
+                )
             else:
                 self.S = torch.zeros(
                     self.nbeams,
@@ -1376,7 +1449,8 @@ class scattering_matrix:
                 psi *= torch.prod(torch.tensor(self.PRISM_factor, dtype=self.dtype))
 
                 if self.Fourier_space_output:
-                    self.S[ibeam] = psi[self.bw_mapping[:, 0], self.bw_mapping[:, 1], :]
+                    self.S[ibeam] = psi[self.bw_mapping[:, 0], self.bw_mapping[:, 1]]
+                    self.S2[ibeam] = psi[self.beam_mapping[:, 0], self.beam_mapping[:, 1]]
                 else:
                     self.S[ibeam] = fourier_interpolate_torch(
                         psi,
@@ -1453,7 +1527,7 @@ class scattering_matrix:
                 )
                 # Expand S-matrix input to full grid for multislice propagation
                 psi[
-                    : beams.shape[0], self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
+                    : beams.shape[0], self.bw_mapping[:, 0], self.bw_mapping[:, 1]
                 ] = self.S[beams]
             else:
                 # Fourier interpolate stored real space S-matrix column onto
@@ -1485,10 +1559,13 @@ class scattering_matrix:
                 output = output.to(self.device)
 
             if self.Fourier_space_output:
-
                 self.S[beams] = output[
-                    :, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :
+                    :, self.bw_mapping[:, 0], self.bw_mapping[:, 1]
                 ] * np.sqrt(np.prod(self.stored_gridshape) / np.prod(self.gridshape))
+
+                self.S2[beams] = output[
+                    :, self.beam_mapping[:, 0], self.beam_mapping[:, 1]
+                ] / np.sqrt(np.prod(self.gridshape))
             else:
                 output = fourier_interpolate_torch(
                     output, self.stored_gridshape, norm="conserve_norm"
@@ -1511,7 +1588,7 @@ class scattering_matrix:
         ]
         return crop_
 
-    def __call__(self, probes, nslices, posn=None, Smat=None, scan_transform=None):
+    def __call__(self, probes, nslices, posn=None, Smat=None, scan_transform=None, Veff = None):
         """
         Calculate exit-surface waves function using the scattering matrix.
 
@@ -1574,9 +1651,9 @@ class scattering_matrix:
 
             # Now reshape output from vectors to square arrays
             probes = torch.zeros(
-                nprobes, *self.stored_gridshape, 2, dtype=self.dtype, device=self.device
+                nprobes, *self.stored_gridshape, dtype=self.dtype, device=self.device
             )
-            probes[:, self.bw_mapping[:, 0], self.bw_mapping[:, 1], :] = probe_vec
+            probes[:, self.bw_mapping[:, 0], self.bw_mapping[:, 1]] = probe_vec
 
             # Apply PRISM cropping in real space if appropriate
             if self.doPRISM:
@@ -1904,9 +1981,9 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     to the y and x centre of mass respectively.
     """
     # Get shape of arrays
-    ny, nx = com.shape[1:]
-    s = (ny, nx)
-    s = None
+    ny, nx = com.shape[-2:]
+    s = (ny, nx) # Shape of the real output to the inverse FFT.
+    # s = None
 
     d = np.asarray(rsize) / np.asarray([ny, nx])
     # Calculate Fourier coordinates for array
@@ -1919,8 +1996,8 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     denominator = 1j * ((kx ** 2)[None, :] + (ky ** 2)[:, None]) + reg
 
     # Avoid a divide by zero for the origin of the Fourier coordinates
-    numerator[0, 0] = 0
-    denominator[0, 0] = 1
+    numerator[...,0, 0] = 0
+    denominator[...,0, 0] = 1
 
     # Return real part of the inverse Fourier transform
-    return np.fft.irfft2(numerator / denominator)
+    return np.fft.irfft2(numerator / denominator, s=s)
