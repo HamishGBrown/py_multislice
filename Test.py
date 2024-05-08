@@ -23,7 +23,7 @@ def sumsqr(array):
     return np.sum(np.square(np.abs(array)))
 
 
-def sumsqr_diff(array1, array2,norm=False):
+def sumsqr_diff(array1, array2, norm=False):
     """Calculate the sum of squares normalized difference of two arrays."""
     if norm:
         return sumsqr(array1 - array2) / sumsqr(array1)
@@ -37,7 +37,7 @@ def clean_temp_structure():
         os.remove(scratch_cell_name)
 
 
-def Single_atom(Z=79, r=[0.5, 0.5, 0.5], R=[10.0, 10.0, 10.0],dwf = 0.0):
+def Single_atom(Z=79, r=[0.5, 0.5, 0.5], R=[10.0, 10.0, 10.0], dwf=0.0):
     """Single atom structure for testing."""
     atoms = np.asarray(
         [
@@ -495,32 +495,42 @@ class Test_Structure_Methods(unittest.TestCase):
 
     def test_atom_placement(self):
         """Test that the code places atoms in the correct location with correct
-           mean square vibration"""
+        mean square vibration"""
         nT = 128
-        gridshape = [128,128]
+        gridshape = [128, 128]
         # Make single Silver atom
         R = 10
         dwf = 0.02
-        r = [0.25,0.25,0.25]
-        cell = Single_atom(r=r, Z=2, R=[R, R, 2],dwf=dwf)
+        r = [0.25, 0.25, 0.25]
+        cell = Single_atom(r=r, Z=2, R=[R, R, 2], dwf=dwf)
 
-        pot = np.zeros([nT]+gridshape)
+        pot = np.zeros([nT] + gridshape)
         for i in range(nT):
             pot[i] = cell.make_potential(gridshape).cpu().numpy()
 
         # Calculate COM in fraction of unit cell
-        M = np.sum(pot,axis=(-2,-1))
-        COMx = np.sum(pot*np.arange(gridshape[-1])/gridshape[-1],axis=(-2,-1))/M
-        COMy = np.sum(pot*np.arange(gridshape[-2]).reshape([gridshape[-2],1])/gridshape[-2],axis=(-2,-1))/M
-        COM = np.stack([COMy,COMx],axis=0)
+        M = np.sum(pot, axis=(-2, -1))
+        COMx = np.sum(pot * np.arange(gridshape[-1]) / gridshape[-1], axis=(-2, -1)) / M
+        COMy = (
+            np.sum(
+                pot
+                * np.arange(gridshape[-2]).reshape([gridshape[-2], 1])
+                / gridshape[-2],
+                axis=(-2, -1),
+            )
+            / M
+        )
+        COM = np.stack([COMy, COMx], axis=0)
         # fig,ax=plt.subplots(ncols=2)
         # ax[0].imshow(np.sum(pot,axis=0),origin='lower')
         # ax[1].plot(COMx,COMy,'bo')
         # plt.show(block=True)
 
-        moving_average = np.cumsum(COM,axis=1)/(np.arange(nT)+1)
-        moving_ms = np.cumsum(COMx**2+COMy**2)/(np.arange(nT)+1)/2 - np.average(moving_average**2,axis=0)
-        moving_ms*= R**2
+        moving_average = np.cumsum(COM, axis=1) / (np.arange(nT) + 1)
+        moving_ms = np.cumsum(COMx ** 2 + COMy ** 2) / (
+            np.arange(nT) + 1
+        ) / 2 - np.average(moving_average ** 2, axis=0)
+        moving_ms *= R ** 2
 
         # fig,ax = plt.subplots(ncols=2)
         # ax[0].plot(COMx,COMy,'bo')
@@ -529,16 +539,15 @@ class Test_Structure_Methods(unittest.TestCase):
         # ax[0].add_patch(Circle(r[:2],radius=np.sqrt(dwf)/R))
         # plt.show(block=True)
 
-        meanCOM = np.sum(COM,axis=1)/nT
+        meanCOM = np.sum(COM, axis=1) / nT
         # 5 Sigma test, ie. 1/3.5 million probability of failing assuming correct functioning
-        fiveSigma = dwf/nT*5**2
-        sigmaofvariance = dwf*np.sqrt(2/(nT-1))
-        muwithinspec = np.sum((meanCOM-r[0])**2) < fiveSigma
-        sigmawithinspec = np.abs(moving_ms[-1]-dwf) < 5*sigmaofvariance
+        fiveSigma = dwf / nT * 5 ** 2
+        sigmaofvariance = dwf * np.sqrt(2 / (nT - 1))
+        muwithinspec = np.sum((meanCOM - r[0]) ** 2) < fiveSigma
+        sigmawithinspec = np.abs(moving_ms[-1] - dwf) < 5 * sigmaofvariance
 
         withinspec = sigmawithinspec and muwithinspec
         self.assertTrue(withinspec)
-
 
     def test_resize(self):
         """Test the structure resize routine for cropping and padding with vaccuum."""
@@ -767,7 +776,7 @@ class Test_ionization_methods(unittest.TestCase):
         """
         # A 5 x 5 x 5 Angstrom cell with an oxygen
         cell = [5, 5, 0.0001]
-        atoms = [[0.0, 0.0, 0.0, 8]]
+        atoms = [[0.1, 0.5, 0.0, 8]]
         crystal = pyms.structure(cell, atoms, dwf=[0.0])
         gridshape = [128, 128]
         eV = 3e5
@@ -874,11 +883,15 @@ class Test_ionization_methods(unittest.TestCase):
         Hn0 *= T[0, 0].cpu().numpy() / np.sqrt(np.prod(gridshape))
 
         reference = np.fft.fftshift(
-            pyms.utils.fourier_interpolate(
-                np.abs(np.fft.ifft2(ctf * np.fft.fft2(Hn0[0]))) ** 2,
-                result.shape,
-                "conserve_L1",
-                qspace_out=False,
+            pyms.utils.fourier_shift(
+                pyms.utils.fourier_interpolate(
+                    np.abs(np.fft.ifft2(ctf * np.fft.fft2(Hn0[0]))) ** 2,
+                    result.shape,
+                    "conserve_L1",
+                    qspace_out=False,
+                ),
+                atoms[0][:2],
+                pixel_units=False,
             )
         )
 
@@ -891,12 +904,13 @@ class Test_ionization_methods(unittest.TestCase):
         STEM_adj = np.sum(np.abs(STEM_adj) ** 2)
         STEM_images *= STEM_adj / np.prod(result.shape)
 
-        # import matplotlib.pyplot as plt
-        # fig,ax = plt.subplots(nrows=3)
-        # ax[0].imshow(reference)
-        # ax[1].imshow(result)
-        # ax[2].imshow(np.squeeze(STEM_images))
-        # plt.show(block=True)
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(nrows=3)
+        ax[0].imshow(reference)
+        ax[1].imshow(result)
+        ax[2].imshow(np.squeeze(STEM_images))
+        plt.show(block=True)
 
         passEFTEM = np.sum(np.abs(result - reference) ** 2) < 1e-7
         passSTEMEELS = np.sum(np.abs(STEM_images - reference) ** 2) < 1e-7
@@ -1041,8 +1055,8 @@ class Test_py_multislice_Methods(unittest.TestCase):
             band_width_limiting=[1, 1],
             displacements=True,
             subslices=subslicing,
+            showProgress=False,
         )
-        # print(T.shape)
         # fig,ax = plt.subplots(ncols=3)
         # ax[0].imshow(np.angle(P))
         # ax[1].imshow(np.imag(np.fft.ifft2(T[0,0].cpu().numpy())))
@@ -1354,13 +1368,13 @@ class Test_py_multislice_Methods(unittest.TestCase):
             np.abs(probe) ** 2, np.angle(T[0, 0].cpu().numpy())
         )
         convolved_phase -= np.amin(convolved_phase)
-
         reconstructed_phase = pyms.utils.fourier_interpolate(
-            np.tile(result["DPC"], tiling), gridshape
+            np.tile(result["DPC"][-1], tiling), gridshape
         )
+
         reconstructed_phase -= np.amin(reconstructed_phase)
 
-        fig,ax = plt.subplots(ncols=4)
+        fig, ax = plt.subplots(ncols=4)
         # from PIL import Image
         # Image.fromarray(convolved_phase).save('convolvedphase.tif')
         # ax[0].imshow(convolved_phase)
@@ -1369,10 +1383,8 @@ class Test_py_multislice_Methods(unittest.TestCase):
         # ax[2].imshow(convolved_phase-reconstructed_phase)
         # ax[3].imshow((convolved_phase-reconstructed_phase),vmin=convolved_phase.min(),vmax=convolved_phase.max())
         # plt.show(block=True)
-        # print(sumsqr_diff(convolved_phase, reconstructed_phase,norm=True) )
         self.assertTrue(
-            sumsqr_diff(convolved_phase, reconstructed_phase,norm=True)
-            < 1e-1
+            sumsqr_diff(convolved_phase, reconstructed_phase, norm=True) < 1e-1
         )
 
     def test_Smatrix(self):
@@ -1663,29 +1675,39 @@ class Test_util_Methods(unittest.TestCase):
         # Arrays are compared in real space since a 1/#pixels scaling is applied
         # to arrays with a standard FFT and the crop_to_bandwidth_limit
         # scales to account for this
-        passtest = passtest and sumsqr_diff(sumsqr(np.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
+        passtest = (
+            passtest
+            and sumsqr_diff(sumsqr(np.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
+        )
         in_ = np.ones(oddgridshape)
         bwlimited = pyms.utils.bandwidth_limit_array(in_)
         cropped = np.fft.ifft2(pyms.utils.crop_to_bandwidth_limit(bwlimited))
-        passtest = passtest and sumsqr_diff(sumsqr(np.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
+        passtest = (
+            passtest
+            and sumsqr_diff(sumsqr(np.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
+        )
 
         # Now test torch version
         in_ = np.ones(oddgridshape)
         bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
         cropped = torch.fft.ifft2(pyms.utils.crop_to_bandwidth_limit_torch(bwlimited))
         passtest = (
-            passtest and sumsqr_diff(sumsqr(torch.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
+            passtest
+            and sumsqr_diff(sumsqr(torch.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
         )
         # fig,ax = plt.subplots(ncols=2)
         # ax[0].imshow(np.abs(bwlimited[1].cpu().numpy()))
         # ax[1].imshow(np.abs(torch.fft.fft2(cropped[1].cpu().numpy())))
         # plt.show(block=True)
         in_ = np.ones(evengridshape)
-        bwlimited = torch.fft.ifft2(pyms.utils.bandwidth_limit_array(torch.from_numpy(in_)))
+        bwlimited = torch.fft.ifft2(
+            pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
+        )
         cropped = torch.fft.ifft2(pyms.utils.crop_to_bandwidth_limit_torch(bwlimited))
 
         passtest = (
-            passtest and sumsqr_diff(sumsqr(torch.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
+            passtest
+            and sumsqr_diff(sumsqr(torch.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
         )
 
         # pytorch test with complex numbers
@@ -1693,13 +1715,15 @@ class Test_util_Methods(unittest.TestCase):
         bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
         cropped = torch.fft.ifft2(pyms.utils.crop_to_bandwidth_limit_torch(bwlimited))
         passtest = (
-            passtest and sumsqr_diff(sumsqr(torch.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
+            passtest
+            and sumsqr_diff(sumsqr(torch.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
         )
         in_ = np.ones(evengridshape, dtype=complex)
         bwlimited = pyms.utils.bandwidth_limit_array(torch.from_numpy(in_))
         cropped = torch.fft.ifft2(pyms.utils.crop_to_bandwidth_limit_torch(bwlimited))
         passtest = (
-            passtest and sumsqr_diff(sumsqr(torch.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
+            passtest
+            and sumsqr_diff(sumsqr(torch.fft.ifft2(bwlimited)), sumsqr(cropped)) < 1e-10
         )
         self.assertTrue(passtest)
 
@@ -1950,7 +1974,9 @@ class Test_util_Methods(unittest.TestCase):
         # Get astonaut image
         from skimage.data import astronaut
 
-        im = np.sum(astronaut(), axis=2).astype(pyms._float)
+        # 7/5/2024 added singleton axes to front of array to test
+        # both functions work with multi-dimensional arrays
+        im = np.sum(astronaut(), axis=2).astype(pyms._float)[np.newaxis, np.newaxis]
 
         passTest = True
 
@@ -1961,7 +1987,8 @@ class Test_util_Methods(unittest.TestCase):
             # Check that normal cropping works
             cropPass = (
                 sumsqr_diff(
-                    c_func(img, [256, 256]), img[128 : 512 - 128, 128 : 512 - 128]
+                    c_func(img, [256, 256])[0, 0],
+                    img[0, 0, 128 : 512 - 128, 128 : 512 - 128],
                 )
                 < 1e-10
             )
@@ -1970,7 +1997,7 @@ class Test_util_Methods(unittest.TestCase):
             # If an output size larger than that of the input is requested then the
             # input array should be padded instead, check that this is working too.
             pad = c_func(img, [700, 700])
-            pad[350 - 256 : 350 + 256, 350 - 256 : 350 + 256] -= img
+            pad[..., 350 - 256 : 350 + 256, 350 - 256 : 350 + 256] -= img
             padPass = sumsqr(pad) < 1e-10
             passTest = passTest and padPass
 
@@ -2030,6 +2057,8 @@ class Test_util_Methods(unittest.TestCase):
 if __name__ == "__main__":
     # test = Test_util_Methods()
     # test.test_crop_tobandwidthlimit()
+    # test.test_crop()
+    # import sys;sys.exit()
 
     # test = Test_py_multislice_Methods()
     # test.test_DPC()
@@ -2042,11 +2071,18 @@ if __name__ == "__main__":
     # import sys; sys.exit()
     # # test.test_propagator()
     # sys.exit()
-    # test = Test_ionization_methods()
+    test = Test_ionization_methods()
+    test.test_EFTEM_and_multislice_STEM_EELS()
+    # test.test_PRISM_STEM_EELS()
+    test.run()
+    import sys
+
+    sys.exit()
     # test.test_PRISM_STEM_EELS()
     # import sys;sys.exit()
     # suite = unittest.TestSuite(tests = (Test_util_Methods(),))
     # suite.run()
+    # import sys; sys.exit()
     # test.run()
     # test = Test_Structure_Methods()
     # test.test_atom_placement()
@@ -2058,7 +2094,7 @@ if __name__ == "__main__":
     # test = Test_py_multislice_Methods()
     # test.test_reverse_multislice()
 
-    unittest.main()
+    unittest.main(verbosity=2)
     clean_temp_structure()
     import sys
 

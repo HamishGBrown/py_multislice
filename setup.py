@@ -23,6 +23,7 @@ setup(
         "pypng",
         "hankel",
         "ipywidgets",
-        "ipympl"
+        "ipympl",
+        "sympy"
     ],
 )

@@ -268,8 +268,8 @@ def multislice(
     device = get_device(device_type)
 
     if Veff is not None:
-        crosssec=probes[1]
-        probes=probes[0]
+        crosssec = probes[1]
+        probes = probes[0]
         nsignals = crosssec.shape[0]
         batch_size = crosssec.shape[1]
         value = torch.zeros((batch_size,), dtype=torch.cfloat, device=device)
@@ -298,7 +298,7 @@ def multislice(
         psi = torch.fft.ifftn(psi, dim=d_)
 
     slices = generate_slice_indices(nslices, nsubslices, subslicing)
-    
+
     def conjugateornot(array, conjugate):
         if conjugate:
             return torch.conj(array)
@@ -313,7 +313,7 @@ def multislice(
             r = np.random.RandomState(seed[islice])
 
         subslice = islice % nsubslices
-        
+
         # Calculate contribution to cross-sections (done before multislice iteration
         # while psi to be in real space; consistent with transmit before propagate;
         # whether using frozen phonon or absortpive, assume Veff includes Debye-Waller
@@ -321,9 +321,11 @@ def multislice(
         if Veff is not None:
             modpsisq = psi * torch.conj(psi)
             for isignal in range(nsignals):
-                value[0:batch_size] = torch.sum(torch.fft.fftn(modpsisq, dim=d_) * Veff[isignal,subslice,:,:], dim=d_)
-                crosssec[isignal,0:batch_size] += value.cpu().numpy().real
-
+                value[0:batch_size] = torch.sum(
+                    torch.fft.fftn(modpsisq, dim=d_) * Veff[isignal, subslice, :, :],
+                    dim=d_,
+                )
+                crosssec[isignal, 0:batch_size] += value.cpu().numpy().real
 
         # Pick random phase grating
         it = r.randint(0, nT)
@@ -403,8 +405,8 @@ def multislice(
 
     if Veff is not None:
         if return_numpy:
-            return (psi.cpu().numpy(),crosssec)
-        return (psi,crosssec)
+            return (psi.cpu().numpy(), crosssec)
+        return (psi, crosssec)
     else:
         if return_numpy:
             return psi.cpu().numpy()
@@ -678,8 +680,8 @@ def generate_probe_spread_plot(
     P=None,
     T=None,
     nslices=None,
-    nT = 1,
-    showProgress = True,
+    nT=1,
+    showProgress=True,
 ):
     """
     Generate probe spread plot to assist with selection of appropriate multislice grid.
@@ -756,7 +758,6 @@ def generate_probe_spread_plot(
             nT=nT,
             showProgress=showProgress,
         )
-        
 
     # Calculate focused STEM probe
     probe = focused_probe(
@@ -783,7 +784,7 @@ def generate_probe_spread_plot(
     # Array must be shifted to center probe position
     shift = (pos * np.asarray(gridshape)).astype(int)
 
-    for i in tqdm(range(maxslices), disable = tdisable, desc = "Running multislice"):
+    for i in tqdm(range(maxslices), disable=tdisable, desc="Running multislice"):
         probe = multislice(
             probe,
             [i % len(subslices)],
@@ -794,7 +795,7 @@ def generate_probe_spread_plot(
             output_to_bandwidth_limit=False,
             device_type=device,
         )
-        
+
         mod = np.roll(np.abs(probe) ** 2, shift=-shift, axis=(-2, -1))
         # Record probe intensity and spread
         intensity[i] = np.sum(mod)
@@ -1017,16 +1018,14 @@ def STEM(
     if PACBED:
         # Get PACBED pattern gridsize in pixels from input and function
         # to resample the simulation output to store in the datacube
-        gridout2, resize2, _ = workout_4DSTEM_datacube_DP_size(
-            PACBED, rsize, gridshape
-        )
+        gridout2, resize2, _ = workout_4DSTEM_datacube_DP_size(PACBED, rsize, gridshape)
         PACBED_pattern = torch.zeros((nthick, *gridshape), device=device)
     else:
         PACBED_pattern = None
 
     if Veff is not None:
         nsignals = Veff.shape[0]
-        crosssec_images = np.zeros((nsignals,nthick,nscantot))
+        crosssec_images = np.zeros((nsignals, nthick, nscantot))
     else:
         crosssec_images = None
 
@@ -1065,22 +1064,27 @@ def STEM(
         probes = probe_.view(1, *probe_.size()) * probes
 
         if Veff is not None:
-            crosssec = np.zeros((nsignals,len(scan_index)))
+            crosssec = np.zeros((nsignals, len(scan_index)))
 
         # Thickness series
         for it, t in enumerate(nslices_):
             if Veff is not None:
-                probes = (probes,crosssec)
+                probes = (probes, crosssec)
 
             # Evaluate exit surface wave function from input probes
             probes = method(
-                probes, t, *method_args, posn=scan_posn[scan_index], **method_kwargs, Veff=Veff
+                probes,
+                t,
+                *method_args,
+                posn=scan_posn[scan_index],
+                **method_kwargs,
+                Veff=Veff
             )
 
             if Veff is not None:
-                crosssec=probes[1]
-                probes=probes[0]
-                crosssec_images[:,it,scan_index]=crosssec
+                crosssec = probes[1]
+                probes = probes[0]
+                crosssec_images[:, it, scan_index] = crosssec
 
             # Calculate amplitude of probes, a real output is assumed to be the
             # amplitude of the exit surface wave function. Also correct
@@ -1114,7 +1118,9 @@ def STEM(
                 break
 
     if Veff is not None:
-        STEM_crosssection_images = crosssec_images.reshape(nsignals,nthick,*scan_shape)
+        STEM_crosssection_images = crosssec_images.reshape(
+            nsignals, nthick, *scan_shape
+        )
     else:
         STEM_crosssection_images = None
 
@@ -1122,7 +1128,12 @@ def STEM(
         STEM_image = STEM_image.reshape(ndet, nthick, *scan_shape)
     if PACBED:
         PACBED_pattern = resize2(PACBED_pattern.cpu().numpy())
-    return {"STEM images": STEM_image, "datacube": datacube, "PACBED": PACBED_pattern, "STEM crosssection images": STEM_crosssection_images}
+    return {
+        "STEM images": STEM_image,
+        "datacube": datacube,
+        "PACBED": PACBED_pattern,
+        "STEM crosssection images": STEM_crosssection_images,
+    }
 
 
 def unit_cell_shift(array, axis, shift, tiles):
@@ -1450,7 +1461,9 @@ class scattering_matrix:
 
                 if self.Fourier_space_output:
                     self.S[ibeam] = psi[self.bw_mapping[:, 0], self.bw_mapping[:, 1]]
-                    self.S2[ibeam] = psi[self.beam_mapping[:, 0], self.beam_mapping[:, 1]]
+                    self.S2[ibeam] = psi[
+                        self.beam_mapping[:, 0], self.beam_mapping[:, 1]
+                    ]
                 else:
                     self.S[ibeam] = fourier_interpolate_torch(
                         psi,
@@ -1588,7 +1601,9 @@ class scattering_matrix:
         ]
         return crop_
 
-    def __call__(self, probes, nslices, posn=None, Smat=None, scan_transform=None, Veff = None):
+    def __call__(
+        self, probes, nslices, posn=None, Smat=None, scan_transform=None, Veff=None
+    ):
         """
         Calculate exit-surface waves function using the scattering matrix.
 
@@ -1982,7 +1997,7 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     """
     # Get shape of arrays
     ny, nx = com.shape[-2:]
-    s = (ny, nx) # Shape of the real output to the inverse FFT.
+    s = (ny, nx)  # Shape of the real output to the inverse FFT.
     # s = None
 
     d = np.asarray(rsize) / np.asarray([ny, nx])
@@ -1996,8 +2011,8 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     denominator = 1j * ((kx ** 2)[None, :] + (ky ** 2)[:, None]) + reg
 
     # Avoid a divide by zero for the origin of the Fourier coordinates
-    numerator[...,0, 0] = 0
-    denominator[...,0, 0] = 1
+    numerator[..., 0, 0] = 0
+    denominator[..., 0, 0] = 1
 
     # Return real part of the inverse Fourier transform
     return np.fft.irfft2(numerator / denominator, s=s)

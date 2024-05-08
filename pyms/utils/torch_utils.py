@@ -560,7 +560,5 @@ def crop_torch(arrayin, shapeout):
 
     ind = [indices(x, x_) for x, x_ in zip(oldshape, newshape)]
     inind, outind = map(tuple, zip(*ind))
-    arrayout[nUntouched * (Ellipsis,) + outind] = arrayin[
-        nUntouched * (Ellipsis,) + inind
-    ]
+    arrayout[(Ellipsis,) + outind] = arrayin[(Ellipsis,) + inind]
     return arrayout

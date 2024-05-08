@@ -79,7 +79,7 @@ if __name__ == "__main__":
     ZZ = 14
     ncols = 3
     fig = plt.figure(figsize=(4, 4 * ncols))
-    ax = fig.add_subplot("311", projection="3d")
+    ax = fig.add_subplot(311, projection="3d")
     lprime = 0
     excited = pyms.orbital(ZZ, excited_config, 0, lprime, epsilon)
     Z = (
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     ax.set_ylabel("y")
     ax.set_zlabel("z")
 
-    ax = fig.add_subplot("312", projection="3d")
+    ax = fig.add_subplot(312, projection="3d")
     lprime = 1
     excited = pyms.orbital(ZZ, excited_config, 0, lprime, epsilon)
     mlprime = 0
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     ax.set_zlim([0.00, 0.20])
     ax.set_ylabel("y")
     ax.set_zlabel("z")
-    ax = fig.add_subplot("313", projection="3d")
+    ax = fig.add_subplot(313, projection="3d")
     mlprime = 1
     Z = (
         pyms.utils.crop(

@@ -22,10 +22,12 @@ from .Probe import wavev, relativistic_mass_correction
 from .utils.numpy_utils import fourier_shift
 from .py_multislice import multislice, tqdm_handler
 from .utils.torch_utils import (
+    complex_dtype_to_real,
     amplitude,
     ensure_torch_array,
     fourier_shift_torch,
     get_device,
+    crop_to_bandwidth_limit_torch,
 )
 from hankel import HankelTransform
 import pyms
@@ -485,11 +487,11 @@ def transition_potential(
         if is_arr:
             q_ = q
         else:
-            q_ = np.asarray([q]) 
+            q_ = np.asarray([q])
 
         # Perform Hankel Transform
         ht = HankelTransform(
-            nu=int(lprimeprime)+.5,
+            nu=int(lprimeprime) + 0.5,
             N=200,
             h=0.0001,
         )
@@ -498,27 +500,33 @@ def transition_potential(
             f_r = np.empty(r.shape)
             f_r[r >= rmax] = 0
             rn = r[r < rmax]
-            f_r[r < rmax] = orb1(rn) * orb2(rn) / rn**1.5
+            f_r[r < rmax] = orb1(rn) * orb2(rn) / rn ** 1.5
 
             return f_r
 
+        # Set up diffraction space grid, a0 is Bohr radius
         grid = 2 * np.pi * q_ * a0
-        jq = ht.transform(integrand, grid, ret_err=False) * np.sqrt(np.pi/2) / grid**0.5
-        
-        # Expression no longer valid for k = 0 so we integrate numerically
 
+        # The Hankel transform approach diverges at q=0, so identify grid-points
+        # where this happens, the zero_mask and non-zero mask (nzm) are stored
         zero_mask = grid == 0
+        nzm = np.logical_not(zero_mask)
 
+        # Initialize array for jq and calculate using Hankel transform for q != 0
+        jq = np.zeros_like(grid)
+        jq[nzm] = (
+            ht.transform(integrand, grid[nzm], ret_err=False)
+            * np.sqrt(np.pi / 2)
+            / grid[nzm] ** 0.5
+        )
+
+        # Expression no longer valid for q = 0 so we integrate numerically
         jq_zero = []
-        for q_zero in grid[zero_mask]:
+        for q_zero, j in zip(grid[zero_mask], jq[zero_mask]):
             overlap_kernel = (
-                    lambda x: orb1(x) * spherical_jn(lprimeprime, q_zero * x) * orb2(x)
-                )
-            jq_zero.append(
-                integrate.quad(overlap_kernel, 0, rmax)[0]
+                lambda x: orb1(x) * spherical_jn(lprimeprime, q_zero * x) * orb2(x)
             )
-
-        jq[zero_mask] = jq_zero
+            j = integrate.quad(overlap_kernel, 0, rmax)[0]
 
         # Bound wave function was in units of 1/sqrt(bohr-radii) and excited
         # wave function was in units of 1/sqrt(bohr-radii Rydbergs) integration
@@ -536,9 +544,7 @@ def transition_potential(
     # The triangle inequality for the Wigner 3j symbols mean that result is
     # only non-zero for certain values of lprimeprime:
     # |l-lprime|<=lprimeprime<=|l+lprime|
-    lprimeprimes = np.arange(
-        np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=int
-    )
+    lprimeprimes = np.arange(np.abs(ell - lprime), np.abs(ell + lprime) + 1, dtype=int)
     if lprimeprimes.shape[0] < 1:
         return None
 
@@ -546,7 +552,6 @@ def transition_potential(
         jq = None
         # Set of projection quantum numbers
         mlprimeprimes = np.arange(-lprimeprime, lprimeprime + 1, dtype=int)
-
 
         # Non mlprimeprime dependent part of prefactor from Eq (13) from
         # Dwyer Ultramicroscopy 104 (2005) 141-151
@@ -626,6 +631,7 @@ def transition_potential_multislice(
     threshhold=1e-4,
     showProgress=True,
     tqposition=0,
+    Veff=None,
 ):
     """
     Perform a multislice calculation with a transition potential for ionization.
@@ -683,7 +689,10 @@ def transition_potential_multislice(
     # Ensure pytorch arrays
     transmission_functions = ensure_torch_array(transmission_functions)
 
+    # Infer datatype (32-bit or 64-bit float)
     dtype = transmission_functions.dtype
+    rdtype = complex_dtype_to_real(dtype)
+
     ionization_potentials = ensure_torch_array(
         ionization_potentials, dtype=dtype, device=device
     )
@@ -693,12 +702,12 @@ def transition_potential_multislice(
     propagators = ensure_torch_array(propagators, dtype=dtype, device=device)
     probes = ensure_torch_array(probes, dtype=dtype, device=device)
 
-    if len(probes.shape) < 4:
+    if len(probes.shape) < 3:
         probes = probes.view((1, *probes.shape))
 
     # If Fourier space probes are passed, inverse Fourier transform them
     if qspace_in:
-        probes = torch.ifft(probes, signal_ndim=2)
+        probes = torch.fft.ifftn(probes, dim=[-2, -1])
 
     # Calculate threshholds below which an ionization will not be included in
     # the simulation.
@@ -708,17 +717,17 @@ def transition_potential_multislice(
             trigger[i] = threshhold * torch.sum(amplitude(ionization_potential))
 
     # Ionization potentials must be in reciprocal space
-    ionization_potentials = fft(ionization_potentials, signal_ndim=2)
+    ionization_potentials = torch.fft.fftn(ionization_potentials, dim=[-2, -1])
 
     # Output array
     from .utils.torch_utils import size_of_bandwidth_limited_array
 
     nprobes = probes.size(0)
-    gridout = size_of_bandwidth_limited_array(probes.shape[-3:-1])
+    gridout = size_of_bandwidth_limited_array(probes.shape[-2:])
     if image_CTF is None:
-        output = torch.zeros(nprobes, *gridout, device=device, dtype=dtype)
+        output = torch.zeros(nprobes, *gridout, device=device, dtype=rdtype)
     else:
-        output = torch.zeros(image_CTF.shape[0], *gridout, device=device, dtype=dtype)
+        output = torch.zeros(image_CTF.shape[0], *gridout, device=device, dtype=rdtype)
 
     # Loop over slices of specimens
     for i in tqdm(
@@ -735,21 +744,17 @@ def transition_potential_multislice(
         )
 
         # Loop over inelastic transitions within the slice
-        for atom in atoms_in_slice[
-            0
-        ]:  # , desc="Atoms in slice", disable=not showProgress,position=tqposition+1):
+        for atom in atoms_in_slice[0]:
 
             for j, ionization_potential in enumerate(ionization_potentials):
 
                 # Calculate inelastically scattered wave for ionization transition
                 # potential shifted to position of slice
-                p_ = (
-                    torch.from_numpy(ionization_sites[atom, :2] * gridshape)
-                    .type(dtype)
-                    .to(device)
-                )
+                p_ = torch.from_numpy(ionization_sites[atom, :2]).type(dtype).to(device)
 
-                Hn0 = fourier_shift_torch(ionization_potential, p_, qspace_in=True)
+                Hn0 = fourier_shift_torch(
+                    ionization_potential, p_, qspace_in=True, units="fractional"
+                )
                 psi_n = Hn0 * probes
 
                 # Only propagate this wave to the exit surface if it is deemed
@@ -776,7 +781,9 @@ def transition_potential_multislice(
                 if image_CTF is None:
                     output += amplitude(psi_n)
                 else:
-                    output += amplitude(torch.ifft(psi_n * image_CTF, signal_ndim=2))
+                    output += amplitude(
+                        torch.fft.ifftn(psi_n * image_CTF, dim=[-2, -1])
+                    )
 
         # Propagate probe one slice
         if i < niterations - 1:

@@ -7,7 +7,7 @@ For standard simulation types the premixed_routines.py functions
 allows users to set up simulations faster and easier.
 """
 import numpy as np
-import matplotlib.pyplot as plt # Added for debugging purposes
+import matplotlib.pyplot as plt  # Added for debugging purposes
 import torch
 from .py_multislice import (
     make_propagators,
@@ -381,7 +381,7 @@ def STEM_PRISM(
                 stored_gridshape=maxpix,
                 Fourier_space_output=Fourier_space_output,
                 GPU_streaming=GPU_streaming,
-                showProgress = showProgress
+                showProgress=showProgress,
             )
             del P
             del T
@@ -417,7 +417,7 @@ def STEM_PRISM(
                     scan_posn=scan_posn,
                     device=S.device,
                     tiling=S.tiling,
-                    showProgress=tdisable,
+                    showProgress=showProgress,
                     STEM_image=STEM_images[idf],
                 )
             if FourD_STEM:
@@ -525,7 +525,7 @@ def PACBED(
         T=T,
         P=P,
         showProgress=showProgress,
-        dtype = dtype,
+        dtype=dtype,
     )["PACBED"]
 
     return result
@@ -592,7 +592,7 @@ def STEM_multislice(
         focused "into" the specimen
     nfph : int, optional
         Number of iterations of the frozen phonon algorithm (25 by default, which
-        is a good rule of thumb for convergence). Set to 1 for absorptive 
+        is a good rule of thumb for convergence). Set to 1 for absorptive
         calculations.
     aberrations : list, optional
         A list of of probe aberrations of class pyms.Probe.aberration, pass an
@@ -610,7 +610,7 @@ def STEM_multislice(
         64 x 64 pixels and 1.2 x 1.2 inverse Angstroms.
     PACBED : bool or array_like, optional
         Pass PACBED = True to calculate a position averaged convergent beam
-        electron diffraction pattern (PACBED). Passing an array will specify the 
+        electron diffraction pattern (PACBED). Passing an array will specify the
         size to crop the PACBED pattern to.
     h5_filename : string or array_like of strings
         FourD-STEM images can be streamed directly to a hdf5 file output,
@@ -718,12 +718,11 @@ def STEM_multislice(
     cdtype = real_to_complex_dtype_torch(dtype)
 
     tdisable, tqdm = tqdm_handler(showProgress)
-    
+
     real_dim = structure.unitcell[:2] * np.asarray(tiling)
 
     # Ensure defoci are in proper array
     df = ensure_array(df)
-
 
     # Convert thicknesses into number of slices for multislice
     nslices = thickness_to_slices(
@@ -762,24 +761,36 @@ def STEM_multislice(
     }
 
     if h5_filename is None:
-        datacubes = [None for i in range(len(ensure_array(df)))] # Modified to enable defocus series
+        datacubes = [
+            None for i in range(len(ensure_array(df)))
+        ]  # Modified to enable defocus series
         DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
             FourD_STEM, real_dim, gridshape
         )
         if scan_posn is None:
-            if PACBED and (not FourD_STEM) and (not STEM_images) and (not DPC) and (detector_ranges is None) and (D is None):
+            if (
+                PACBED
+                and (not FourD_STEM)
+                and (not STEM_images)
+                and (not DPC)
+                and (detector_ranges is None)
+                and (D is None)
+            ):
                 # Sampling of PACBED is half that required for a STEM image
                 scan_posn = generate_STEM_raster(
-                    structure.unitcell[:2] * np.asarray(tiling) / 2, eV, app, tiling=tiling
+                    structure.unitcell[:2] * np.asarray(tiling) / 2,
+                    eV,
+                    app,
+                    tiling=tiling,
                 )
             else:
                 scan_posn = generate_STEM_raster(
                     real_dim, eV, app, tiling=tiling, ROI=ROI
                 )
-            
+
         scanshape = scan_posn.shape[:-1]
         if (detector_ranges is None) and (not DPC):
-            D = np.zeros([1,*scanshape])
+            D = np.zeros([1, *scanshape])
     else:
         DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
             FourD_STEM, real_dim, gridshape
@@ -791,7 +802,7 @@ def STEM_multislice(
         Rpix = nyquist_sampling(eV=eV, alpha=app)
 
         if (detector_ranges is None) and (not DPC):
-            D = np.zeros([1,*scanshape])
+            D = np.zeros([1, *scanshape])
 
         # Make a datacube for each thickness of interest
         nt = len(nslices)
@@ -818,21 +829,21 @@ def STEM_multislice(
         DPshape2, _, Ksize = workout_4DSTEM_datacube_DP_size(
             PACBED, real_dim, gridshape
         )
-        PACBED_pattern = np.zeros((len(nslices),len(df), *DPshape2))
+        PACBED_pattern = np.zeros((len(nslices), len(df), *DPshape2))
 
     if signal_list is not None:
-    # Calculate effective scattering potentials for cross-section calculations
-    # Note: these include Debye-Waller factor smearing whether or not the calculation
-    # is frozen phonon. See Findlay et al., Ultramicroscopy 104 (2005) 126. https://doi.org/10.1016/j.ultramic.2005.03.004
+        # Calculate effective scattering potentials for cross-section calculations
+        # Note: these include Debye-Waller factor smearing whether or not the calculation
+        # is frozen phonon. See Findlay et al., Ultramicroscopy 104 (2005) 126. https://doi.org/10.1016/j.ultramic.2005.03.004
         Veff = structure.make_effective_scattering_potential(
-                signal_list,
-                gridshape,
-                eV,
-                subslices,
-                tiling,
-                device=device,
-                dtype=dtype,
-                fractional_occupancy=True,
+            signal_list,
+            gridshape,
+            eV,
+            subslices,
+            tiling,
+            device=device,
+            dtype=dtype,
+            fractional_occupancy=True,
         )
     else:
         Veff = None
@@ -854,7 +865,7 @@ def STEM_multislice(
                 displacements=displacements,
                 specimen_tilt=specimen_tilt,
                 tilt_units=tilt_units,
-                seed = seed
+                seed=seed,
             )
         from PIL import Image
 
@@ -865,7 +876,9 @@ def STEM_multislice(
         args = (P, T, tiling, device, seed)
 
         # Loop over defocus
-        for idf, df_ in enumerate(tqdm(ensure_array(df), desc="Defocus series", disable=tdisable)):
+        for idf, df_ in enumerate(
+            tqdm(ensure_array(df), desc="Defocus series", disable=tdisable)
+        ):
             # Make the STEM probe
             probe = focused_probe(
                 gridshape,
@@ -904,7 +917,7 @@ def STEM_multislice(
             if result["STEM images"] is not None:
                 STEM_images[idf] = result["STEM images"]
             if result["PACBED"] is not None:
-                PACBED_pattern[:,idf] += result["PACBED"]
+                PACBED_pattern[:, idf] += result["PACBED"]
         if result["STEM crosssection images"] is not None:
             STEM_crosssection_images = result["STEM crosssection images"]
 
@@ -923,28 +936,35 @@ def STEM_multislice(
         PACBED_pattern /= nfph
 
     if DPC:
-        DPC_images = phase_from_com(np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4))[-2:], rsize=structure.unitcell[:2]) # Reshape STEM_images array so the DPC image array has the same ordering of dimensions as that of the other simulation results
+        DPC_images = phase_from_com(
+            np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4))[-2:],
+            rsize=structure.unitcell[:2],
+        )  # Reshape STEM_images array so the DPC image array has the same ordering of dimensions as that of the other simulation results
 
     # Close all hdf5 files
     if h5_filename is not None:
         for f in files:
             f.close()
-    
+
     if (detector_ranges is not None) and (not DPC):
-        result['STEM images'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)) # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
+        result["STEM images"] = np.squeeze(
+            STEM_images.transpose(1, 2, 0, 3, 4)
+        )  # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
     elif (detector_ranges is not None) and (DPC):
-        result['DPC'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4))[-2:]
-        result['STEM images'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)[:-2])
+        result["DPC"] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4))[-2:]
+        result["STEM images"] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)[:-2])
     elif (detector_ranges is None) and (DPC):
-        result['DPC'] = np.squeeze(STEM_images.transpose(1, 2, 0, 3, 4)) # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
-        del result['STEM images']
+        result["DPC"] = np.squeeze(
+            STEM_images.transpose(1, 2, 0, 3, 4)
+        )  # Swap axes so output is of the form (Detector, thickness, defocus, ny, nx)
+        del result["STEM images"]
     else:
-        del result['STEM images']
+        del result["STEM images"]
 
     if FourD_STEM:
-        result['datacube'] = np.squeeze(np.array(datacubes).transpose(1,0,2,3,4,5))
+        result["datacube"] = np.squeeze(np.array(datacubes).transpose(1, 0, 2, 3, 4, 5))
     else:
-        del result['datacube']
+        del result["datacube"]
 
     # result = {"STEM images": np.squeeze(STEM_images), "datacube": datacubes, "STEM crosssection images": STEM_crosssection_images}
 
@@ -954,7 +974,9 @@ def STEM_multislice(
         del result["PACBED"]
 
     if DPC:
-        result["DPC"] = np.append(result["DPC"], np.expand_dims(DPC_images, axis = 0), axis = 0)
+        result["DPC"] = np.append(
+            result["DPC"], np.expand_dims(DPC_images, axis=0), axis=0
+        )
 
     if result["STEM crosssection images"] is not None:
         result["STEM crosssection images"] = np.squeeze(STEM_crosssection_images)
@@ -1065,7 +1087,9 @@ def multislice_precursor(
             bandwidth_limit=band_width_limiting[0],
         )
 
-    if (nT>=1): # If at least one independent multislice transmission functions sought, assume frozen phonon calculation
+    if (
+        nT >= 1
+    ):  # If at least one independent multislice transmission functions sought, assume frozen phonon calculation
         T = torch.zeros(nT, len(subslices), *gridshape, device=device, dtype=dtype)
         T = torch.complex(*(2 * [T]))
 
@@ -1083,9 +1107,13 @@ def multislice_precursor(
                 bandwidth_limit=band_width_limiting[1],
             )
 
-    else: # Otherwise, assume absorptive calculation sought
-        print('Note: will use thermally-smeared elastic potential plus TDS absorptive potential')
-        T = torch.zeros(1, len(subslices), *gridshape, device=device, dtype=dtype) # Hardcodes for single transmission function
+    else:  # Otherwise, assume absorptive calculation sought
+        print(
+            "Note: will use thermally-smeared elastic potential plus TDS absorptive potential"
+        )
+        T = torch.zeros(
+            1, len(subslices), *gridshape, device=device, dtype=dtype
+        )  # Hardcodes for single transmission function
         T = torch.complex(*(2 * [T]))
 
         T[0] = structure.make_transmission_functions_absorptive(
@@ -1099,7 +1127,7 @@ def multislice_precursor(
             fractional_occupancy=fractional_occupancy,
             seed=seed,
             bandwidth_limit=band_width_limiting[1],
-            showProgress = showProgress
+            showProgress=showProgress,
         )
 
     return P, T
@@ -1273,11 +1301,12 @@ def STEM_EELS_multislice(
         "return_numpy": False,
         "qspace_in": True,
         "threshhold": ionization_cutoff,
-        "showProgress": False,
+        "showProgress": showProgress,
         "tqposition": 1,
     }
 
     probe_posn = generate_STEM_raster(rsize, eV, app, tiling=tiling)
+    # STEM_images array shape should be (ndet, Y, X)
     STEM_images = np.zeros((D.shape[0], *probe_posn.shape[:2]))
 
     for _ in tqdm(
@@ -1314,7 +1343,7 @@ def STEM_EELS_multislice(
             showProgress=showProgress,
             method_args=args,
             method_kwargs=kwargs,
-        )["STEM images"]
+        )["STEM images"][:, 0, ...]
     return STEM_images / nfph
 
 
@@ -1488,7 +1517,15 @@ def CBED(
                 seed=seed,
             )
 
-            output[it] += np.abs(crop(np.fft.fftshift(probe),size_of_bandwidth_limited_array(gridshape))) ** 2
+            output[it] += (
+                np.abs(
+                    crop(
+                        np.fft.fftshift(probe),
+                        size_of_bandwidth_limited_array(gridshape),
+                    )
+                )
+                ** 2
+            )
 
     # Divide output by # of pixels to compensate for Fourier transform
     return output / np.prod(gridshape) / nfph
@@ -1793,28 +1830,31 @@ def EFTEM(
     bw_limit_size = size_of_bandwidth_limited_array(gridshape)
 
     # Calculate lens contrast transfer functions
-    ctfs = torch.from_numpy(
-        np.stack(
-            [
-                make_contrast_transfer_function(
-                    bw_limit_size, rsize, eV, app, df=df_, aberrations=aberrations
-                )
-                for df_ in defocii
-            ],
-            axis=0,
+    ctfs = (
+        torch.from_numpy(
+            np.stack(
+                [
+                    make_contrast_transfer_function(
+                        bw_limit_size, rsize, eV, app, df=df_, aberrations=aberrations
+                    )
+                    for df_ in defocii
+                ],
+                axis=0,
+            )
         )
-        .astype(dtype)
+        .to(real_to_complex_dtype_torch(dtype))
         .to(device)
     )
 
     # Convert thicknesses to number of unit cells
-    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(pyms.int)
+    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(int)
 
     # Get the coordinates of the target atoms in a unit cell
     mask = structure.atoms[:, 3] == Ztarget
 
     # Adjust fractional coordinates for tiling of unit cell
     coords = structure.atoms[mask][:, :3] / np.asarray(tiling + [1])
+    print(coords)
 
     # nstates = len(freeQuantumNumbers)
     if Hn0 is None:
@@ -1822,7 +1862,7 @@ def EFTEM(
             Ztarget, n, ell, epsilon, eV, gridshape, rsize, order=1, contr=0.99
         )
 
-    result = np.zeros(ctfs.shape[:-1], dtype=torch_dtype_to_numpy(dtype))
+    result = np.zeros(ctfs.shape, dtype=torch_dtype_to_numpy(dtype))
 
     # Perform multislice simulation and return the tiled out result
     for _ in tqdm(
@@ -1844,25 +1884,26 @@ def EFTEM(
                 showProgress,
             )
 
+        img = transition_potential_multislice(
+            probe,
+            nslices,
+            subslices,
+            P,
+            T,
+            Hn0,
+            coords,
+            image_CTF=ctfs,
+            tiling=[1, 1],
+            device_type=device,
+            seed=None,
+            return_numpy=True,
+            qspace_in=False,
+            threshhold=ionization_cutoff,
+            showProgress=showProgress,
+            tqposition=1,
+        )
         result += tile_out_ionization_image(
-            transition_potential_multislice(
-                probe,
-                nslices,
-                subslices,
-                P,
-                T,
-                Hn0,
-                coords,
-                image_CTF=ctfs,
-                tiling=[1, 1],
-                device_type=device,
-                seed=None,
-                return_numpy=True,
-                qspace_in=False,
-                threshhold=ionization_cutoff,
-                showProgress=showProgress,
-                tqposition=1,
-            ),
+            img,
             tiling,
         )
     return result
@@ -1995,7 +2036,7 @@ def STEM_EELS_PRISM(
 
     tiled_structure = copy.deepcopy(structure).tile(*tiling)
     coords = tiled_structure.atoms[tiled_structure.atoms[:, 3] == Ztarget][:, :3]
-    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(pyms.int)
+    nslices = np.ceil(thicknesses / structure.unitcell[2]).astype(int)
 
     # Make ionization transition potentials
     if Hn0s is None:
@@ -2094,7 +2135,7 @@ def STEM_EELS_PRISM(
                 ).ravel()
             # Normalize scan_array and convert to torch array
             scan_array *= 1 / np.sqrt(np.sum(scan_array.shape[1]))
-            scan_array = torch.from_numpy(scan_array).astype(dtype).to(device)
+            scan_array = torch.from_numpy(scan_array).to(device)
 
             if Hn0_crop is None:
                 Hn0_crop = [S1.stored_gridshape[i] // PRISM_factor[i] for i in range(2)]
@@ -2113,7 +2154,9 @@ def STEM_EELS_PRISM(
             )
 
         total_slices = nslices * len(subslices)
-        for islice in tqdm(range(total_slices), desc="Slice", position=1):
+        for islice in tqdm(
+            range(total_slices), desc="Slice", position=1, disable=tdisable
+        ):
 
             # Propagate scattering matrices to this slice
             if islice > 0:
@@ -2147,7 +2190,7 @@ def STEM_EELS_PRISM(
 
             # Flatten indices of second scattering matrix in preparation for
             # indexing
-            S2.S = S2.S.reshape(S2.S.shape[0], np.prod(S2.stored_gridshape), 2)
+            S2.S = S2.S.reshape(S2.S.shape[0], np.prod(S2.stored_gridshape))
 
             # Work out which subslice of the crystal unit cell we are in
             subslice = islice % S1.nsubslices
@@ -2173,7 +2216,7 @@ def STEM_EELS_PRISM(
                 for Hn0 in Hn0s:
                     # Initialize matrix describing this transition event
                     SHn0 = torch.zeros(
-                        S2.S.shape[0], S1.S.shape[0], 2, dtype=S1.S.dtype, device=device
+                        S2.S.shape[0], S1.S.shape[0], dtype=S1.S.dtype, device=device
                     )
 
                     # Sub-pixel shift of Hn0
@@ -2184,19 +2227,17 @@ def STEM_EELS_PRISM(
                     ).ravel()
 
                     # Convert Hn0 to pytorch Tensor
-                    Hn0_ = torch.from_numpy(Hn0_).astype(S1.S.dtype).to(device)
+                    Hn0_ = torch.from_numpy(Hn0_).to(S1.S.dtype).to(device)
 
                     for i, S1component in enumerate(S1.S):
                         # Multiplication of component of first scattering matrix
                         # (takes probe it depth of ionization) with the transition
                         # potential
-                        Hn0S1 = complex_mul(
-                            Hn0_, S1component.flatten(end_dim=-2)[windex]
-                        )
+                        Hn0S1 = Hn0_ * S1component.flatten()[windex]
 
                         # Matrix multiplication with second scattering matrix (takes
                         # scattered electrons to EELS detector)
-                        SHn0[:, i] = complex_matmul(S2.S[:, windex], Hn0S1)
+                        SHn0[:, i] = S2.S[:, windex] @ Hn0S1
 
                     # Build a mask such that only probe positions within a PRISM
                     # cropping region about the transition are evaluated
@@ -2213,15 +2254,14 @@ def STEM_EELS_PRISM(
 
                     EELS_image[scan_mask] += torch.sum(
                         amplitude(
-                            complex_matmul(
-                                SHn0, scan_array[scan_mask, :].transpose(0, 1)
-                            )
+                            SHn0
+                            @ scan_array[scan_mask, :].to(SHn0.dtype).transpose(0, 1)
                         ),
                         axis=0,
                     )
 
             # Reshape scattering matrix S2 for propagation
-            S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape, 2))
+            S2.S = S2.S.reshape((S2.S.shape[0], *S2.stored_gridshape))
 
     # Move EELS_image to cpu and numpy and then reshape to rectangular grid
     return EELS_image.cpu().numpy().reshape(scan_shape) / nfph
