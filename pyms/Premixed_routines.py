@@ -760,44 +760,35 @@ def STEM_multislice(
         "subslicing": subslicing,
     }
 
+
+    # Initialize 4D-STEM datacube object
+    DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
+            FourD_STEM, real_dim, gridshape
+        )
+    justPACBED = np.all([PACBED,not FourD_STEM,not STEM_images, not DPC, detector_ranges is None,D is None])
+    if scan_posn is None:
+        if justPACBED:
+            # Sampling of PACBED is half that required for a STEM image
+            scan_posn = generate_STEM_raster(
+                structure.unitcell[:2] * np.asarray(tiling) / 2,
+                eV,
+                app,
+                tiling=tiling,
+            )
+        else:
+            scan_posn = generate_STEM_raster(
+                real_dim, eV, app, tiling=tiling, ROI=ROI
+        )
+    scanshape = scan_posn.shape[:-1]
+            
     if h5_filename is None:
         datacubes = [
             None for i in range(len(ensure_array(df)))
         ]  # Modified to enable defocus series
-        DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
-            FourD_STEM, real_dim, gridshape
-        )
-        if scan_posn is None:
-            if (
-                PACBED
-                and (not FourD_STEM)
-                and (not STEM_images)
-                and (not DPC)
-                and (detector_ranges is None)
-                and (D is None)
-            ):
-                # Sampling of PACBED is half that required for a STEM image
-                scan_posn = generate_STEM_raster(
-                    structure.unitcell[:2] * np.asarray(tiling) / 2,
-                    eV,
-                    app,
-                    tiling=tiling,
-                )
-            else:
-                scan_posn = generate_STEM_raster(
-                    real_dim, eV, app, tiling=tiling, ROI=ROI
-                )
 
-        scanshape = scan_posn.shape[:-1]
         if (detector_ranges is None) and (not DPC):
             D = np.zeros([1, *scanshape])
     else:
-        DPshape, _, Ksize = workout_4DSTEM_datacube_DP_size(
-            FourD_STEM, real_dim, gridshape
-        )
-        if scan_posn is None:
-            scan_posn = generate_STEM_raster(real_dim, eV, app, tiling=tiling, ROI=ROI)
-
         scanshape = scan_posn.shape[:-1]
         Rpix = nyquist_sampling(eV=eV, alpha=app)
 
@@ -867,10 +858,6 @@ def STEM_multislice(
                 tilt_units=tilt_units,
                 seed=seed,
             )
-        from PIL import Image
-
-        for i, t in enumerate(T[:, 0]):
-            Image.fromarray(np.angle(t.cpu())).save("T_{0}.tiff".format(i))
 
         # Put new transmission functions and propagators into arguments
         args = (P, T, tiling, device, seed)
@@ -921,6 +908,7 @@ def STEM_multislice(
         if result["STEM crosssection images"] is not None:
             STEM_crosssection_images = result["STEM crosssection images"]
 
+    # Normalize 4D-STEM datacubes by number of frozen phonon iterations
     if (datacubes is not None) and (FourD_STEM):
         if isinstance(datacubes, (list, tuple)):
             for idf in range(len(datacubes)):

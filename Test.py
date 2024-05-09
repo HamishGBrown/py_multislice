@@ -776,7 +776,8 @@ class Test_ionization_methods(unittest.TestCase):
         """
         # A 5 x 5 x 5 Angstrom cell with an oxygen
         cell = [5, 5, 0.0001]
-        atoms = [[0.1, 0.5, 0.0, 8]]
+        atoms = [[0.75, 0.6, 0.0, 8]]
+        tiling = [1,1]
         crystal = pyms.structure(cell, atoms, dwf=[0.0])
         gridshape = [128, 128]
         eV = 3e5
@@ -834,6 +835,7 @@ class Test_ionization_methods(unittest.TestCase):
             n,
             ell,
             epsilon,
+            tiling=tiling,
             df=[0],
             nT=1,
             Hn0=Hn0,
@@ -843,7 +845,7 @@ class Test_ionization_methods(unittest.TestCase):
             T=T,
             showProgress=False,
         )
-        result = np.fft.fftshift(np.squeeze(EFTEM_images))
+        result = np.squeeze(EFTEM_images)
 
         # By reciprocity, a point detector should give identical results to
         # EFTEM so this is how we test the STEM routine as well. We work out the
@@ -860,6 +862,7 @@ class Test_ionization_methods(unittest.TestCase):
             n,
             ell,
             epsilon,
+            tiling=tiling,
             ionization_cutoff=None,
             df=0,
             nT=1,
@@ -871,29 +874,24 @@ class Test_ionization_methods(unittest.TestCase):
         )
         # plt.imshow(STEM_images[0])
         # plt.show(block=True)
-        STEM_images = np.fft.fftshift(
-            pyms.utils.fourier_interpolate(
+        STEM_images = pyms.utils.fourier_interpolate(
                 STEM_images, result.shape, norm="conserve_val"
             )
-        )
 
         # The image of the transition is "lensed" by the atom that it is passed
         # through so we must account for this by multiplying the Hn0 by the transmission
         # function
+        import matplotlib.pyplot as plt
+        Hn0 = pyms.utils.fourier_shift(Hn0,atoms[0][:2], pixel_units=False)        
         Hn0 *= T[0, 0].cpu().numpy() / np.sqrt(np.prod(gridshape))
 
-        reference = np.fft.fftshift(
-            pyms.utils.fourier_shift(
-                pyms.utils.fourier_interpolate(
+
+        reference = pyms.utils.fourier_interpolate(
                     np.abs(np.fft.ifft2(ctf * np.fft.fft2(Hn0[0]))) ** 2,
                     result.shape,
                     "conserve_L1",
                     qspace_out=False,
-                ),
-                atoms[0][:2],
-                pixel_units=False,
-            )
-        )
+                )
 
         # To get STEM and EFTEM images on same scale need to multiply by number
         # of pixels in STEM probe forming aperture function then divide by number
@@ -904,13 +902,16 @@ class Test_ionization_methods(unittest.TestCase):
         STEM_adj = np.sum(np.abs(STEM_adj) ** 2)
         STEM_images *= STEM_adj / np.prod(result.shape)
 
-        import matplotlib.pyplot as plt
+        # import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(nrows=3)
-        ax[0].imshow(reference)
-        ax[1].imshow(result)
-        ax[2].imshow(np.squeeze(STEM_images))
-        plt.show(block=True)
+        # fig, ax = plt.subplots(nrows=3)
+        # ax[0].imshow(reference)
+        # ax[0].set_title('Reference')
+        # ax[1].imshow(result)
+        # ax[1].set_title('EFTEM')
+        # ax[2].imshow(np.squeeze(STEM_images))
+        # ax[2].set_title('STEM-EELS')
+        # plt.show(block=True)
 
         passEFTEM = np.sum(np.abs(result - reference) ** 2) < 1e-7
         passSTEMEELS = np.sum(np.abs(STEM_images - reference) ** 2) < 1e-7
@@ -1255,6 +1256,10 @@ class Test_py_multislice_Methods(unittest.TestCase):
         meansignal = np.sum(np.abs(probe) ** 2 * detector) / np.sum(np.abs(probe) ** 2)
         WPOA = np.real(pyms.utils.convolve(PCTF, phase))
 
+        # TODO h5 output from STEM is broken, need to fix
+        # Test h5 output
+        # h5file = 'test.h5'
+        fourDSTEM = [[64,64],[3.0,3.0]]
         # Perform Multislice calculation and then compare to weak phase object
         # result
         images = (
@@ -1270,11 +1275,13 @@ class Test_py_multislice_Methods(unittest.TestCase):
                 P=P,
                 T=T,
                 tiling=tiling,
+                FourD_STEM = fourDSTEM,
+                # h5_filename=h5file,
                 showProgress=False,
             )["STEM images"]
             - meansignal
         )
-
+        # import os; os.remove(h5_filename)
         # Testing the PRISM code takes ~3 mins on a machine with a consumer
         # GPU so generally this part of the test is skipped
         testPRISM = True
@@ -1436,6 +1443,24 @@ class Test_py_multislice_Methods(unittest.TestCase):
         )
         device = pyms.utils.get_device()
 
+        # # Standard multislice
+        # scan_posn = np.asarray([[[0,0]]])
+        # STEMroutine = pyms.STEM_multislice(
+        #         cell,
+        #         gridshape,
+        #         eV,
+        #         app,
+        #         thicknesses=1.01,
+        #         df=df,
+        #         nfph=1,
+        #         P=P,
+        #         T=T,
+        #         tiling=tiling,
+        #         showProgress=True,
+        #         FourD_STEM = True,
+        #         # scan_posn=probe_posn[np.newaxis,np.newaxis,...],
+        #     )["datacube"][-1,-1]
+
         # S matrix calculation
         # Calculate scattering matrix
         rsize = np.asarray(tiling) * cell.unitcell[:2]
@@ -1545,10 +1570,12 @@ class Test_py_multislice_Methods(unittest.TestCase):
         probe = torch.fft.fftn(probe, dim=[-2, -1]) / np.sqrt(np.prod(gridout))
         ms_CBED = np.fft.fftshift(np.squeeze(np.abs(probe.cpu().numpy()) ** 2))
 
-        # fig, ax = plt.subplots(ncols=3)
+        # fig, ax = plt.subplots(ncols=4)
         # ax[0].imshow(ms_CBED)
         # ax[1].imshow(datacube[0, 0])
         # ax[2].imshow(S_CBED_amp[0])
+        # print(STEMroutine.shape)
+        # ax[3].imshow(STEMroutine)
         # plt.show(block=True)
 
         # The test is passed if the result from multislice and S-matrix is
@@ -2070,14 +2097,14 @@ if __name__ == "__main__":
     # test.test_Smatrix()
     # import sys; sys.exit()
     # # test.test_propagator()
-    # sys.exit()
-    test = Test_ionization_methods()
-    test.test_EFTEM_and_multislice_STEM_EELS()
-    # test.test_PRISM_STEM_EELS()
-    test.run()
-    import sys
+    # # sys.exit()
+    # test = Test_ionization_methods()
+    # test.test_EFTEM_and_multislice_STEM_EELS()
+    # # test.test_PRISM_STEM_EELS()
+    # test.run()
+    # import sys
 
-    sys.exit()
+    # sys.exit()
     # test.test_PRISM_STEM_EELS()
     # import sys;sys.exit()
     # suite = unittest.TestSuite(tests = (Test_util_Methods(),))

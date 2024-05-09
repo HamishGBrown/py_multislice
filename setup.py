@@ -24,6 +24,8 @@ setup(
         "hankel",
         "ipywidgets",
         "ipympl",
-        "sympy"
+        "sympy",
+        "scikit-image",
+        "jupyterlab"
     ],
 )
