@@ -129,7 +129,7 @@ def chi(q, qphi, lam, df=0.0, aberrations=[]):
         calculate the probe wave function in reciprocal space.
     """
     qlam = q * lam
-    chi_ = qlam ** 2 / 2 * df
+    chi_ = qlam**2 / 2 * df
     for ab in aberrations:
         chi_ += (
             qlam ** (ab.n + 1)
@@ -228,7 +228,7 @@ def make_contrast_transfer_function(
     qphi = np.arctan2(q[0] - optic_axis_[0], q[1] - optic_axis_[1])
 
     # Only calculate CTF for region within the aperture
-    mask = qarray2 <= app_ ** 2
+    mask = qarray2 <= app_**2
     CTF[mask] = np.exp(-1j * chi(qarray1[mask], qphi[mask], 1.0 / k, df, aberrations))
     return CTF
 
@@ -366,7 +366,7 @@ def plane_wave_illumination(
 
 def wavev(E):
     """
-    Evaluate the relativistically corrected wavenumber of an electron with energy E.
+    Evaluate relativistically-corrected wavenumber (in inverse Angstrom) of electron with energy E.
 
     Energy E must be in electron-volts, see Eq. (2.5) in Kirkland's Advanced
     Computing in electron microscopy

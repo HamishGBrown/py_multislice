@@ -1,4 +1,5 @@
 """Module containing functions for core multislice and PRISM algorithms."""
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -369,13 +370,10 @@ def multislice(
             # the order of the transmission and conjugation operations
             # probe should start in real space and finish this iteration in
             # real space
-            psi = (
-                torch.fft.ifftn(
-                    torch.fft.fftn(psi, dim=d_) * conjugateornot(P_, reverse),
-                    dim=d_,
-                )
-                * conjugateornot(T_, reverse)
-            )
+            psi = torch.fft.ifftn(
+                torch.fft.fftn(psi, dim=d_) * conjugateornot(P_, reverse),
+                dim=d_,
+            ) * conjugateornot(T_, reverse)
 
         else:
             # Standard multislice iteration - probe should start in real space
@@ -485,7 +483,7 @@ def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
     qsq = np.square(q[0]) + np.square(q[1])
 
     # Make detector
-    detector = np.logical_and(qsq < betamax ** 2, qsq >= betamin ** 2)
+    detector = np.logical_and(qsq < betamax**2, qsq >= betamin**2)
 
     # Convert logical to integer
     return np.where(detector, 1, 0)
@@ -493,24 +491,70 @@ def make_detector(gridshape, rsize, eV, betamax, betamin=0, units="mrad"):
 
 def nyquist_sampling(rsize=None, resolution_limit=None, eV=None, alpha=None):
     """
-    Calculate nyquist sampling (typically for minimum sampling of a STEM probe).
+    Calculate Nyquist sampling for the minimum sampling of a Scanning Transmission
+    Electron Microscopy (STEM) probe. For more detail on Nyquist sampling, see
+    section 2 of:
 
-    If array size in units of length is passed then return how many probe
-    positions are required otherwise just return the sampling. Alternatively
-    pass probe accelerating voltage (eV) in electron-volts and probe forming
-    aperture (alpha) in mrad and the resolution limit in inverse length will be
-    calculated for you.
+    Dwyer, Christian. "Simulation of scanning transmission electron microscope
+    images on desktop computers." Ultramicroscopy 110.3 (2010): 195-198.
+
+    This function can operate in two modes:
+    1. Given a resolution limit (in inverse length), it calculates the step size
+       (in units of length) for Nyquist sampling.
+    2. Given the probe accelerating voltage (in electron-volts) and probe forming
+       aperture (in milliradians), it calculates the resolution limit and then
+       determines the step size (in Angstrom) for Nyquist sampling.
+
+    Parameters:
+    - rsize (float, optional): Array size in units of length. If provided, the
+      function returns the number of probe positions required for sampling.
+    - resolution_limit (float, optional): Resolution limit in inverse length. Used to
+      calculate the step size if `eV` and `alpha` are not provided.
+    - eV (float, optional): Probe accelerating voltage in electron-volts. Used with `alpha`
+      to calculate the resolution limit if `resolution_limit` is not provided.
+    - alpha (float, optional): Probe forming aperture in milliradians. Used with `eV` to
+      calculate the resolution limit if `resolution_limit` is not provided.
+
+    Returns:
+    - float: If `rsize` is not provided, returns the Nyquist sampling step size.
+    - int: If `rsize` is provided, returns the number of probe positions required for
+      sampling.
+
+    Notes:
+    - If both `resolution_limit` and `eV`/`alpha` are provided, the function prioritizes
+      `resolution_limit`.
+    - If neither `resolution_limit` nor `eV`/`alpha` are provided, the function will return
+      None.
+
+    Example Usage:
+    1. To get the Nyquist sampling step size with a given resolution limit:
+        step_size = nyquist_sampling(resolution_limit=0.02)
+
+    2. To get the number of probe positions required for a given array size and resolution limit:
+        num_positions = nyquist_sampling(rsize=100, resolution_limit=0.02)
+
+    3. To get the Nyquist sampling step size in Angstrin using probe accelerating
+        voltage and aperture:
+        step_size = nyquist_sampling(eV=200000, alpha=10)
+
+    4. To get the number of probe positions required using array size, voltage, and aperture:
+        num_positions = nyquist_sampling(rsize=100, eV=200000, alpha=10)
     """
+    # If both eV and alpha are not provided, use the resolution_limit to calculate the step size
     if eV is None and alpha is None:
         step_size = 1 / (4 * resolution_limit)
+    # If resolution_limit is not provided, calculate it using eV and alpha, then determine the step size
     elif resolution_limit is None:
         step_size = 1 / (4 * wavev(eV) * alpha * 1e-3)
     else:
+        # If both resolution_limit and eV/alpha are provided, return None (invalid input scenario)
         return None
 
+    # If rsize is not provided, return the calculated step size
     if rsize is None:
         return step_size
     else:
+        # If rsize is provided, calculate the number of probe positions required and return it
         return np.ceil(rsize / step_size).astype(int)
 
 
@@ -1038,7 +1082,7 @@ def STEM(
         # the multislice algorithm. This ensure that each probe sees the same
         # frozen phonon configuration if we are doing batched multislice
         # calculations
-        seed = np.random.randint(0, 2 ** 31 - 1)
+        seed = np.random.randint(0, 2**31 - 1)
 
     for i in tqdm(
         range(int(np.ceil(nscantot / batch_size))),
@@ -1283,7 +1327,7 @@ class scattering_matrix:
         # Take beams inside the aperture and every nth beam where n is the
         # PRISM "interpolation" factor
         q = q_space_array(gridshape, rsize)
-        inside_aperture = np.less_equal(q[0] ** 2 + q[1] ** 2, self.alpha_ ** 2)
+        inside_aperture = np.less_equal(q[0] ** 2 + q[1] ** 2, self.alpha_**2)
         mody, modx = [
             np.mod(np.fft.fftfreq(x, 1 / x).astype(int), p) == 0
             for x, p in zip(gridshape, self.PRISM_factor)
@@ -1361,7 +1405,7 @@ class scattering_matrix:
             # the multislice algorithm. This ensure that each column in the scattering
             # matrix sees the same frozen phonon configuration
             self.seed = np.random.randint(
-                0, 2 ** 31 - 1, size=len(slices), dtype=np.uint32
+                0, 2**31 - 1, size=len(slices), dtype=np.uint32
             )
 
         # This switch tells the propagate function to initialize the Smatrix
@@ -1495,7 +1539,7 @@ class scattering_matrix:
             self.seed = np.concatenate(
                 [
                     self.seed,
-                    np.random.randint(0, 2 ** 31 - 1, size=nslice_ - len(self.seed)),
+                    np.random.randint(0, 2**31 - 1, size=nslice_ - len(self.seed)),
                 ]
             )
 
@@ -1539,9 +1583,9 @@ class scattering_matrix:
                     batch_size, *self.gridshape, dtype=self.dtype, device=self.device
                 )
                 # Expand S-matrix input to full grid for multislice propagation
-                psi[
-                    : beams.shape[0], self.bw_mapping[:, 0], self.bw_mapping[:, 1]
-                ] = self.S[beams]
+                psi[: beams.shape[0], self.bw_mapping[:, 0], self.bw_mapping[:, 1]] = (
+                    self.S[beams]
+                )
             else:
                 # Fourier interpolate stored real space S-matrix column onto
                 # multislice grid
@@ -2008,7 +2052,7 @@ def phase_from_com(com, reg=1e-10, rsize=[1, 1]):
     # Calculate numerator and denominator expressions for solution of
     # phase from centre of mass measurements
     numerator = ky[:, None] * np.fft.rfft2(com[0]) + kx[None, :] * np.fft.rfft2(com[1])
-    denominator = 1j * ((kx ** 2)[None, :] + (ky ** 2)[:, None]) + reg
+    denominator = 1j * ((kx**2)[None, :] + (ky**2)[:, None]) + reg
 
     # Avoid a divide by zero for the origin of the Fourier coordinates
     numerator[..., 0, 0] = 0

@@ -4,6 +4,7 @@ The structures module.
 A collection of functions and classes for reading in and manipulating structures
 and creating potential arrays for multislice simulation.
 """
+
 import itertools
 import ase
 import numpy as np
@@ -74,9 +75,7 @@ def Xray_scattering_factor(Z, gsq, units="A"):
     # Bohr radius in Angstrom
     a0 = 0.529177
     # gsq = g**2
-    return Z - 2 * np.pi ** 2 * a0 * gsq * electron_scattering_factor(
-        Z, gsq, units=units
-    )
+    return Z - 2 * np.pi**2 * a0 * gsq * electron_scattering_factor(Z, gsq, units=units)
 
 
 def electron_scattering_factor(Z, gsq, units="VA"):
@@ -111,7 +110,7 @@ def electron_scattering_factor(Z, gsq, units="VA"):
 
     # Result can be returned in units of Volt Angstrom ('VA') or Angstrom ('A')
     if units == "VA":
-        return h ** 2 / (2 * np.pi * me * qe) * fe
+        return h**2 / (2 * np.pi * me * qe) * fe
     elif units == "A":
         return fe
 
@@ -452,9 +451,9 @@ class structure:
         # (ums) convert to mean square. Acceptable formats are crystallographic
         # temperature factor B and root mean square (urms) displacements
         if temperature_factor_units == "B":
-            dwf *= 1 / (8 * np.pi ** 2)
+            dwf *= 1 / (8 * np.pi**2)
         elif temperature_factor_units == "urms":
-            dwf = dwf ** 2
+            dwf = dwf**2
         elif temperature_factor_units == "ums":
             pass
         else:
@@ -504,7 +503,7 @@ class structure:
         if occupancy is None:
             occ = np.ones(natoms)
         if dwf is None:
-            dwf = np.ones(natoms) * 3 / np.pi ** 2 / 8
+            dwf = np.ones(natoms) * 3 / np.pi**2 / 8
         return cls(unitcell, atoms, dwf, occ, Title)
 
     def to_ase_atoms(self):
@@ -674,7 +673,7 @@ class structure:
 
         # If temperature factors are given as B then convert to urms
         if temperature_factor_units == "B":
-            DWFs = self.atoms[:, 5] * 8 * np.pi ** 2
+            DWFs = self.atoms[:, 5] * 8 * np.pi**2
         elif temperature_factor_units == "sqrturms":
             DWFs = np.sqrt(self.atoms[:, 5])
 
@@ -2247,7 +2246,7 @@ def calculate_scattering_factors_dwf(
         else:
             fe[ielement, :, :] = electron_scattering_factor(
                 int(element[0]), gsq
-            ) * np.exp(-2 * np.pi ** 2 * gsq * element[1])
+            ) * np.exp(-2 * np.pi**2 * gsq * element[1])
 
     return fe
 
@@ -2297,7 +2296,7 @@ def electron_tds_wk_scattering_factor(Z, gsq, ums, eV, showProgress=True):
     A_wk[0:3] = 0.02395 * Z / (3 * (1 + V))
     A_wk[3:6] = A_wk[0] * V
 
-    Mx4 = 8 * np.pi ** 2 * ums  # Mx4*s2 = M*g2
+    Mx4 = 8 * np.pi**2 * ums  # Mx4*s2 = M*g2
 
     modg = np.sqrt(gsq)
     gmax = np.max(modg)
@@ -2334,7 +2333,7 @@ def electron_tds_wk_scattering_factor(Z, gsq, ums, eV, showProgress=True):
     )  # 2\pi in denominator is WK convention. 4\pi in numerator I'm unclear about, but
     # is in the FSCATT code and does yield agreement with other approaches to calculate TDS scattering factor.
 
-    fe_TDS_1D *= gamma * (h ** 2 / (2 * np.pi * me * qe))  # Converts f'_g to V'_g
+    fe_TDS_1D *= gamma * (h**2 / (2 * np.pi * me * qe))  # Converts f'_g to V'_g
 
     # Interpolate onto 2D grid
     tck = interpolate.splrep(g1d, fe_TDS_1D, s=0)
@@ -2687,7 +2686,7 @@ def calculate_EELS_EDX_scattering_factors(
     # 3. The 2\pi K factor makes the results \mu's as defined by the Allen group
     feff = (
         interpolate.splev(svals, tck, der=0)
-        * np.exp(-2 * np.pi ** 2 * gsq * ums)
+        * np.exp(-2 * np.pi**2 * gsq * ums)
         / (2.0 * np.pi * k0)
     )
 

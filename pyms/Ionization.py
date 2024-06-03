@@ -11,6 +11,7 @@ Dwyer, Christian, Scott D. Findlay, and Leslie J. Allen. "Multiple
 elastic scattering of core-loss electrons in atomic resolution imaging."
 Physical Review B 77.18 (2008): 184107.
 """
+
 import numpy as np
 import matplotlib.pyplot as plt
 import re
@@ -268,7 +269,7 @@ class orbital:
             # Convert energy to Hartree units
             eH = epsilon / Eh
             # wavenumber in atomic units
-            ke = np.sqrt(2 * eH * (1 + alpha ** 2 * eH / 2))
+            ke = np.sqrt(2 * eH * (1 + alpha**2 * eH / 2))
             # Normalization used in flexible atomic code
             facnorm = 1 / np.sqrt(ke)
             # Desired normalization from Manson 1972
@@ -435,7 +436,7 @@ def transition_potential(
     # Transverse momentum transfer
     qt = np.sqrt(qgrid[0][:, np.newaxis] ** 2 + qgrid[1][np.newaxis, :] ** 2)
     # Amplitude of momentum transfer at each gridpoint
-    qabs = np.sqrt(qt ** 2 + qz ** 2)
+    qabs = np.sqrt(qt**2 + qz**2)
     # Polar angle of momentum transfer
     qtheta = np.pi - np.arctan(qt / qz)
 
@@ -500,7 +501,7 @@ def transition_potential(
             f_r = np.empty(r.shape)
             f_r[r >= rmax] = 0
             rn = r[r < rmax]
-            f_r[r < rmax] = orb1(rn) * orb2(rn) / rn ** 1.5
+            f_r[r < rmax] = orb1(rn) * orb2(rn) / rn**1.5
 
             return f_r
 
@@ -602,7 +603,7 @@ def transition_potential(
     # Relativistic mass correction to go from a0 to relativistically corrected a0*
     # divide by q**2
     Hn0 *= relativistic_mass_correction(eV) / (
-        2 * a0 * np.pi ** 2 * np.sqrt(Ry) * kn * qabs ** 2
+        2 * a0 * np.pi**2 * np.sqrt(Ry) * kn * qabs**2
     )
 
     # Return result of Eq. (10) from Dwyer Ultramicroscopy 104 (2005) 141-151
