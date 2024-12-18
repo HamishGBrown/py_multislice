@@ -637,7 +637,8 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
         sampling. Alternatively, to save disk space a tuple containing pixel
         size and diffraction space extent of the datacube can be passed in. For
         example ([64,64],[1.2,1.2]) will output diffraction patterns measuring
-        64 x 64 pixels and 1.2 x 1.2 inverse Angstroms.
+        64 x 64 pixels and 1.2 x 1.2 inverse Angstroms. ([64,64]) will just crop
+        to 64 x 64 pixels without resampling the diffraction pattern.
     rsize : (2,) array_like
         Real space size of simulation grid
     gridshape : (2,) array_like
@@ -655,28 +656,27 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
         gridout = FourD_STEM[0]
 
         if len(FourD_STEM) > 1:
-            # Get output grid and diffraction space size of that grid from tuple
             Ksize = FourD_STEM[1]
-
-            #
-            diff_pat_crop = np.round(np.asarray(Ksize) * np.asarray(rsize[:2])).astype(
-                int
-            )
-
             # Define resampling function to crop and interpolate
             # diffraction patterns
             def resize(array):
-                cropped = crop(np.fft.fftshift(array, axes=(-1, -2)), diff_pat_crop)
-                return fourier_interpolate(cropped, gridout, norm="conserve_L1")
+                return resample_diffraction_pattern(
+                    array, 1.0 / np.asarray(rsize[:2]), *FourD_STEM, fftshifted=False
+                )
 
         else:
             # The size in inverse Angstrom of the grid
             Ksize = np.asarray(gridout) / np.asarray(rsize)
-
-            # Define resampling function to just crop diffraction
-            # patterns
+            # Define resampling function to (just) crop diffraction patterns
             def resize(array):
-                return crop(np.fft.fftshift(array, axes=(-1, -2)), gridout)
+                return resample_diffraction_pattern(
+                    array,
+                    1.0 / np.asarray(rsize[:2]),
+                    np.ravel(FourD_STEM),
+                    None,
+                    fftshifted=False,
+                    justcrop=True,
+                )
 
     else:
         # If no resampling then the output size is just the simulation
@@ -691,6 +691,81 @@ def workout_4DSTEM_datacube_DP_size(FourD_STEM, rsize, gridshape):
             return crop(np.fft.fftshift(array, axes=(-1, -2)), gridout)
 
     return gridout, resize, Ksize
+
+
+def resample_diffraction_pattern(
+    DP, invAperpix, pixelsout, Kmax, fftshifted=True, justcrop=False
+):
+    """
+    Resample a diffraction pattern by cropping and Fourier interpolation.
+
+    This function crops the diffraction pattern based on the given maximum frequency and
+    inverse Angstrom per pixel, then resamples it to the desired output size using Fourier
+    interpolation. Optionally, the input diffraction pattern can be considered as already
+    FFT-shifted.
+
+    Parameters:
+    ----------
+    DP : numpy.ndarray
+        The input diffraction pattern to be resampled.
+    invAperpix : tuple of floats
+        The inverse Angstrom per pixel for each dimension of the diffraction pattern.
+    Kmax : float
+        The maximum frequency cutoff in inverse Angstroms.
+    pixelsout : int
+        The desired size of the output resampled diffraction pattern.
+    fftshifted : bool, optional
+        Whether the input diffraction pattern is already FFT-shifted. Default is True.
+    justcrop : bool, optional
+        Just crop the diffraction pattern, no interpolation. False by default.
+    Returns:
+    -------
+    resampled_DP : numpy.ndarray
+        The resampled diffraction pattern with the specified output size.
+
+    Notes:
+    -----
+    - The function crops the input diffraction pattern to the region defined by Kmax and invAperpix.
+    - The cropping operation centers on the FFT-shifted data if `fftshifted` is True, otherwise, it shifts the FFT before cropping.
+    - The cropped diffraction pattern is then resampled to the desired output size using Fourier interpolation with L1 normalization.
+
+    Example:
+    -------
+    >>> DP = np.random.rand(1024, 1024)  # Example diffraction pattern
+    >>> invAperpix = (0.01, 0.01)  # Example inverse Angstrom per pixel
+    >>> Kmax = 0.5  # Example maximum frequency
+    >>> pixelsout = 512  # Example output size
+    >>> resampled_DP = resample_diffraction_pattern(DP, invAperpix, Kmax, pixelsout)
+    """
+
+    # Make function agnostic to whetehr Kmax and pixelsout are arrays or not
+    if hasattr(Kmax, "__len__"):
+        K_ = np.asarray(Kmax)
+    else:
+        K_ = np.asarray(2 * [Kmax])
+
+    if hasattr(pixelsout, "__len__"):
+        p_ = pixelsout
+    else:
+        p_ = 2 * [pixelsout]
+
+    # Work out diffraction pattern cropping
+    if invAperpix is not None and Kmax is not None:
+        diff_pat_crop = np.round(K_ / np.asarray(invAperpix[:2])).astype(int)
+    else:
+        diff_pat_crop = p_
+
+    # apply cropping
+    if fftshifted:
+        cropped = crop(DP, diff_pat_crop)
+    else:
+        cropped = crop(np.fft.fftshift(DP, axes=(-1, -2)), diff_pat_crop)
+
+    if justcrop:
+        return cropped
+
+    # Interpolate to desired sampling
+    return fourier_interpolate(cropped, p_, norm="conserve_L1")
 
 
 def second_moment(array):
@@ -718,7 +793,8 @@ def generate_probe_spread_plot(
     tiling=[1, 1],
     showcrossection=True,
     df=0,
-    probe_posn=[0, 0],
+    probe_posn=None,
+    just_metrics=False,
     show=True,
     device=None,
     P=None,
@@ -771,7 +847,10 @@ def generate_probe_spread_plot(
     df : float
         Probe defocus in Angstrom
     probe_posn : array_like, optional
-        Probe position as a fraction of the unit-cell
+        Probe position as a fraction of the unit-cell, if None, probe will be
+        placed at position that would cause most scattering
+    just_metrics: bool, optional
+        If True, don't make plot, just return variance and intensity metrics
     P : (n,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
@@ -803,17 +882,27 @@ def generate_probe_spread_plot(
             showProgress=showProgress,
         )
 
+    # Work out probe position
+    if probe_posn is None:
+
+        array = torch.sum(torch.angle(T), axis=[0, 1]).cpu().numpy()
+        # Flatten the tensor and find the index of the maximum value
+        max_index = np.unravel_index(np.argmax(array), array.shape)
+
+        # Convert the index from the flattened tensor to 2D coordinates
+        pos = np.asarray(max_index) / np.asarray(array.size) / np.asarray(tiling)
+    else:
+        pos = np.asarray(probe_posn) / np.asarray(tiling)
+
     # Calculate focused STEM probe
     probe = focused_probe(
         gridshape, structure.unitcell[:2] * np.asarray(tiling), eV, app, df=df
     )
-    pos = np.asarray(probe_posn) / np.asarray(tiling)
+
     from .utils import fourier_shift, fourier_interpolate
 
     probe = fourier_shift(probe, pos, pixel_units=False)
 
-    ncols = 1 + showcrossection
-    fig, ax = plt.subplots(ncols=ncols, figsize=(ncols * 4, 4), squeeze=False)
     # Total number of slices (not including subslicing of structure)
     if nslices is None:
         nslices = int(np.ceil(thickness / structure.unitcell[2]))
@@ -844,13 +933,18 @@ def generate_probe_spread_plot(
         # Record probe intensity and spread
         intensity[i] = np.sum(mod)
         variances[i] = second_moment(mod)
-        if showcrossection:
+        if showcrossection and not just_metrics:
             crossection[i] = np.sum(mod, axis=-1)
+
+    if just_metrics:
+        return intensity, variances
 
     thicknesses = structure.unitcell[2] * (
         np.broadcast_to(np.arange(nslices)[:, None], (nslices, len(subslices))).ravel()
         + np.tile(subslices, nslices)
     )
+    ncols = 1 + showcrossection
+    fig, ax = plt.subplots(ncols=ncols, figsize=(ncols * 4, 4), squeeze=False)
     ax[0, 0].set_xlim([0, thicknesses[-1]])
     ax[0, 0].set_ylim([0, 1.1])
 
@@ -870,7 +964,7 @@ def generate_probe_spread_plot(
     ax2.set_ylabel("$\\sqrt{\\int \\Psi^2 x^2 dx}$", color="blue")
     ax[0, 0].plot(thicknesses, intensity, "r-")
     ax[0, 0].plot([0, thicknesses[-1]], [0.95, 0.95], "r--")
-    nz, ny = crossection.shape
+
     if showcrossection:
         ax[0, 1].imshow(
             np.fft.fftshift(np.sqrt(crossection), axes=1),
@@ -1583,9 +1677,9 @@ class scattering_matrix:
                     batch_size, *self.gridshape, dtype=self.dtype, device=self.device
                 )
                 # Expand S-matrix input to full grid for multislice propagation
-                psi[: beams.shape[0], self.bw_mapping[:, 0], self.bw_mapping[:, 1]] = (
-                    self.S[beams]
-                )
+                psi[
+                    : beams.shape[0], self.bw_mapping[:, 0], self.bw_mapping[:, 1]
+                ] = self.S[beams]
             else:
                 # Fourier interpolate stored real space S-matrix column onto
                 # multislice grid

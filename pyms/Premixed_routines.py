@@ -40,6 +40,7 @@ from .utils.numpy_utils import (
     ensure_array,
     q_space_array,
     crop,
+    single_or_max,
 )
 from .utils.output import initialize_h5_datacube_object
 from .Ionization import (
@@ -67,13 +68,358 @@ def window_indices(center, windowsize, gridshape):
     return (window[0][:, None] * gridshape[0] + window[1][None, :]).ravel()
 
 
+# Pixel sizes that are amenable to FFTs from https://blake.bcm.edu/emanwiki/EMAN2/BoxSize
+optimalpixels = [
+    64,
+    72,
+    84,
+    96,
+    100,
+    104,
+    112,
+    120,
+    128,
+    132,
+    140,
+    168,
+    180,
+    192,
+    196,
+    208,
+    216,
+    220,
+    224,
+    240,
+    256,
+    260,
+    288,
+    300,
+    320,
+    352,
+    360,
+    384,
+    416,
+    440,
+    448,
+    480,
+    512,
+    540,
+    560,
+    576,
+    588,
+    600,
+    630,
+    640,
+    648,
+    672,
+    686,
+    700,
+    720,
+    750,
+    756,
+    768,
+    784,
+    800,
+    810,
+    840,
+    864,
+    882,
+    896,
+    900,
+    960,
+    972,
+    980,
+    1000,
+    1008,
+    1024,
+    1050,
+    1080,
+    1120,
+    1134,
+    1152,
+    1176,
+    1200,
+    1250,
+    1260,
+    1280,
+    1296,
+    1344,
+    1350,
+    1372,
+    1400,
+    1440,
+    1458,
+    1470,
+    1500,
+    1512,
+    1536,
+    1568,
+    1600,
+    1620,
+    1680,
+    1728,
+    1750,
+    1764,
+    1792,
+    1800,
+    1890,
+    1920,
+    1944,
+    1960,
+    2000,
+    2016,
+    2048,
+    2058,
+    2100,
+    2160,
+    2240,
+    2250,
+    2268,
+    2304,
+    2352,
+    2400,
+    2430,
+    2450,
+    2500,
+    2520,
+    2560,
+    2592,
+    2646,
+    2688,
+    2700,
+    2744,
+    2800,
+    2880,
+    2916,
+    2940,
+    3000,
+    3024,
+    3072,
+    3136,
+    3150,
+    3200,
+    3240,
+    3360,
+    3402,
+    3430,
+    3456,
+    3500,
+    3528,
+    3584,
+    3600,
+    3750,
+    3780,
+    3840,
+    3888,
+    3920,
+    4000,
+    4032,
+    4050,
+    4096,
+]
+
+
+def autosampling_STEM(
+    structure, thickness, app, eV, qmax=None, precision=1, generate_plot=False
+):
+    """
+    Automatically calculate grid pixels and tiling for multislice simulations in Scanning Transmission Electron Microscopy (STEM).
+
+    This function determines the optimal grid sampling and tiling for multislice STEM simulations by considering the probe spread (variance)
+    and total intensity criteria. It allows for an optional plot generation to visualize the convergence of intensity and probe spread metrics.
+
+    Parameters:
+    ----------
+    structure : object
+        The structure object containing atomic positions and unit cell dimensions.
+    thickness : float
+        The thickness of the sample in Angstroms.
+    app : float
+        The probe aperture in milliradians.
+    eV : float
+        The electron energy in electronvolts (eV).
+    qmax : float, optional
+        The maximum scattering angle in mrad. Default is None. When provided, it overrides the default kmax calculation.
+    precision : int, optional
+        The precision level for grid sampling. Default is 1. Values can be 0 (rough), 1 (medium), or 2 (precise).
+    generate_plot : bool, optional
+        If True, generates a plot showing the convergence of intensity and probe spread metrics. Default is False.
+
+    Returns:
+    -------
+    gridshape : list
+        The optimal grid shape in pixels for the multislice simulation.
+    tiling : list
+        The optimal tiling for the multislice simulation.
+
+    Notes:
+    -----
+    - The function uses the Jenks Natural Breaks clustering algorithm to determine subslices of the structure.
+    - `generate_probe_spread_plot` is a utility function used to calculate probe intensity and variance metrics.
+    - If the variance and intensity criteria are not met, the function adjusts the kmax value and retries the calculations.
+    - When `generate_plot` is True, the function plots the convergence of intensity and probe spread metrics.
+
+    Example:
+    -------
+    >>> gridshape, tiling = autosampling_STEM(structure, thickness=50, app=30, eV=200, qmax=0.2, precision=1, generate_plot=True)
+    """
+
+    # Calculate grid sampling in inverse Angstroms
+    # This is equivalent to the grid sampling in pix/Angstrom
+    kmax = 7.5 + precision * 2.5
+
+    # Option for manual override of qmax, eg. when a high angle
+    # annular dark field (HAADF) detector is used.
+    if qmax is not None:
+        from .Probe import wavev
+
+        kmax = max(kmax, wavev(eV) * np.atan(qmax))
+
+    # Adjust kmax to account for bandwidth limiting
+    kmax *= 1.5
+
+    # Probe spread (variance) and total intensity criteria
+    variancecriterion = 0.2 - 0.05 * precision
+    intensitycriterion = [0.95, 0.97, 0.99][precision]
+
+    # Ratio of the sides of the unit cell
+    aspectratio = structure.unitcell[0] / structure.unitcell[1]
+
+    from .py_multislice import generate_probe_spread_plot
+
+    subslices = structure.autoslice()
+    variances = []
+    intensities = []
+    pixels = []
+    tilings = []
+    for i in range(1, 10):
+        tiling = np.asarray([i, max(1, int(np.round(i * aspectratio)))])
+        gridshape = [
+            optimalpixels[(np.abs(optimalpixels - t * u * kmax)).argmin()]
+            for t, u in zip(tiling, structure.unitcell[:2])
+        ]
+
+        inten, var = generate_probe_spread_plot(
+            gridshape,
+            structure,
+            eV,
+            app,
+            single_or_max(thickness),
+            subslices=subslices,
+            tiling=tiling,
+            just_metrics=True,
+            showProgress=False,
+        )
+
+        intensities.append(min(inten))
+        variances.append(max(var))
+        pixels.append(gridshape[0])
+        tilings.append(tiling)
+
+        if max(var) < variancecriterion and min(inten) > intensitycriterion:
+            break
+        elif min(inten) < intensitycriterion:
+            kmax += 1
+
+    if generate_plot:
+        # Plot convergence of intensity and probe spread (variance) metrics
+        fig, ax = plt.subplots()
+
+        ax.set_xlim([0, 1.2 * pixels[-1]])
+        ax.set_ylim([0, 1.1])
+
+        ax.set_ylabel(
+            "$\\sqrt{\\int \\Psi^2 dx}$", color="red"
+        )  # we already handled the x-label with ax1
+        ax.set_xlabel(r"Pixels")
+        ax.tick_params(axis="y", labelcolor="red")
+        ax.set_title("Probe intensity and spread")
+
+        ax2 = ax.twinx()  # instantiate a second axes that shares the same x-axis
+
+        ax2.plot(pixels, variances, "bo")
+        ax2.tick_params(axis="y", labelcolor="b")
+        for criterion, label in zip([0.1, 0.15, 0.2], ["precise", "medium", "rough"]):
+            ax2.plot([0, pixels[-1] * 1.2], [criterion] * 2, "b--")
+            ax2.text(np.mean(ax.get_xlim()), criterion, label)
+        ax2.set_ylim([0, 0.5])
+        ax2.set_ylabel("$\\sqrt{\\int \\Psi^2 x^2 dx}$", color="blue")
+        ax.plot(pixels, intensities, "ro")
+        for p, v, t in zip(pixels, variances, tilings):
+            ax2.annotate("[{0},{1}]".format(*t), [p, v])
+        ax.plot([0, pixels[-1] * 1.2], [0.95, 0.95], "r--")
+        plt.show(block=True)
+
+    return gridshape, tiling
+
+
+def autosampling_TEM(structure, precision=1):
+
+    """
+    Automatically calculate grid pixels and tiling for Transmission Electron Microscopy (TEM) simulations.
+
+    This function determines the optimal grid sampling and tiling for TEM simulations by considering the
+    precision level. It calculates the required grid shape and tiling based on the unit cell dimensions of the structure.
+
+    Parameters:
+    ----------
+    structure : object
+        The structure object containing atomic positions and unit cell dimensions.
+    precision : int, optional
+        The precision level for grid sampling. Default is 1. Values can be 0 (rough), 1 (medium), or 2 (precise).
+
+    Returns:
+    -------
+    gridshape : list of int
+        The optimal grid shape in pixels for the TEM simulation.
+    tiling : list of int
+        The optimal tiling for the TEM simulation.
+
+    Notes:
+    -----
+    - The function calculates the grid sampling in inverse Angstroms, which is equivalent to the grid sampling in pixels per Angstrom.
+    - The `kmax` value is adjusted to account for bandwidth limiting.
+    - The minimum inverse Angstrom per pixel diffraction space sampling is determined based on the precision level.
+    - The real space extent is determined by the diffraction space sampling.
+    - The grid shape is determined by the tiling, maximum resolution, and structure size.
+
+    Example:
+    -------
+    >>> structure = pyms.structure.fromfile('STO.xtl')
+    >>> gridshape, tiling = autosampling_TEM(structure, precision=1)
+    """
+
+    # Calculate grid sampling in inverse Angstroms
+    # This is equivalent to the grid sampling in pix/Angstrom
+    kmax = 7.5 + precision * 2.5
+    # Adjust kmax to account for bandwidth limiting
+    kmax *= 1.5
+
+    # Ratio of the sides of the unit cell
+    # aspectratio = structure.unitcell[0]/structure.unitcell[1]
+
+    # Minimum inverse Angstrom per pixel diffraction space sampling
+    mininvAperpix = [0.1, 0.05, 0.01][precision]
+
+    # Diffraction space sampling determines real space extent
+    tiling = [int(np.ceil(1 / (x * mininvAperpix))) for x in structure.unitcell[:2]]
+
+    # Tiling, max resolution and structure size determines gridshape
+    gridshape = [
+        optimalpixels[(np.abs(optimalpixels - t * u * kmax)).argmin()]
+        for t, u in zip(tiling, structure.unitcell[:2])
+    ]
+
+    return gridshape, tiling
+
+
 def STEM_PRISM(
     structure,
     gridshape,
     eV,
     app,
     thicknesses,
-    subslices=[1.0],
+    subslices=None,
     tiling=[1, 1],
     PRISM_factor=[1, 1],
     df=0,
@@ -217,6 +563,10 @@ def STEM_PRISM(
 
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
+
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
 
     # Calculate real space grid size
     real_dim = structure.unitcell[:2] * np.asarray(tiling)
@@ -441,13 +791,13 @@ def STEM_PRISM(
 
 def PACBED(
     structure,
-    gridshape,
     eV,
     app,
     thicknesses,
-    subslices,
-    nfph,
-    tiling=[1, 1],
+    nfph=10,
+    gridshape=None,
+    subslices=None,
+    tiling=None,
     device=None,
     nT=5,
     subslicing=False,
@@ -455,6 +805,7 @@ def PACBED(
     T=None,
     dtype=torch.float32,
     showProgress=True,
+    precision=1,
 ):
     """
     Calculate position averaged convergent electron diffraction (PACBED) patterns.
@@ -466,21 +817,23 @@ def PACBED(
     ----------
     structure : pyms.structure_routines.structure
         The structure of interest
-    gridshape : (2,) array_like
-        Pixel size of the simulation grid
     eV : float
         Probe energy in electron volts
     app : float
         Objective aperture in mrad
     thicknesses : float or array_like
         Thickness of the calculation
+    gridshape : (2,) array_like, optional
+        Pixel size of the simulation grid, if None is passed (default) then the
+        autosampling routine is called
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
         should always be 1.0. For example, to slice the object into four equal
-        sized slices pass [0.25,0.5,0.75,1.0]
+        sized slices pass [0.25,0.5,0.75,1.0]. If None is passed then the autoslicing
+        routine is called
     nfph : int, optional
-        Number of iterations of the frozen phonon algorithm (25 by default, which
+        Number of iterations of the frozen phonon algorithm (10 by default, which
         is a good rule of thumb for convergence)
     tiling : (2,) array_like, optional
         Tiling of a repeat unit cell on simulation grid
@@ -499,15 +852,27 @@ def PACBED(
     showProgress : str or bool, optional
         Pass False to disable progress readout, pass 'notebook' to get correct
         progress bar behaviour inside a jupyter notebook
+    precision : int, optional
+        The precision level for grid sampling. Default is 1. Values can be 0 (rough), 1 (medium), or 2 (precise).
     Returns
     -------
     result : (len(nslices),Y,X) np.ndarray
         The requested PACBED simulation
     """
+    # Perform routine to work out sampling for PACBED
+    if gridshape is None or tiling is None:
+        gridshape, tiling = autosampling_STEM(
+            structure, thicknesses, app, eV, precision=precision
+        )
+
     # Sampling of PACBED is half that required for a STEM image
     scan_posn = generate_STEM_raster(
         structure.unitcell[:2] * np.asarray(tiling) / 2, eV, app, tiling=tiling
     )
+
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
 
     result = STEM_multislice(
         structure,
@@ -534,11 +899,11 @@ def PACBED(
 
 def STEM_multislice(
     structure,
-    gridshape,
     eV,
     app,
     thicknesses,
-    subslices=[1.0],
+    gridshape=None,
+    subslices=None,
     df=0,
     nfph=25,
     aberrations=[],
@@ -555,7 +920,7 @@ def STEM_multislice(
     specimen_tilt=[0, 0],
     tilt_units="mrad",
     ROI=[0.0, 0.0, 1.0, 1.0],
-    tiling=[1, 1],
+    tiling=None,
     seed=None,
     showProgress=True,
     detector_ranges=None,
@@ -567,6 +932,7 @@ def STEM_multislice(
     P=None,
     T=None,
     signal_list=None,
+    precision=1,
 ):
     """
     Perform a STEM simulation using only the multislice algorithm.
@@ -583,11 +949,15 @@ def STEM_multislice(
         Objective aperture in mrad
     thicknesses : float or array_like
         Thickness of the calculation
+    gridshape : (2,) array_like, optional
+        Pixel size of the simulation grid, if None is passed (default) then the
+        autosampling routine is called
     subslices : array_like, optional
         A one dimensional array-like object containing the depths (in fractional
         coordinates) at which the object will be subsliced. The last entry
         should always be 1.0. For example, to slice the object into four equal
-        sized slices pass [0.25,0.5,0.75,1.0]
+        sized slices pass [0.25,0.5,0.75,1.0]. If None is passed then the autoslicing
+        routine is called
     df : float or array_like, optional
         Probe defocus, convention is that a negative defocus has the probe
         focused "into" the specimen
@@ -703,6 +1073,8 @@ def STEM_multislice(
         Transitions for which the cross-sections will be calculated. Of form:
         [{"signal":"<EELS/EDX>","Z":<atomic number>,"shell":"<1s,2s,2p>",
           "E0":<accelerating voltage>,"DeltaE":<window above threshold, in eV>,},...]
+    precision : int, optional
+        The precision level for grid sampling. Default is 1. Values can be 0 (rough), 1 (medium), or 2 (precise).
 
     Returns
     -------
@@ -720,7 +1092,17 @@ def STEM_multislice(
 
     tdisable, tqdm = tqdm_handler(showProgress)
 
+    # Perform routine to work out sampling
+    if gridshape is None or tiling is None:
+        gridshape, tiling = autosampling_STEM(
+            structure, thicknesses, app, eV, precision=precision
+        )
+
     real_dim = structure.unitcell[:2] * np.asarray(tiling)
+
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
 
     # Ensure defoci are in proper array
     df = ensure_array(df)
@@ -980,7 +1362,7 @@ def multislice_precursor(
     structure,
     gridshape,
     eV,
-    subslices=[1.0],
+    subslices=None,
     tiling=[1, 1],
     specimen_tilt=[0, 0],
     tilt_units="mrad",
@@ -1049,6 +1431,10 @@ def multislice_precursor(
         The specimen transmission functions for multislice
     """
     tdisable, tqdm = tqdm_handler(showProgress)
+
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
 
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)
@@ -1135,7 +1521,7 @@ def STEM_EELS_multislice(
     ell,
     epsilon,
     df=0,
-    subslices=[1.0],
+    subslices=None,
     device_type=None,
     tiling=[1, 1],
     nfph=5,
@@ -1243,6 +1629,10 @@ def STEM_EELS_multislice(
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
+
     # Get gridsize in Angstrom
     rsize = structure.unitcell[:2] * np.asarray(tiling)
 
@@ -1339,14 +1729,14 @@ def STEM_EELS_multislice(
 
 def CBED(
     structure,
-    gridshape,
     eV,
     app,
     thicknesses,
-    subslices=[1.0],
+    gridshape=None,
+    subslices=None,
     device_type=None,
     dtype=torch.float32,
-    tiling=[1, 1],
+    tiling=None,
     nT=5,
     nfph=25,
     showProgress=True,
@@ -1358,6 +1748,7 @@ def CBED(
     probe_posn=None,
     subslicing=False,
     nslices=None,
+    precision=1,
     P=None,
     T=None,
     seed=None,
@@ -1425,6 +1816,8 @@ def CBED(
     nslices : int or array_like
         Maximum slice number or set of slices to perform multislice algorithm
         over.
+    precision : int, optional
+        The precision level for grid sampling. Default is 1. Values can be 0 (rough), 1 (medium), or 2 (precise).
     P : (n,Y,X) array_like, optional
         Precomputed Fresnel free-space propagators
     T : (n,Y,X) array_like
@@ -1436,10 +1829,22 @@ def CBED(
     -------
     CBED : (len(thicknesses,Y,X)) array_like
         The requested convergent beam electron diffraction patterns
+    scale : (2,) float
+        Scale of the CBED array in inverse Angstrom/pixel
     """
     tdisable, tqdm = tqdm_handler(showProgress)
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
+
+    # Perform routine to work out sampling for STEM
+    if gridshape is None or tiling is None:
+        gridshape, tiling = autosampling_STEM(
+            structure, thicknesses, app, eV, precision=precision
+        )
+
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
 
     # Make propagators and transmission functions for multislice
     if P is None and T is None:
@@ -1518,20 +1923,22 @@ def CBED(
             )
 
     # Divide output by # of pixels to compensate for Fourier transform
-    return output / np.prod(gridshape) / nfph
+    return output / np.prod(gridshape) / nfph, 1 / (
+        np.asarray(tiling) * structure.unitcell[:2]
+    )
 
 
 def HRTEM(
     structure,
-    gridshape,
     eV,
     app,
     thicknesses,
-    subslices=[1.0],
+    gridshape=None,
+    subslices=None,
     df=0,
     device_type=None,
     dtype=torch.float32,
-    tiling=[1, 1],
+    tiling=None,
     nT=5,
     nfph=25,
     showProgress=True,
@@ -1542,6 +1949,7 @@ def HRTEM(
     subslicing=False,
     P=None,
     T=None,
+    precision=1,
 ):
     """
     Perform a high-resolution transmission electron microscopy (HRTEM) simulation.
@@ -1608,11 +2016,19 @@ def HRTEM(
         bandwidth limit and in general the Y and X array size will be 2/3 of
         the requested array
     """
+
+    if tiling is None or gridshape is None:
+        gridshape, tiling = autosampling_TEM(structure, precision)
+
     tdisable, tqdm = tqdm_handler(showProgress)
     cdtype = real_to_complex_dtype_torch(dtype)
 
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
+
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
 
     # Make propagators and transmission functions for multslice
     if P is None and T is None:
@@ -1687,8 +2103,11 @@ def HRTEM(
                 .numpy()
             )
 
+    # Calculate Angstrom per pixel (scale)
+    Aperpix = structure.unitcell[:2] * np.asarray(tiling) / output.shape[-2:]
+
     # Divide output by # of pixels to compensate for Fourier transform
-    return np.squeeze(output) / nfph
+    return np.squeeze(output) / nfph, Aperpix
 
 
 def EFTEM(
@@ -1702,7 +2121,7 @@ def EFTEM(
     ell,
     epsilon,
     df=0,
-    subslices=[1.0],
+    subslices=None,
     device_type=None,
     tiling=[1, 1],
     nT=5,
@@ -1807,6 +2226,10 @@ def EFTEM(
     rsize[:3] = structure.unitcell[:3]
     rsize[:2] *= np.asarray(tiling)
 
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
+
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
 
@@ -1844,7 +2267,6 @@ def EFTEM(
 
     # Adjust fractional coordinates for tiling of unit cell
     coords = structure.atoms[mask][:, :3] / np.asarray(tiling + [1])
-    print(coords)
 
     # nstates = len(freeQuantumNumbers)
     if Hn0 is None:
@@ -1914,7 +2336,7 @@ def STEM_EELS_PRISM(
     aberrations=[],
     df=0,
     Hn0_crop=None,
-    subslices=[1.0],
+    subslices=None,
     device_type=None,
     tiling=[1, 1],
     nT=5,
@@ -2010,6 +2432,10 @@ def STEM_EELS_PRISM(
     tdisable, tqdm = tqdm_handler(showProgress)
     # Choose GPU if available and CPU if not
     device = get_device(device_type)
+
+    # Perform autoslicing by default
+    if subslices is None:
+        subslices = structure.autoslice()
 
     # Calculate grid size in Angstrom
     rsize = np.zeros(3)

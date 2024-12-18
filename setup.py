@@ -26,6 +26,9 @@ setup(
         "ipympl",
         "sympy",
         "scikit-image",
-        "jupyterlab"
+        "jupyterlab",
+        "jenkspy",
+        "mp_api",
+        "scikit-learn",
     ],
 )

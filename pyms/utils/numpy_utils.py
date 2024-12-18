@@ -567,12 +567,43 @@ def Gaussian(sigma, gridshape, rsize, theta=0, normalized=True):
         sigmax = sigma
         sigmay = sigma
     grid = r_space_array(gridshape, rsize)
-    a = np.cos(theta) ** 2 / (2 * sigmax ** 2) + np.sin(theta) ** 2 / (2 * sigmay ** 2)
-    b = -np.sin(2 * theta) / (4 * sigmax ** 2) + np.sin(2 * theta) / (4 * sigmay ** 2)
-    c = np.sin(theta) ** 2 / (2 * sigmax ** 2) + np.cos(theta) ** 2 / (2 * sigmay ** 2)
+    a = np.cos(theta) ** 2 / (2 * sigmax**2) + np.sin(theta) ** 2 / (2 * sigmay**2)
+    b = -np.sin(2 * theta) / (4 * sigmax**2) + np.sin(2 * theta) / (4 * sigmay**2)
+    c = np.sin(theta) ** 2 / (2 * sigmax**2) + np.cos(theta) ** 2 / (2 * sigmay**2)
     gaussian = np.exp(
         -(a * grid[1] ** 2 + 2 * b * grid[0] * grid[1] + c * grid[0] ** 2)
     )
     if normalized:
         gaussian /= np.sum(gaussian)
     return gaussian
+
+
+def single_or_max(input_value):
+    """
+    Return the input value if it is a single number or the maximum value if it is an array-like object.
+
+    Parameters:
+    ----------
+    input_value : int, float, list, tuple, numpy.ndarray
+        A single number or an array-like object.
+
+    Returns:
+    -------
+    result : int, float
+        The input value if it is a single number or the maximum value if it is an array-like object.
+
+    Example:
+    -------
+    >>> single_or_max(5)
+    5
+    >>> single_or_max([1, 2, 3, 4, 5])
+    5
+    >>> single_or_max(np.array([1, 2, 3, 4, 5]))
+    5
+    >>> single_or_max((1, 2, 3, 4, 5))
+    5
+    """
+    if isinstance(input_value, (int, float)):
+        return input_value
+    else:
+        return np.max(input_value)

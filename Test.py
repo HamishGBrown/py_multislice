@@ -217,7 +217,7 @@ class Test_Structure_Methods(unittest.TestCase):
         # plt.show(block=True)
 
         sse = np.sum(
-            np.square(fe - pyms.electron_scattering_factor(47, g ** 2, units="A"))
+            np.square(fe - pyms.electron_scattering_factor(47, g**2, units="A"))
         )
         self.assertTrue(sse < 0.01)
 
@@ -489,7 +489,7 @@ class Test_Structure_Methods(unittest.TestCase):
 
         K = kirk(xtest)
         within_spec = (
-            np.sum(np.square(kirk(xtest) - pyms_pot(xtest)) / np.sum(K ** 2)) < 1e-4
+            np.sum(np.square(kirk(xtest) - pyms_pot(xtest)) / np.sum(K**2)) < 1e-4
         )
         self.assertTrue(within_spec)
 
@@ -527,10 +527,10 @@ class Test_Structure_Methods(unittest.TestCase):
         # plt.show(block=True)
 
         moving_average = np.cumsum(COM, axis=1) / (np.arange(nT) + 1)
-        moving_ms = np.cumsum(COMx ** 2 + COMy ** 2) / (
+        moving_ms = np.cumsum(COMx**2 + COMy**2) / (
             np.arange(nT) + 1
-        ) / 2 - np.average(moving_average ** 2, axis=0)
-        moving_ms *= R ** 2
+        ) / 2 - np.average(moving_average**2, axis=0)
+        moving_ms *= R**2
 
         # fig,ax = plt.subplots(ncols=2)
         # ax[0].plot(COMx,COMy,'bo')
@@ -541,7 +541,7 @@ class Test_Structure_Methods(unittest.TestCase):
 
         meanCOM = np.sum(COM, axis=1) / nT
         # 5 Sigma test, ie. 1/3.5 million probability of failing assuming correct functioning
-        fiveSigma = dwf / nT * 5 ** 2
+        fiveSigma = dwf / nT * 5**2
         sigmaofvariance = dwf * np.sqrt(2 / (nT - 1))
         muwithinspec = np.sum((meanCOM - r[0]) ** 2) < fiveSigma
         sigmawithinspec = np.abs(moving_ms[-1] - dwf) < 5 * sigmaofvariance
@@ -734,8 +734,8 @@ class Test_probe_methods(unittest.TestCase):
         gridshape = [128, 128]
         app = 20
         thicknesses = [12]
-        args = [SrTiO3(), gridshape, eV, app, thicknesses]
-        kwargs = {"tiling": [4, 4], "showProgress": False}
+        args = [SrTiO3(), eV, app, thicknesses]
+        kwargs = {"tiling": [4, 4], "showProgress": False, "gridshape": gridshape}
         pyms.simulation_result_with_Cc(
             pyms.HRTEM,
             Cc,
@@ -747,8 +747,13 @@ class Test_probe_methods(unittest.TestCase):
             deltaEconv=deltaEconv,
         )
 
-        args = [SrTiO3(), gridshape, eV, app, thicknesses]
-        kwargs = {"tiling": [4, 4], "showProgress": False, "FourD_STEM": True}
+        args = [SrTiO3(), eV, app, thicknesses]
+        kwargs = {
+            "tiling": [4, 4],
+            "showProgress": False,
+            "FourD_STEM": True,
+            "gridshape": gridshape,
+        }
         pyms.simulation_result_with_Cc(
             pyms.STEM_multislice,
             Cc,
@@ -777,7 +782,7 @@ class Test_ionization_methods(unittest.TestCase):
         # A 5 x 5 x 5 Angstrom cell with an oxygen
         cell = [5, 5, 0.0001]
         atoms = [[0.75, 0.6, 0.0, 8]]
-        tiling = [1,1]
+        tiling = [1, 1]
         crystal = pyms.structure(cell, atoms, dwf=[0.0])
         gridshape = [128, 128]
         eV = 3e5
@@ -875,23 +880,23 @@ class Test_ionization_methods(unittest.TestCase):
         # plt.imshow(STEM_images[0])
         # plt.show(block=True)
         STEM_images = pyms.utils.fourier_interpolate(
-                STEM_images, result.shape, norm="conserve_val"
-            )
+            STEM_images, result.shape, norm="conserve_val"
+        )
 
         # The image of the transition is "lensed" by the atom that it is passed
         # through so we must account for this by multiplying the Hn0 by the transmission
         # function
         import matplotlib.pyplot as plt
-        Hn0 = pyms.utils.fourier_shift(Hn0,atoms[0][:2], pixel_units=False)        
+
+        Hn0 = pyms.utils.fourier_shift(Hn0, atoms[0][:2], pixel_units=False)
         Hn0 *= T[0, 0].cpu().numpy() / np.sqrt(np.prod(gridshape))
 
-
         reference = pyms.utils.fourier_interpolate(
-                    np.abs(np.fft.ifft2(ctf * np.fft.fft2(Hn0[0]))) ** 2,
-                    result.shape,
-                    "conserve_L1",
-                    qspace_out=False,
-                )
+            np.abs(np.fft.ifft2(ctf * np.fft.fft2(Hn0[0]))) ** 2,
+            result.shape,
+            "conserve_L1",
+            qspace_out=False,
+        )
 
         # To get STEM and EFTEM images on same scale need to multiply by number
         # of pixels in STEM probe forming aperture function then divide by number
@@ -1047,7 +1052,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         eV = 3e5
         subslicing = [0.5, 1.0]
         slices = pyms.generate_slice_indices(5, len(subslicing), subslicing=False)
-        seed = np.random.randint(0, 2 ** 31 - 1, size=len(slices))
+        seed = np.random.randint(0, 2**31 - 1, size=len(slices))
         P, T = pyms.multislice_precursor(
             structure,
             gridshape,
@@ -1131,7 +1136,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
         P = pyms.make_propagators(gridshape, rsize, eV)
         k = np.fft.fftfreq(gridshape[1], d=rsize[1] / gridshape[1])
-        ref = np.sin(-np.pi * k ** 2 * rsize[2] / pyms.wavev(eV))
+        ref = np.sin(-np.pi * k**2 * rsize[2] / pyms.wavev(eV))
         ref[np.abs(P[0, 0]) < 1e-6] = 0
         self.assertTrue(sumsqr_diff(ref, np.imag(P[0, 0])) < 1e-10)
 
@@ -1259,23 +1264,23 @@ class Test_py_multislice_Methods(unittest.TestCase):
         # TODO h5 output from STEM is broken, need to fix
         # Test h5 output
         # h5file = 'test.h5'
-        fourDSTEM = [[64,64],[3.0,3.0]]
+        fourDSTEM = [[64, 64], [3.0, 3.0]]
         # Perform Multislice calculation and then compare to weak phase object
         # result
         images = (
             pyms.STEM_multislice(
                 cell,
-                gridshape,
                 eV,
                 app,
                 thicknesses=1.01,
                 df=df,
+                gridshape=gridshape,
                 detector_ranges=[[app / 2, app]],
                 nfph=1,
                 P=P,
                 T=T,
                 tiling=tiling,
-                FourD_STEM = fourDSTEM,
+                FourD_STEM=fourDSTEM,
                 # h5_filename=h5file,
                 showProgress=False,
             )["STEM images"]
@@ -1341,6 +1346,7 @@ class Test_py_multislice_Methods(unittest.TestCase):
         make_graphene_file(fnam)
 
         Graphene = pyms.structure.fromfile(fnam)
+        Graphene.output_vesta_xtl("graphene.xtl")
         thicknesses = [Graphene.unitcell[2] - 0.1]
 
         P, T = pyms.multislice_precursor(
@@ -1354,10 +1360,10 @@ class Test_py_multislice_Methods(unittest.TestCase):
         )
         result = pyms.STEM_multislice(
             Graphene,
-            gridshape,
             eV,
             app,
             thicknesses,
+            gridshape=gridshape,
             nfph=1,
             displacements=False,
             DPC=True,
@@ -1371,9 +1377,14 @@ class Test_py_multislice_Methods(unittest.TestCase):
         # fig, ax = plt.subplots(ncols=4)
         rsize = Graphene.unitcell[:2] * np.asarray(tiling)
         probe = pyms.focused_probe(gridshape, rsize, eV, app)
-        convolved_phase = pyms.utils.convolve(
-            np.abs(probe) ** 2, np.angle(T[0, 0].cpu().numpy())
+        convolved_phase = np.sum(
+            [
+                pyms.utils.convolve(np.abs(probe) ** 2, np.angle(t.cpu().numpy()))
+                for t in T[0]
+            ],
+            axis=0,
         )
+
         convolved_phase -= np.amin(convolved_phase)
         reconstructed_phase = pyms.utils.fourier_interpolate(
             np.tile(result["DPC"][-1], tiling), gridshape
@@ -1381,14 +1392,17 @@ class Test_py_multislice_Methods(unittest.TestCase):
 
         reconstructed_phase -= np.amin(reconstructed_phase)
 
-        fig, ax = plt.subplots(ncols=4)
+        # fig, ax = plt.subplots(ncols=4,figsize=(16,4))
         # from PIL import Image
-        # Image.fromarray(convolved_phase).save('convolvedphase.tif')
         # ax[0].imshow(convolved_phase)
+        # ax[0].set_title('(a) Phase convolved with probe')
         # ax[1].imshow(reconstructed_phase)
-        # Image.fromarray(reconstructed_phase).save('reconstructed_phase.tif')
+        # ax[1].set_title('(b) Phase reconstructed from DPC')
         # ax[2].imshow(convolved_phase-reconstructed_phase)
+        # ax[2].set_title('(c) Difference')
         # ax[3].imshow((convolved_phase-reconstructed_phase),vmin=convolved_phase.min(),vmax=convolved_phase.max())
+        # ax[3].set_title('(d) Difference, same contrast as (a)')
+        # for a in ax.ravel(): a.set_axis_off()
         # plt.show(block=True)
         self.assertTrue(
             sumsqr_diff(convolved_phase, reconstructed_phase, norm=True) < 1e-1
@@ -1943,7 +1957,7 @@ class Test_util_Methods(unittest.TestCase):
                 np.sum(
                     pyms.utils.fourier_interpolate(a, (8, 8), norm="conserve_L2") ** 2
                 )
-                - np.sum(a ** 2)
+                - np.sum(a**2)
                 < 1e-8
             )
 
@@ -2093,6 +2107,10 @@ if __name__ == "__main__":
     # test.test_nyquist_and_probe_raster()
     # test.test_DPC()
 
+    # test =Test_probe_methods()
+    # test.test_Cc_methods()
+    # import sys; sys.exit()
+
     # test.test_STEM_routine()
     # test.test_Smatrix()
     # import sys; sys.exit()
@@ -2116,9 +2134,12 @@ if __name__ == "__main__":
 
     # test.test_electron_scattering_factor()
     # test.test_make_potential()
+    # test.test_orthorhombic_supercell()
     # import sys; sys.exit()
     # test.test_fourier_interpolation()
     # test = Test_py_multislice_Methods()
+    # test.test_diffraction_pattern_resize()
+    # import sys; sys.exit()
     # test.test_reverse_multislice()
 
     unittest.main(verbosity=2)

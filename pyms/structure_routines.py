@@ -50,7 +50,7 @@ def psuedo_rational_tiling(dim1, dim2, EPS):
     For two dimensions, dim1 and dim2, work out the multiplicative
     tiling so that those dimensions might be matched to within error EPS.
     """
-    if np.any([dim1 == 0, dim2 == 0]):
+    if np.any([dim1 < EPS, dim2 < EPS]):
         return 1, 1
     tile1 = int(np.round(np.abs(dim2 / dim1) / EPS))
     tile2 = int(np.round(1 / EPS))
@@ -75,7 +75,9 @@ def Xray_scattering_factor(Z, gsq, units="A"):
     # Bohr radius in Angstrom
     a0 = 0.529177
     # gsq = g**2
-    return Z - 2 * np.pi**2 * a0 * gsq * electron_scattering_factor(Z, gsq, units=units)
+    return Z - 2 * np.pi**2 * a0 * gsq * electron_scattering_factor(
+        Z, gsq, units=units
+    )
 
 
 def electron_scattering_factor(Z, gsq, units="VA"):
@@ -263,12 +265,61 @@ class structure:
     """
 
     def __init__(self, unitcell, atoms, dwf, occ=None, Title="", EPS=1e-2):
-        """Initialize a simulation object with necessary variables."""
+        """
+        Initialize a structure object with necessary variables.
+
+        This method sets up the structures object with the provided unit cell, atomic positions, Debye-Waller factors,
+        occupancies, and other related parameters. It ensures that the unit cell is orthorhombic and calculates an orthorhombic
+        tiling if it is not.
+
+        Parameters:
+        ----------
+        unitcell : array-like (3,) or (3,3) array_like
+            The unit cell dimensions or a 3x3 matrix with rows describing the unit cell edges.
+        atoms : (natoms,3) array-like
+            Atomic positions in the unit cell.
+        dwf : (natoms,) array-like or None
+            Debye-Waller factors for the atoms. If None assume root-mean-square vibration of 1 Angstrom
+        occ : array-like, optional
+            Occupancies of the atoms. If None, all atoms are assumed to have full occupancy. Default is None.
+        Title : str, optional
+            A title for the simulation. Default is an empty string.
+        EPS : float, optional
+            A small value used for numerical tolerance in determining if the unit cell is orthorhombic. Default is 1e-2.
+
+        Attributes:
+        ----------
+        unitcell : numpy.ndarray
+            The unit cell dimensions.
+        atoms : numpy.ndarray
+            Atomic positions, occupancies, and Debye-Waller factors combined in one array.
+        Title : str
+            The title of the simulation.
+        fractional_occupancy : bool
+            Indicates if there is any fractional occupancy of atom sites in the sample.
+
+        Notes:
+        -----
+        - If the unit cell is given as a 3x3 matrix, the method checks if it is orthorhombic.
+        - If the unit cell is not orthorhombic, the method attempts a pseudo-rational tiling to convert it to an orthorhombic cell.
+        - The `atoms` array is augmented to include occupancies and Debye-Waller factors for each atom.
+
+        Example:
+        -------
+        >>> unitcell = [[10, 0, 0], [0, 10, 0], [0, 0, 10]]
+        >>> atoms = [[0, 0, 0], [0.5, 0.5, 0.5]]
+        >>> dwf = [0.05, 0.05]
+        >>> occ = [1.0, 0.5]
+        >>> struc = pyms.structure(unitcell, atoms, dwf, occ, Title="Example structure")
+        """
         self.unitcell = np.asarray(unitcell)
         natoms = np.asarray(atoms).shape[0]
 
         if occ is None:
             occ = np.ones(natoms)
+
+        if dwf is None:
+            dwf = np.ones(natoms) * 0.01
 
         self.atoms = np.concatenate(
             [atoms, occ.reshape(natoms, 1), np.asarray(dwf).reshape(natoms, 1)], axis=1
@@ -294,6 +345,32 @@ class structure:
         # Check if there is any fractional occupancy of atom sites in
         # the sample
         self.fractional_occupancy = np.any(np.abs(self.atoms[:, 4] - 1.0) > 1e-3)
+
+    @classmethod
+    def from_materials_project_api(cls, MPid, MPIkey):
+        from mp_api.client import MPRester
+
+        # Pull Materials project ID from online database
+        with MPRester(api_key=MPIkey) as mpr:
+            data = mpr.materials.search(material_ids=[MPid])[
+                0
+            ].structure.to_conventional()
+
+        # Extract, the coordinates and atomic weights (Z)
+        coord = data.frac_coords
+        natoms = coord.shape[0]
+        Z = np.asarray(data.atomic_numbers).reshape((natoms, 1))
+
+        # Join coordinate and atomic weight (Z) arrays
+        atoms = np.concatenate((coord, Z), axis=1)
+
+        # Extract unit cell vectors
+        unitcell = np.asarray(data.lattice.matrix)
+
+        # Set title to be chemical formula
+        Title = data.alphabetical_formula
+
+        return cls(unitcell, atoms, None, None, Title)
 
     @classmethod
     def fromfile(
@@ -524,58 +601,77 @@ class structure:
         monoclinic structure. Assumes that the self.unitcell matrix is lower
         triangular.
         """
-        if not np.abs(np.dot(self.unitcell[0], self.unitcell[1])) < EPS:
-            tiley, tilex = psuedo_rational_tiling(*self.unitcell[0:2, 0], EPS)
+        # if not np.abs(np.dot(self.unitcell[0], self.unitcell[1])) < EPS:
 
-            # Make deepcopy of old unit cell
+        # Rotate a to align with the [1,0,0] axis
+        xhat = np.asarray([1, 0, 0])
+        theta = np.arccos(self.unitcell[0, 0] / np.linalg.norm(self.unitcell[0]))
+        u = np.cross(self.unitcell[0], xhat)
 
-            olduc = copy.deepcopy(self.unitcell)
+        # Only rotate if a larger angle is required (otherwise u goes to 0)
+        if theta > EPS:
+            R = rot_matrix(theta, u)
+            self.unitcell = copy.deepcopy(self.unitcell) @ R.T
 
-            # Tile out atoms
-            self.tile(tiley, tilex, 1)
+        # Rotate b to ensure it is in the [1,0,0] x [0,1,0] plane
+        theta = np.arctan2(self.unitcell[1, 2], self.unitcell[1, 1])
+        R = rot_matrix(theta, np.asarray([1, 0, 0]))
+        self.unitcell = copy.deepcopy(self.unitcell) @ R.T
 
-            # Calculate size of old unit cell under tiling
-            olduc = np.asarray([tiley, tilex, 1])[:, np.newaxis] * olduc
+        # Do a psuedo rational tiling to make the structure orthorhombic
+        # in the [1,0,0] x [0,1,0] plane
+        self.psuedo_rational_tiling(0, 1, EPS)
 
-            self.unitcell = copy.deepcopy(olduc)
-            self.unitcell[1, 0] = 0.0
+        # Now do psuedo-rational tilings of z with respect to x and y
+        # to fit whole 3d structure into an orthorhombic supercell
+        self.psuedo_rational_tiling(0, 2, EPS)
+        self.psuedo_rational_tiling(1, 2, EPS)
 
-            # Now calculate fractional coordinates in new orthorhombic cell
-            self.atoms[:, :3] = change_of_basis(self.atoms[:, :3], self.unitcell, olduc)
-        else:
-            self.unitcell[0, 1:] = 0.0
-            self.unitcell[1, ::2] = 0.0
+        # Now we can take the diagnoal values of the
+        self.unitcell = np.diag(self.unitcell)
 
-        # Now tile crystal in x and y
-        tilez1, tiley = psuedo_rational_tiling(*self.unitcell[::-2, 0], EPS)
-        tilez2, tilex = psuedo_rational_tiling(*self.unitcell[3:0:-1, 1], EPS)
-        tilez = remove_common_factors([tilez1, tilez2, tilez1 * tilez2])[-1]
-        tiley *= tilez // tilez1
-        tilex *= tilez // tilez2
+    def psuedo_rational_tiling(self, dim1, dim2, EPS=1e-2):
+        """
+        Calculate the pseudo-rational tiling for matching objects of different dimensions.
 
+        For two dimensions, dim1 and dim2, work out the multiplicative
+        tiling so that those dimensions might be matched to within error EPS.
+        """
+        # Catch case where the unit cell vectors are already orthogonal
+        # and nothing needs to be done
+        mag1 = np.linalg.norm(self.unitcell[dim1])
+        mag2 = np.linalg.norm(self.unitcell[dim1])
+
+        if np.abs(np.dot(self.unitcell[dim1], self.unitcell[dim2]) / mag1 / mag2) < EPS:
+            return
+
+        # d2 is projection of second unit cell vector onto first
+        d2 = np.dot(self.unitcell[dim1], self.unitcell[dim2]) / mag2
+
+        tile1 = int(np.round(np.abs(d2 / mag1) / EPS))
+        tile2 = int(np.round(1 / EPS))
+        tile1, tile2 = remove_common_factors([tile1, tile2])
+
+        # Make deepcopy of old unit cell
+        tiling = [1, 1, 1]
+        tiling[dim1] = tile1
+        tiling[dim2] = tile2
+
+        # Tile out atoms, save a copy of the "old" unit cell
+        self.tile(*tiling)
         olduc = copy.deepcopy(self.unitcell)
 
-        # Tile out atoms
-        self.tile(tiley, tilex, tilez)
+        # Now remove the projection vector 2 on vector 1 from vector 2
+        self.unitcell[dim2] -= (
+            np.dot(self.unitcell[dim1], self.unitcell[dim2])
+            / np.dot(self.unitcell[dim1], self.unitcell[dim1])
+            * self.unitcell[dim1]
+        )
 
-        # Calculate size of old unit cell under tiling
-
-        olduc = np.asarray([tiley, tilex, tilez])[:, np.newaxis] * olduc
-
-        self.unitcell = copy.deepcopy(olduc)
-        self.unitcell[2, 0:2] = 0.0
-
-        # Now calculate fractional coordinates in new orthorhombic cell
+        # # Now calculate fractional coordinates in new orthorhombic cell
         self.atoms[:, :3] = np.mod(
             self.atoms[:, :3] @ olduc @ np.linalg.inv(self.unitcell), 1.0
         )
-        self.unitcell = np.diag(self.unitcell)
-
-        # Check for negative values of self.unitcell and rectify
-        for i in range(3):
-            if self.unitcell[i] < 0:
-                self.atoms[:, i] = (1.0 - self.atoms[:, i]) % 1.0
-        self.unitcell = np.abs(self.unitcell)
 
     def quickplot(
         self,
@@ -880,10 +976,6 @@ class structure:
 
         # Use real fast fourier transforms to save memory and time
         P = torch.fft.rfft2(P, s=pixels_)
-        # fig,ax = plt.subplots(ncols=2)
-        # ax[0].imshow(np.real(P[0,0].cpu()))
-        # ax[1].imshow(np.imag(P[0,0].cpu()))
-        # plt.show(block=True)
 
         # pp is number of pixels in x
         pp = pixels_[1] // 2 + 1
@@ -1603,6 +1695,75 @@ class structure:
             T, limit=bandwidth_limit, qspace_in=True, qspace_out=fftout
         )
 
+    def autoslice(self, maxproperror=1.5):
+        """
+        Auto-generate optimal sub-slices using Jenks Natural Breaks clustering.
+
+        This method uses the Jenks Natural Breaks algorithm to determine the optimal way
+        to divide atomic positions (depths) into clusters (sub-slices) such that the
+        maximum propagation error from the propagation plane within each cluster is minimized.
+
+        Parameters:
+        ----------
+        maxproperror : float, optional
+            The maximum allowable propagation error in Angstroms within each sub-slice.
+            Default is 1.5.
+
+        Returns:
+        -------
+        planes : list
+            A list of positions where each sub-slice begins, including the end position 1.
+            If no sub-slicing is required or a satisfactory slicing cannot be found,
+            it returns maximal slicing based on unique atom depths.
+
+        Notes:
+        -----
+        - If the algorithm cannot find a sub-slicing that meets the `maxproperror` criterion,
+        it returns the maximal slicing based on unique atomic depths.
+        - The `self.atoms` array is assumed to contain atomic positions with the third
+        column representing depth, and `self.unitcell` contains the unit cell dimensions.
+        """
+        from jenkspy import JenksNaturalBreaks
+
+        # Unique atom depths
+        uniquepositions = np.unique(self.atoms[:, 2])
+
+        for n_clusters in range(1, len(uniquepositions)):
+
+            # JenksNaturalBreaks clustering only works with > 1 clusters
+            if n_clusters > 1:
+                # JenksNaturalBreaks clustering of atom depths
+                jnb = JenksNaturalBreaks(n_clusters)
+                jnb.fit(self.atoms[:, 2])
+
+                # Set subslices so that they begin at the start of each cluster
+                planes = [min(group) for group in jnb.groups_] + [1]
+
+                # Find maximum distance from propagation plane within group
+                properror = (
+                    max([max(g - p) for g, p in zip(jnb.groups_, planes)])
+                    * self.unitcell[2]
+                )
+                # If the first slice is tolerably close to the top of the unit cell
+                # anyway, remove this slice
+                if planes[0] + max(jnb.groups_[0]) < maxproperror:
+                    planes.pop(0)
+            else:
+                # No sub-slicing
+                planes = [1]
+                properror = max(self.atoms[:, 2]) * self.unitcell[2]
+
+            # Terminate sequence upon convergence
+            if properror <= maxproperror:
+                return planes
+
+        # If a satisfactory slicing cannot be found just return maximal slicing,
+        # removing first slice if not required
+        if uniquepositions[0] < maxproperror:
+            return list(uniquepositions)[1:] + [1]
+        else:
+            return list(uniquepositions) + [1]
+
     def generate_slicing_figure(self, slices, show=True):
         """
         Generate slicing figure.
@@ -1755,8 +1916,10 @@ class structure:
         # Initialize new atom list
         newatoms = np.zeros((natoms * x * y * z, 6))
 
-        # Calculate new unit cell size
-        self.unitcell = self.unitcell * np.asarray([x, y, z])
+        # Calculate new unit cell size the transpose esnures correct
+        # tiling of non-orthorhombic cells (ie. where self.unitcell is
+        # a matrix)
+        self.unitcell = (self.unitcell.T * np.asarray([x, y, z])).T
 
         # tile out the integer amounts
         from itertools import product

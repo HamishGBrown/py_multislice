@@ -1,6 +1,7 @@
 """Utility functions for outputting data to file."""
 import os
 from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 
 # import matplotlib.pyplot as plt
@@ -10,6 +11,97 @@ from PIL import Image
 import pyms
 
 from .. import _float, _int, _uint
+
+
+def rgb_composite_colormap(result, labels=None, renormalize=True, ax=None):
+    """
+    Creates an RGB (Red, Green, Blue) composite colormap from the given result
+    array, optionally renormalizes the data, and includes a legend with
+    specified labels.
+
+    Not generally recommended since red, green colormaps are not
+    accessible to colorblind individuals
+
+    Parameters:
+    result (numpy.ndarray): A 3D numpy array of shape (nchannels, height,
+                            width) containing the image data.
+                            The nchannels should be between 1 and 3.
+    labels (list of str, optional): A list of strings for labeling the channels
+                                    in the legend. If provided, it should have
+                                    a length matching the number of channels.
+    renormalize (bool, optional): A boolean flag indicating whether to
+                                renormalize the image data. Default is True.
+    ax (matplotlib.axes.Axes, optional): An existing matplotlib axes to plot
+                                on. If None, a new figure and axes are created.
+
+    Returns:
+    fig: matplotlib figure, will be None if an axis is already provided
+
+    ax: matplotlib axis with plotted image
+    """
+
+    # Number of channels in the input result array
+    nchannels = result.shape[0]
+
+    # Ensure that the number of channels is not more than 3
+    assert nchannels <= 3
+
+    # If the number of channels is less than 3, pad the result with zeros to make it 3 channels
+    rgb = np.concatenate(
+        (result, np.zeros((3 - nchannels,) + result.shape[1:])), axis=0
+    )
+
+    # Move the color axis from the first to the last dimension of the array
+    rgb = np.moveaxis(rgb, 0, -1)
+
+    fig = None
+    # If no existing axes is provided, create a new figure and axes
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    # Renormalize the image data if the renormalize flag is True
+    if renormalize:
+        for i in range(3):
+            rgb[..., i] = pyms.utils.renormalize(rgb[..., i])
+    else:
+        rgb = pyms.utils.renormalize(rgb)
+
+    # Display the composite image using the RGB data
+    ax.imshow(rgb)
+
+    # Create custom lines for the legend using RGB colors
+    custom_lines = [Line2D([0], [0], color=c, lw=4) for c in ["r", "g", "b"]]
+
+    return fig, ax
+
+
+def composite_colormap(
+    result,
+    colors=["#ff00aa", "#00aaff", "#aaff00"],
+    labels=None,
+    ax=None,
+    blackbackground=False,
+):
+    from matplotlib.colors import LinearSegmentedColormap
+
+    cmaps = [LinearSegmentedColormap.from_list(c, ["#000000", c]) for c in colors]
+
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    if blackbackground:
+        ax.imshow(np.zeros_like(result[0]), vmax=1, vmin=0)
+
+    for i, r in enumerate(result):
+        ax.imshow(r, cmap=cmaps[i], alpha=pyms.utils.renormalize(r))
+
+    from matplotlib.lines import Line2D
+
+    custom_lines = [Line2D([0], [0], color=c, lw=4) for c in colors]
+
+    if labels is not None:
+        ax.legend(custom_lines, labels)
+    return fig, ax
 
 
 def stack_to_animated_gif(
