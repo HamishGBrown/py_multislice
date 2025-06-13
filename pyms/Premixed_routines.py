@@ -876,11 +876,11 @@ def PACBED(
 
     result = STEM_multislice(
         structure,
-        gridshape,
         eV,
         app,
         thicknesses,
-        subslices,
+        gridshape=gridshape,
+        subslices=subslices,
         nfph=nfph,
         PACBED=True,
         scan_posn=scan_posn,
